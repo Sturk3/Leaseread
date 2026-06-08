@@ -61,6 +61,37 @@ export default function App() {
   const [result, setResult] = useState(null);
   const fileRef = useRef(null);
 
+  // Shared-password gate. The password is validated server-side; here we just
+  // remember it for the session and send it with each request.
+  const [pw, setPw] = useState(() => sessionStorage.getItem("lr_pw") || "");
+  const [authed, setAuthed] = useState(() => !!sessionStorage.getItem("lr_pw"));
+  const [pwInput, setPwInput] = useState("");
+  const [pwError, setPwError] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+
+  async function submitPw(e) {
+    e?.preventDefault?.();
+    setPwError(""); setPwBusy(true);
+    try {
+      const res = await fetch("/api/screen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ check: true, password: pwInput }),
+      });
+      if (res.ok) {
+        sessionStorage.setItem("lr_pw", pwInput);
+        setPw(pwInput); setAuthed(true);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setPwError(d.error || "Incorrect password.");
+      }
+    } catch {
+      setPwError("Could not reach the server. Try again.");
+    } finally {
+      setPwBusy(false);
+    }
+  }
+
   function onFile(f) {
     if (!f) return;
     setFileName(f.name);
@@ -83,7 +114,7 @@ export default function App() {
       const res = await fetch("/api/screen", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, pdfData, memoText }),
+        body: JSON.stringify({ mode, pdfData, memoText, password: pw }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -160,6 +191,34 @@ export default function App() {
   function dl(blob, name) {
     const url = URL.createObjectURL(blob); const a = document.createElement("a");
     a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
+  }
+
+  if (!authed) {
+    return (
+      <div style={{ background: C.ink, color: C.ivory, minHeight: "100vh", fontFamily: "Archivo, sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 22 }}>
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Archivo:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+          * { box-sizing: border-box; }
+          .serif { font-family: 'Fraunces', serif; }
+          .mono { font-family: 'IBM Plex Mono', monospace; }
+          input:focus, button:focus { outline: none; }
+        `}</style>
+        <form onSubmit={submitPw} style={{ width: "100%", maxWidth: 360, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 28 }}>
+          <div className="serif" style={{ fontSize: 30, letterSpacing: "-0.01em", fontWeight: 600 }}>
+            LEASEREAD<span style={{ color: C.gold }}>.</span>
+          </div>
+          <div style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Enter the access password to continue.</div>
+          <input type="password" value={pwInput} onChange={e => setPwInput(e.target.value)} autoFocus
+            placeholder="Password"
+            style={{ width: "100%", marginTop: 18, background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 9, padding: 13, fontSize: 14, fontFamily: "Archivo, sans-serif" }} />
+          <button type="submit" disabled={pwBusy || !pwInput}
+            style={{ marginTop: 12, width: "100%", cursor: pwBusy || !pwInput ? "default" : "pointer", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: pwBusy || !pwInput ? C.panel2 : C.gold, color: pwBusy || !pwInput ? C.muted : C.ink }}>
+            {pwBusy ? "Checking…" : "Enter →"}
+          </button>
+          {pwError && <div style={{ marginTop: 12, color: C.red, fontSize: 13 }}>{pwError}</div>}
+        </form>
+      </div>
+    );
   }
 
   return (

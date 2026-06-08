@@ -42,7 +42,21 @@ Return JSON with EXACTLY this shape:
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { mode, pdfData, memoText } = req.body || {};
+    const { mode, pdfData, memoText, password, check } = req.body || {};
+
+    // Optional shared-password gate. If SITE_PASSWORD is configured in the
+    // environment, every request must carry the matching password — this is
+    // enforced server-side so the costly Anthropic call can't be triggered by
+    // anyone who hasn't logged in. If SITE_PASSWORD is unset, the app is open.
+    if (process.env.SITE_PASSWORD) {
+      if (password !== process.env.SITE_PASSWORD) {
+        return res.status(401).json({ error: "Incorrect password." });
+      }
+    }
+    // Lightweight check used by the login screen to validate the password
+    // without spending an Anthropic call. Auth is already verified above.
+    if (check) return res.status(200).json({ ok: true });
+
     const content = [];
     if (mode === "pdf") {
       if (!pdfData) return res.status(400).json({ error: "No PDF provided" });

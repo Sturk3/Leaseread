@@ -71,9 +71,22 @@ export default async function handler(req, res) {
         messages: [{ role: "user", content }],
       }),
     });
-    const data = await r.json();
-    return res.status(200).json(data);
+    // Read the body as text first so a non-JSON error page from Anthropic
+    // surfaces with its real status/snippet instead of a generic parse error.
+    const raw = await r.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return res.status(502).json({
+        error: "Anthropic returned a non-JSON response",
+        anthropic_status: r.status,
+        snippet: raw.slice(0, 300),
+      });
+    }
+    // Pass Anthropic's status through so an auth error (401) etc. is visible.
+    return res.status(r.ok ? 200 : r.status).json(data);
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    return res.status(500).json({ error: e.message, where: "handler" });
   }
 }

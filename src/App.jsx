@@ -183,7 +183,7 @@ export default function App() {
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", borderBottom: `1px solid ${C.line}`, paddingBottom: 18 }}>
           <div>
             <div className="serif" style={{ fontSize: 30, letterSpacing: "-0.01em", fontWeight: 600 }}>
-              FRONTAGE<span style={{ color: C.gold }}>.</span>
+              LEASEREAD<span style={{ color: C.gold }}>.</span>
             </div>
             <div style={{ color: C.muted, fontSize: 13, marginTop: 2 }}>Retail acquisitions screener — high-street trophy assets</div>
           </div>

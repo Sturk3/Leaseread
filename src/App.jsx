@@ -35,10 +35,16 @@ In-place rents are estimated ~20% below current Madison Avenue market. Near-term
 MARKET
 Madison Avenue luxury corridor — among the highest-barrier, highest-rent retail submarkets in North America. Limited comparable trophy product trades.`;
 
+// Light theme — white surfaces, dark indigo-ink text (the "blue undertone"),
+// and an indigo-violet accent (purple with a blue lean). Key names are kept
+// from the original dark theme so the rest of the component is untouched:
+//   ink   = page background      ivory = primary text
+//   panel = card surface         muted = secondary text
+//   gold  = accent (now violet)  line  = borders
 const C = {
-  ink: "#0f1115", panel: "#16191f", panel2: "#1b1f27", line: "#2a2f3a",
-  ivory: "#ece7dd", muted: "#8b9099", gold: "#c9a86a", goldSoft: "rgba(201,168,106,0.10)",
-  green: "#7bb693", amber: "#d8a657", red: "#cf6a5a",
+  ink: "#f4f4fb", panel: "#ffffff", panel2: "#eceaf7", line: "#e5e3f1",
+  ivory: "#1b1930", muted: "#6c6982", gold: "#6a5cf6", goldSoft: "rgba(106,92,246,0.10)",
+  green: "#1f9d63", amber: "#b7791f", red: "#d14a3c",
 };
 
 function fmtPct(n) { return n == null ? "—" : `${(+n).toFixed(2)}%`; }
@@ -205,7 +211,7 @@ export default function App() {
         `}</style>
         <form onSubmit={submitPw} style={{ width: "100%", maxWidth: 360, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 28 }}>
           <div className="serif" style={{ fontSize: 30, letterSpacing: "-0.01em", fontWeight: 600 }}>
-            LEASEREAD<span style={{ color: C.gold }}>.</span>
+            FRONTAGE<span style={{ color: C.gold }}>.</span>
           </div>
           <div style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Enter the access password to continue.</div>
           <input type="password" value={pwInput} onChange={e => setPwInput(e.target.value)} autoFocus
@@ -242,7 +248,7 @@ export default function App() {
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", borderBottom: `1px solid ${C.line}`, paddingBottom: 18 }}>
           <div>
             <div className="serif" style={{ fontSize: 30, letterSpacing: "-0.01em", fontWeight: 600 }}>
-              LEASEREAD<span style={{ color: C.gold }}>.</span>
+              FRONTAGE<span style={{ color: C.gold }}>.</span>
             </div>
             <div style={{ color: C.muted, fontSize: 13, marginTop: 2 }}>Retail acquisitions screener — high-street trophy assets</div>
           </div>

@@ -1,13 +1,18 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useMemo } from "react";
 
 // FRONTAGE — Retail Acquisitions Screener
-// Ingests a retail offering memorandum, extracts underwriting data,
-// breaks out the tenant roster by lease expiration + credit, and scores
-// the deal against a Crown-style trophy-retail buy box.
+// Ingests a retail offering memorandum, extracts underwriting data, breaks out
+// the tenant roster, and scores the deal against a CUSTOMIZABLE buy box:
+//  - editable criteria (what Claude grades on)
+//  - weight sliders (how much each criterion counts)
+//  - threshold sliders (Pursue / Watch / Pass cutoffs)
+//  - a free-text "commands" box for rules sliders can't capture
+//  - saved presets (mandates) shared across the team
+// Weights/thresholds recompute the score instantly in the browser; Claude scores
+// each criterion and the app does the weighted math deterministically.
 //
-// The Anthropic API call now lives in the serverless backend (api/screen.js)
-// so the API key never reaches the browser. This component POSTs the raw
-// inputs to /api/screen and parses the same response shape as before.
+// The Anthropic call lives in the serverless backend (api/screen.js) so the key
+// never reaches the browser.
 
 const SAMPLE_OM = `CONFIDENTIAL OFFERING MEMORANDUM
 "The Madison Collection" — 712 Madison Avenue, New York, NY 10065
@@ -35,20 +40,58 @@ In-place rents are estimated ~20% below current Madison Avenue market. Near-term
 MARKET
 Madison Avenue luxury corridor — among the highest-barrier, highest-rent retail submarkets in North America. Limited comparable trophy product trades.`;
 
-// Light theme — white surfaces, dark indigo-ink text (the "blue undertone"),
-// and an indigo-violet accent (purple with a blue lean). Key names are kept
-// from the original dark theme so the rest of the component is untouched:
-//   ink   = page background      ivory = primary text
-//   panel = card surface         muted = secondary text
-//   gold  = accent (now violet)  line  = borders
+// Default mandate: the trophy-retail buy box.
+const DEFAULT_CONFIG = {
+  name: "Trophy Retail",
+  criteria: [
+    { id: "location", label: "Location", desc: "High-street / prime corridor / dense high-barrier gateway market", weight: 30 },
+    { id: "tenancy_credit", label: "Tenant credit", desc: "Strength and durability of tenant credit", weight: 25 },
+    { id: "asset_quality", label: "Asset quality", desc: "Trophy / irreplaceable vs commodity", weight: 20 },
+    { id: "lease_durability", label: "Lease durability", desc: "Weighted lease term and rollover risk", weight: 15 },
+    { id: "value_add", label: "Value-add", desc: "Mark-to-market, lease-up, or repositioning upside", weight: 10 },
+  ],
+  thresholds: { pursue: 75, watch: 55 },
+  commands: "",
+};
+
+const PRESETS_KEY = "fr_presets_v1";
+const ACTIVE_KEY = "fr_active_v1";
+
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+function genId() { return "c_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+
+function loadPresets() {
+  try { const p = JSON.parse(localStorage.getItem(PRESETS_KEY)); if (p && typeof p === "object" && Object.keys(p).length) return p; } catch {}
+  return { [DEFAULT_CONFIG.name]: clone(DEFAULT_CONFIG) };
+}
+function loadActive() {
+  try { const a = JSON.parse(localStorage.getItem(ACTIVE_KEY)); if (a && Array.isArray(a.criteria)) return a; } catch {}
+  return clone(DEFAULT_CONFIG);
+}
+
+// Deterministic grade: weighted average of Claude's per-criterion scores, with
+// the recommendation derived from the firm's thresholds.
+function gradeFrom(result, config) {
+  const crit = (result && result.buy_box && result.buy_box.criteria) || {};
+  let num = 0, wsum = 0, scored = 0;
+  (config.criteria || []).forEach((c) => {
+    const cell = crit[c.id];
+    const sc = cell && typeof cell.score === "number" ? cell.score : null;
+    const w = Number(c.weight) || 0;
+    if (sc != null && w > 0) { num += sc * w; wsum += w; scored++; }
+  });
+  const fallback = Math.round((result && result.buy_box && result.buy_box.overall_score) || 0);
+  const overall = wsum > 0 ? Math.round(num / wsum) : fallback;
+  const t = config.thresholds || { pursue: 75, watch: 55 };
+  const rec = overall >= t.pursue ? "Pursue" : overall >= t.watch ? "Watch" : "Pass";
+  return { overall, rec, scored };
+}
+
 const C = {
   ink: "#f4f4fb", panel: "#ffffff", panel2: "#eceaf7", line: "#e5e3f1",
   ivory: "#1b1930", muted: "#6c6982", gold: "#6a5cf6", goldSoft: "rgba(106,92,246,0.10)",
   green: "#1f9d63", amber: "#b7791f", red: "#d14a3c",
 };
-
-function fmtPct(n) { return n == null ? "—" : `${(+n).toFixed(2)}%`; }
-function money(n) { return n == null ? "—" : "$" + Math.round(+n).toLocaleString(); }
 
 function recColor(rec) {
   if (rec === "Pursue") return C.green;
@@ -67,8 +110,24 @@ export default function App() {
   const [result, setResult] = useState(null);
   const fileRef = useRef(null);
 
-  // Shared-password gate. The password is validated server-side; here we just
-  // remember it for the session and send it with each request.
+  // Customizable grading config + saved presets.
+  const [config, setConfigState] = useState(loadActive);
+  const [presets, setPresetsState] = useState(loadPresets);
+  const [showSettings, setShowSettings] = useState(false);
+
+  function setConfig(updater) {
+    setConfigState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      try { localStorage.setItem(ACTIVE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+  function setPresets(next) {
+    setPresetsState(next);
+    try { localStorage.setItem(PRESETS_KEY, JSON.stringify(next)); } catch {}
+  }
+
+  // Shared-password gate.
   const [pw, setPw] = useState(() => sessionStorage.getItem("lr_pw") || "");
   const [authed, setAuthed] = useState(() => !!sessionStorage.getItem("lr_pw"));
   const [pwInput, setPwInput] = useState("");
@@ -80,22 +139,13 @@ export default function App() {
     setPwError(""); setPwBusy(true);
     try {
       const res = await fetch("/api/screen", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ check: true, password: pwInput }),
       });
-      if (res.ok) {
-        sessionStorage.setItem("lr_pw", pwInput);
-        setPw(pwInput); setAuthed(true);
-      } else {
-        const d = await res.json().catch(() => ({}));
-        setPwError(d.error || "Incorrect password.");
-      }
-    } catch {
-      setPwError("Could not reach the server. Try again.");
-    } finally {
-      setPwBusy(false);
-    }
+      if (res.ok) { sessionStorage.setItem("lr_pw", pwInput); setPw(pwInput); setAuthed(true); }
+      else { const d = await res.json().catch(() => ({})); setPwError(d.error || "Incorrect password."); }
+    } catch { setPwError("Could not reach the server. Try again."); }
+    finally { setPwBusy(false); }
   }
 
   function onFile(f) {
@@ -115,16 +165,14 @@ export default function App() {
       } else {
         if (!memoText.trim()) { setError("Paste the memo text or load the sample deal."); setLoading(false); return; }
       }
-
       setProgress("Extracting underwriting data and scoring the buy box…");
       const res = await fetch("/api/screen", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, pdfData, memoText, password: pw }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, pdfData, memoText, password: pw, config }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+      const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
       const start = text.indexOf("{"); const end = text.lastIndexOf("}");
       if (start === -1 || end === -1) throw new Error("Could not read a structured result. Try again or check the document.");
       const parsed = JSON.parse(text.slice(start, end + 1));
@@ -170,8 +218,15 @@ export default function App() {
     return checks;
   }
 
+  // Recompute the grade whenever the result or the config changes — so moving a
+  // weight or threshold slider re-scores instantly without re-calling Claude.
+  const grade = useMemo(() => (result ? gradeFrom(result, config) : null), [result, config]);
+
   function exportJSON() {
-    const blob = new Blob([JSON.stringify(result, null, 2)], { type: "application/json" });
+    const out = clone(result);
+    if (grade) out.buy_box = { ...out.buy_box, overall_score: grade.overall, recommendation: grade.rec };
+    out._mandate = config.name;
+    const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
     dl(blob, (result.property_name || "deal").replace(/\W+/g, "_") + ".json");
   }
   function exportCSV() {
@@ -188,10 +243,11 @@ export default function App() {
     rows.push(["Occupancy", result.occupancy || "", c.occupancy || ""]);
     rows.push([]);
     rows.push(["Tenant", "SF", "Lease expiration", "Credit tier"]);
-    (result.tenants || []).forEach(t => rows.push([t.name, t.sf || "", t.lease_expiration || "", t.credit_tier || ""]));
+    (result.tenants || []).forEach((t) => rows.push([t.name, t.sf || "", t.lease_expiration || "", t.credit_tier || ""]));
     rows.push([]);
-    rows.push(["Buy-box score", result.buy_box?.overall_score ?? "", result.buy_box?.recommendation || ""]);
-    const csv = rows.map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(",")).join("\n");
+    rows.push(["Mandate", config.name, ""]);
+    rows.push(["Buy-box score", grade ? grade.overall : "", grade ? grade.rec : ""]);
+    const csv = rows.map((r) => r.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(",")).join("\n");
     dl(new Blob([csv], { type: "text/csv" }), (result.property_name || "deal").replace(/\W+/g, "_") + ".csv");
   }
   function dl(blob, name) {
@@ -214,11 +270,10 @@ export default function App() {
             FRONTAGE<span style={{ color: C.gold }}>.</span>
           </div>
           <div style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Enter the access password to continue.</div>
-          <input type="password" value={pwInput} onChange={e => setPwInput(e.target.value)} autoFocus
-            placeholder="Password"
+          <input type="password" value={pwInput} onChange={(e) => setPwInput(e.target.value)} autoFocus placeholder="Password"
             style={{ width: "100%", marginTop: 18, background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 9, padding: 13, fontSize: 14, fontFamily: "Archivo, sans-serif" }} />
           <button type="submit" disabled={pwBusy || !pwInput}
-            style={{ marginTop: 12, width: "100%", cursor: pwBusy || !pwInput ? "default" : "pointer", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: pwBusy || !pwInput ? C.panel2 : C.gold, color: pwBusy || !pwInput ? C.muted : C.ink }}>
+            style={{ marginTop: 12, width: "100%", cursor: pwBusy || !pwInput ? "default" : "pointer", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: pwBusy || !pwInput ? C.panel2 : C.gold, color: pwBusy || !pwInput ? C.muted : "#ffffff" }}>
             {pwBusy ? "Checking…" : "Enter →"}
           </button>
           {pwError && <div style={{ marginTop: 12, color: C.red, fontSize: 13 }}>{pwError}</div>}
@@ -237,10 +292,11 @@ export default function App() {
         .fade { animation: fade .5s ease both; }
         @keyframes fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .bar { transition: width .9s cubic-bezier(.2,.8,.2,1); }
-        textarea::placeholder { color: ${C.muted}; }
-        textarea:focus, button:focus { outline: none; }
+        textarea::placeholder, input::placeholder { color: ${C.muted}; }
+        textarea:focus, button:focus, input:focus, select:focus { outline: none; }
         .lift { transition: transform .15s ease, border-color .15s ease; }
         .lift:hover { transform: translateY(-1px); border-color: ${C.gold}; }
+        input[type=range] { accent-color: ${C.gold}; }
       `}</style>
 
       <div style={{ maxWidth: 1040, margin: "0 auto", padding: "28px 22px 80px" }}>
@@ -252,60 +308,64 @@ export default function App() {
             </div>
             <div style={{ color: C.muted, fontSize: 13, marginTop: 2 }}>Retail acquisitions screener — high-street trophy assets</div>
           </div>
-          <div className="mono" style={{ fontSize: 11, color: C.gold, textAlign: "right", lineHeight: 1.5 }}>
-            POWERED BY CLAUDE<br /><span style={{ color: C.muted }}>v1 · demo build</span>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+            <button onClick={() => setShowSettings((s) => !s)} className="mono lift"
+              style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${showSettings ? C.gold : C.line}`, background: showSettings ? C.goldSoft : C.panel, color: showSettings ? C.gold : C.ivory }}>
+              ⚙ GRADING CRITERIA
+            </button>
+            <div className="mono" style={{ fontSize: 11, color: C.gold, textAlign: "right", lineHeight: 1.5 }}>
+              POWERED BY CLAUDE<br /><span style={{ color: C.muted }}>mandate · {config.name}</span>
+            </div>
           </div>
         </div>
+
+        {showSettings && (
+          <Settings config={config} setConfig={setConfig} presets={presets} setPresets={setPresets} onClose={() => setShowSettings(false)} />
+        )}
 
         {/* Input */}
         <div style={{ marginTop: 22, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-            {["text", "pdf"].map(m => (
+            {["text", "pdf"].map((m) => (
               <button key={m} onClick={() => setMode(m)} className="mono"
-                style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${mode === m ? C.gold : C.line}`,
-                  background: mode === m ? C.goldSoft : "transparent", color: mode === m ? C.gold : C.muted }}>
+                style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${mode === m ? C.gold : C.line}`, background: mode === m ? C.goldSoft : "transparent", color: mode === m ? C.gold : C.muted }}>
                 {m === "text" ? "PASTE TEXT" : "UPLOAD PDF"}
               </button>
             ))}
             <button onClick={() => { setMode("text"); setMemoText(SAMPLE_OM); }} className="mono"
-              style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, marginLeft: "auto",
-                border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>
+              style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, marginLeft: "auto", border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>
               ✦ TRY SAMPLE DEAL
             </button>
           </div>
 
           {mode === "text" ? (
-            <textarea value={memoText} onChange={e => setMemoText(e.target.value)} rows={7}
+            <textarea value={memoText} onChange={(e) => setMemoText(e.target.value)} rows={7}
               placeholder="Paste the offering memorandum text here, or load the sample deal…"
-              style={{ width: "100%", background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 9,
-                padding: 14, fontSize: 13.5, lineHeight: 1.5, resize: "vertical", fontFamily: "Archivo, sans-serif" }} />
+              style={{ width: "100%", background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 9, padding: 14, fontSize: 13.5, lineHeight: 1.5, resize: "vertical", fontFamily: "Archivo, sans-serif" }} />
           ) : (
             <div onClick={() => fileRef.current?.click()} className="lift"
               style={{ cursor: "pointer", border: `1px dashed ${C.line}`, borderRadius: 9, padding: "30px 16px", textAlign: "center", background: C.ink }}>
               <div style={{ color: C.gold, fontSize: 22 }} className="serif">↑</div>
               <div style={{ marginTop: 6, fontSize: 14 }}>{fileName || "Drop a PDF offering memorandum, or click to browse"}</div>
-              <input ref={fileRef} type="file" accept="application/pdf" style={{ display: "none" }}
-                onChange={e => onFile(e.target.files[0])} />
+              <input ref={fileRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
             </div>
           )}
 
           <button onClick={analyze} disabled={loading}
-            style={{ marginTop: 14, width: "100%", cursor: loading ? "default" : "pointer", border: "none", borderRadius: 9,
-              padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em",
-              background: loading ? C.panel2 : C.gold, color: loading ? C.muted : C.ink }}>
-            {loading ? progress || "Working…" : "Screen this deal →"}
+            style={{ marginTop: 14, width: "100%", cursor: loading ? "default" : "pointer", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: loading ? C.panel2 : C.gold, color: loading ? C.muted : "#ffffff" }}>
+            {loading ? progress || "Working…" : `Screen this deal against “${config.name}” →`}
           </button>
           {error && <div style={{ marginTop: 12, color: C.red, fontSize: 13 }}>{error}</div>}
         </div>
 
-        {result && <Results r={result} onJSON={exportJSON} onCSV={exportCSV} />}
+        {result && <Results r={result} grade={grade} config={config} onJSON={exportJSON} onCSV={exportCSV} />}
 
         {!result && !loading && (
           <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
             <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>What this does.</span> Reads a retail OM, pulls the underwriting
             data, breaks out the tenant roster by lease expiration and credit quality, recomputes the deal's own math to catch
-            inconsistencies, and scores it against a trophy-retail buy box with a written rationale. Built to triage a pipeline the way a
-            principal team does — not just to read a document.
+            inconsistencies, and scores it against your buy box — editable in <strong>Grading criteria</strong> above with weight sliders,
+            score thresholds, and free-text rules.
           </div>
         )}
       </div>
@@ -313,12 +373,124 @@ export default function App() {
   );
 }
 
-function Results({ r, onJSON, onCSV }) {
+function Settings({ config, setConfig, presets, setPresets, onClose }) {
+  const totalW = (config.criteria || []).reduce((a, c) => a + (Number(c.weight) || 0), 0) || 1;
+
+  function updateCrit(id, patch) {
+    setConfig((prev) => ({ ...prev, criteria: prev.criteria.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
+  }
+  function addCrit() {
+    setConfig((prev) => ({ ...prev, criteria: [...prev.criteria, { id: genId(), label: "New criterion", desc: "", weight: 10 }] }));
+  }
+  function removeCrit(id) {
+    setConfig((prev) => ({ ...prev, criteria: prev.criteria.filter((c) => c.id !== id) }));
+  }
+  function setThreshold(key, v) {
+    setConfig((prev) => ({ ...prev, thresholds: { ...prev.thresholds, [key]: v } }));
+  }
+  function loadPreset(name) {
+    if (presets[name]) setConfig(clone(presets[name]));
+  }
+  function savePreset() {
+    const name = (config.name || "Untitled").trim() || "Untitled";
+    setPresets({ ...presets, [name]: clone({ ...config, name }) });
+  }
+  function deletePreset() {
+    const name = config.name;
+    if (!presets[name]) return;
+    const next = { ...presets }; delete next[name];
+    const remaining = Object.keys(next);
+    if (!remaining.length) { next[DEFAULT_CONFIG.name] = clone(DEFAULT_CONFIG); }
+    setPresets(next);
+    loadPreset(Object.keys(next)[0]);
+  }
+
+  const label = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
+  const field = { background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "Archivo, sans-serif" };
+
+  return (
+    <div className="fade" style={{ marginTop: 18, background: C.panel, border: `1px solid ${C.gold}55`, borderRadius: 12, padding: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div className="serif" style={{ fontSize: 18 }}>Grading criteria</div>
+        <button onClick={onClose} className="mono" style={{ cursor: "pointer", fontSize: 12, color: C.muted, background: "transparent", border: "none" }}>✕ CLOSE</button>
+      </div>
+
+      {/* Mandate / presets */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 16 }}>
+        <div>
+          <div className="mono" style={label}>SAVED MANDATE</div>
+          <select value={presets[config.name] ? config.name : ""} onChange={(e) => loadPreset(e.target.value)} style={{ ...field, marginTop: 4, minWidth: 160 }}>
+            {!presets[config.name] && <option value="">{config.name} (unsaved)</option>}
+            {Object.keys(presets).map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+        <div>
+          <div className="mono" style={label}>NAME</div>
+          <input value={config.name} onChange={(e) => setConfig((p) => ({ ...p, name: e.target.value }))} style={{ ...field, marginTop: 4, width: 160 }} />
+        </div>
+        <button onClick={savePreset} className="mono lift" style={{ cursor: "pointer", fontSize: 12, padding: "8px 14px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>↓ SAVE</button>
+        <button onClick={deletePreset} className="mono lift" style={{ cursor: "pointer", fontSize: 12, padding: "8px 14px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.muted }}>DELETE</button>
+      </div>
+
+      {/* Criteria + weights */}
+      <div className="mono" style={{ ...label, marginBottom: 8 }}>CRITERIA &amp; WEIGHTS</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {config.criteria.map((c) => {
+          const pct = Math.round(((Number(c.weight) || 0) / totalW) * 100);
+          return (
+            <div key={c.id} style={{ background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: 12 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input value={c.label} onChange={(e) => updateCrit(c.id, { label: e.target.value })} style={{ ...field, flex: "1 1 140px", fontWeight: 600 }} />
+                <div className="mono" style={{ fontSize: 12, color: C.gold, width: 42, textAlign: "right" }}>{pct}%</div>
+                <button onClick={() => removeCrit(c.id)} title="Remove" style={{ cursor: "pointer", border: "none", background: "transparent", color: C.muted, fontSize: 15 }}>✕</button>
+              </div>
+              <input value={c.desc} onChange={(e) => updateCrit(c.id, { desc: e.target.value })} placeholder="What does a high score mean for this factor?"
+                style={{ ...field, width: "100%", marginTop: 8, color: C.muted }} />
+              <input type="range" min="0" max="40" step="1" value={c.weight} onChange={(e) => updateCrit(c.id, { weight: Number(e.target.value) })} style={{ width: "100%", marginTop: 10 }} />
+            </div>
+          );
+        })}
+      </div>
+      <button onClick={addCrit} className="mono lift" style={{ cursor: "pointer", marginTop: 10, fontSize: 12, padding: "8px 14px", borderRadius: 7, border: `1px dashed ${C.line}`, background: "transparent", color: C.ivory }}>+ ADD CRITERION</button>
+
+      {/* Thresholds */}
+      <div className="mono" style={{ ...label, margin: "20px 0 8px" }}>SCORE THRESHOLDS</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
+        <div style={{ background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <span>Pursue at or above</span><span className="mono" style={{ color: C.green }}>{config.thresholds.pursue}</span>
+          </div>
+          <input type="range" min="0" max="100" step="1" value={config.thresholds.pursue} onChange={(e) => setThreshold("pursue", Number(e.target.value))} style={{ width: "100%", marginTop: 8 }} />
+        </div>
+        <div style={{ background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <span>Watch at or above</span><span className="mono" style={{ color: C.amber }}>{config.thresholds.watch}</span>
+          </div>
+          <input type="range" min="0" max="100" step="1" value={config.thresholds.watch} onChange={(e) => setThreshold("watch", Number(e.target.value))} style={{ width: "100%", marginTop: 8 }} />
+        </div>
+      </div>
+
+      {/* Commands */}
+      <div className="mono" style={{ ...label, margin: "20px 0 8px" }}>COMMANDS — RULES THE SLIDERS CAN'T CAPTURE</div>
+      <textarea value={config.commands} onChange={(e) => setConfig((p) => ({ ...p, commands: e.target.value }))} rows={4}
+        placeholder={"e.g.\n• Instant Pass if the anchor tenant is not investment-grade.\n• Penalize anything below 15,000 SF.\n• Only Pursue in primary gateway markets (NYC, LA, SF, Miami)."}
+        style={{ width: "100%", background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 9, padding: 12, fontSize: 13, lineHeight: 1.5, resize: "vertical", fontFamily: "Archivo, sans-serif" }} />
+
+      <div style={{ marginTop: 12, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+        Weights and thresholds re-score the current deal instantly. Changes to criteria, descriptions, or commands take effect the next time you screen a deal.
+      </div>
+    </div>
+  );
+}
+
+function Results({ r, grade, config, onJSON, onCSV }) {
   const bb = r.buy_box || {};
   const crit = bb.criteria || {};
   const conf = r.confidence || {};
   const tenants = [...(r.tenants || [])].sort((a, b) => (a.expiration_year || 9999) - (b.expiration_year || 9999));
-  const rec = bb.recommendation || "Watch";
+  const rec = (grade && grade.rec) || bb.recommendation || "Watch";
+  const overall = grade ? grade.overall : (bb.overall_score ?? 0);
+  const totalW = (config.criteria || []).reduce((a, c) => a + (Number(c.weight) || 0), 0) || 1;
 
   const metrics = [
     ["Asking price", r.asking_price, conf.asking_price],
@@ -340,11 +512,11 @@ function Results({ r, onJSON, onCSV }) {
           {r.submarket && <div style={{ color: C.muted, fontSize: 13, marginTop: 2 }}>{r.submarket}{r.year_built ? ` · Built ${r.year_built}` : ""}</div>}
         </div>
         <div style={{ flex: "1 1 260px", background: C.panel, border: `1px solid ${recColor(rec)}55`, borderRadius: 12, padding: 20, display: "flex", alignItems: "center", gap: 18 }}>
-          <Gauge score={bb.overall_score ?? 0} color={recColor(rec)} />
+          <Gauge score={overall} color={recColor(rec)} />
           <div>
             <div className="mono" style={{ fontSize: 11, color: C.muted, letterSpacing: "0.08em" }}>BUY-BOX FIT</div>
             <div className="serif" style={{ fontSize: 24, color: recColor(rec), fontWeight: 600 }}>{rec}</div>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Trophy high-street screen</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{config.name}</div>
           </div>
         </div>
       </div>
@@ -359,9 +531,9 @@ function Results({ r, onJSON, onCSV }) {
       {/* Metrics */}
       <SectionTitle>Underwriting</SectionTitle>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
-        {metrics.map(([label, val, c]) => (
-          <div key={label} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 }}>
-            <div style={{ fontSize: 12, color: C.muted }}>{label}</div>
+        {metrics.map(([lab, val, c]) => (
+          <div key={lab} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 }}>
+            <div style={{ fontSize: 12, color: C.muted }}>{lab}</div>
             <div className="mono" style={{ fontSize: 18, marginTop: 4, color: val ? C.ivory : C.muted }}>{val || "not stated"}</div>
             {c && <ConfTag level={c} />}
           </div>
@@ -381,30 +553,34 @@ function Results({ r, onJSON, onCSV }) {
                     {ck.ok == null ? "NO CLAIM" : ck.ok ? "✓ TIES" : "✗ MISMATCH"}
                   </span>
                 </div>
-                <div className="mono" style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
-                  computed {ck.computed} · stated {ck.stated}
-                </div>
+                <div className="mono" style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>computed {ck.computed} · stated {ck.stated}</div>
               </div>
             ))}
           </div>
         </>
       )}
 
-      {/* Buy box breakdown */}
-      <SectionTitle>Buy-box breakdown</SectionTitle>
+      {/* Buy box breakdown — driven by the firm's criteria + weights */}
+      <SectionTitle>Buy-box breakdown <span style={{ color: C.muted, fontWeight: 400 }} className="mono">— {config.name}, weighted</span></SectionTitle>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: "8px 18px" }}>
-        {Object.entries(crit).map(([k, v]) => (
-          <div key={k} style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
-              <span style={{ textTransform: "capitalize" }}>{k.replace(/_/g, " ")}</span>
-              <span className="mono" style={{ color: C.gold }}>{v.score}</span>
+        {config.criteria.map((c) => {
+          const cell = crit[c.id] || {};
+          const score = typeof cell.score === "number" ? cell.score : null;
+          const pct = Math.round(((Number(c.weight) || 0) / totalW) * 100);
+          return (
+            <div key={c.id} style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
+                <span>{c.label} <span className="mono" style={{ color: C.muted, fontSize: 11 }}>· {pct}% weight</span></span>
+                <span className="mono" style={{ color: C.gold }}>{score == null ? "—" : score}</span>
+              </div>
+              <div style={{ height: 5, background: C.ink, borderRadius: 4, marginTop: 7, overflow: "hidden" }}>
+                <div className="bar" style={{ width: `${score || 0}%`, height: "100%", background: C.gold, borderRadius: 4 }} />
+              </div>
+              {cell.note && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 6 }}>{cell.note}</div>}
+              {score == null && <div style={{ fontSize: 12, color: C.amber, marginTop: 6 }}>Not scored on the last run — re-screen to grade this criterion.</div>}
             </div>
-            <div style={{ height: 5, background: C.ink, borderRadius: 4, marginTop: 7, overflow: "hidden" }}>
-              <div className="bar" style={{ width: `${v.score}%`, height: "100%", background: C.gold, borderRadius: 4 }} />
-            </div>
-            {v.note && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 6 }}>{v.note}</div>}
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Tenant roster */}
@@ -431,10 +607,10 @@ function Results({ r, onJSON, onCSV }) {
       )}
 
       {/* Export */}
-      <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
+      <div style={{ display: "flex", gap: 10, marginTop: 22, flexWrap: "wrap" }}>
         <button onClick={onCSV} className="lift mono" style={{ cursor: "pointer", fontSize: 12, padding: "10px 18px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>
         <button onClick={onJSON} className="lift mono" style={{ cursor: "pointer", fontSize: 12, padding: "10px 18px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT JSON</button>
-        <span style={{ alignSelf: "center", color: C.muted, fontSize: 12 }}>Ready to drop into an underwriting model.</span>
+        <span style={{ alignSelf: "center", color: C.muted, fontSize: 12 }}>Graded against “{config.name}”. Ready to drop into an underwriting model.</span>
       </div>
     </div>
   );

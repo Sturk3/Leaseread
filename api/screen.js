@@ -1,22 +1,45 @@
 // Vercel serverless backend for FRONTAGE.
 // Holds the Anthropic API key (server-side only) and calls the Messages API.
-// The browser POSTs { mode, pdfData, memoText } here; we build the content
-// array, call Claude, and return Anthropic's JSON response straight back.
+// The browser POSTs { mode, pdfData, memoText, password, config } here; we build
+// the grading prompt from the firm's custom buy-box config, call Claude, and
+// return Anthropic's JSON response straight back.
 
-// SYSTEM_EXTRACT — copied verbatim from frontage_deal_screener.jsx so the
-// long system prompt lives server-side, never shipped to the client bundle.
-const SYSTEM_EXTRACT = `You are a retail real estate acquisitions analyst at a principal investment firm that specializes in trophy, high-street retail in dense gateway markets. You read offering memoranda and return ONLY a single valid JSON object (no markdown, no code fences, no preamble).
+// Default trophy-retail buy box, used when the client sends no custom config.
+const DEFAULT_CRITERIA = [
+  { id: "location", label: "Location", desc: "High-street / prime corridor / dense high-barrier gateway market" },
+  { id: "tenancy_credit", label: "Tenant credit", desc: "Strength and durability of tenant credit" },
+  { id: "asset_quality", label: "Asset quality", desc: "Trophy / irreplaceable vs commodity" },
+  { id: "lease_durability", label: "Lease durability", desc: "Weighted lease term and rollover risk" },
+  { id: "value_add", label: "Value-add", desc: "Mark-to-market, lease-up, or repositioning upside" },
+];
+
+// Build the system prompt from the firm's criteria + free-text commands so the
+// grading reflects their mandate, not a fixed trophy-retail thesis.
+function buildSystem(config) {
+  let criteria = DEFAULT_CRITERIA;
+  if (config && Array.isArray(config.criteria) && config.criteria.length) {
+    const cleaned = config.criteria
+      .filter((c) => c && c.id && c.label)
+      .map((c) => ({ id: String(c.id), label: String(c.label), desc: String(c.desc || c.label) }));
+    if (cleaned.length) criteria = cleaned;
+  }
+  const critLines = criteria.map((c) => `- ${c.id}: ${c.label} — ${c.desc}`).join("\n");
+  const critSchema = criteria.map((c) => `"${c.id}": {"score": num, "note": str}`).join(", ");
+  const commands = config && typeof config.commands === "string" ? config.commands.trim() : "";
+  const commandsBlock = commands
+    ? `\n\nADDITIONAL GRADING DIRECTIVES FROM THE FIRM. Apply these strictly; they reflect this firm's mandate and override the generic guidance where they conflict:\n${commands}`
+    : "";
+
+  return `You are a retail real estate acquisitions analyst at a principal investment firm. You read offering memoranda and return ONLY a single valid JSON object (no markdown, no code fences, no preamble).
 
 Extract conservatively. If a value is not explicitly stated, return null — never guess or infer a number. For every key financial, also return a numeric version (digits only, no symbols/commas) so it can be recomputed. Assign each extracted field a confidence of "high", "medium", or "low".
 
 Classify each tenant's credit tier as one of: "investment-grade" (large national/global rated or flagship brand), "national" (recognized national chain, unrated), "regional", or "local" (independent/single-operator). Note vacancy as a roster line with tenant "VACANT".
 
-Then score the deal against this trophy-retail buy box, each criterion 0-100 with a one-line note:
-- location: high-street / prime corridor / dense high-barrier gateway market (highest weight)
-- tenancy_credit: strength and durability of tenant credit
-- asset_quality: trophy / irreplaceable vs commodity
-- lease_durability: weighted lease term and rollover risk
-- value_add: mark-to-market, lease-up, or repositioning upside
+Then score the deal against THIS FIRM'S buy box. Score each criterion 0-100 with a one-line note grounded in the memo:
+${critLines}${commandsBlock}
+
+Also provide an overall_score (0-100), a recommendation of "Pursue", "Watch", or "Pass", and a 2-4 sentence rationale that references the firm's criteria and any directives above.
 
 Return JSON with EXACTLY this shape:
 {
@@ -35,26 +58,22 @@ Return JSON with EXACTLY this shape:
    "overall_score": num,
    "recommendation": "Pursue"|"Watch"|"Pass",
    "rationale": str,
-   "criteria": { "location": {"score": num, "note": str}, "tenancy_credit": {"score": num, "note": str}, "asset_quality": {"score": num, "note": str}, "lease_durability": {"score": num, "note": str}, "value_add": {"score": num, "note": str} }
+   "criteria": { ${critSchema} }
  }
 }`;
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { mode, pdfData, memoText, password, check } = req.body || {};
+    const { mode, pdfData, memoText, password, check, config } = req.body || {};
 
-    // Optional shared-password gate. If SITE_PASSWORD is configured in the
-    // environment, every request must carry the matching password — this is
-    // enforced server-side so the costly Anthropic call can't be triggered by
-    // anyone who hasn't logged in. If SITE_PASSWORD is unset, the app is open.
+    // Shared-password gate (enforced before any Anthropic call).
     if (process.env.SITE_PASSWORD) {
       if (password !== process.env.SITE_PASSWORD) {
         return res.status(401).json({ error: "Incorrect password." });
       }
     }
-    // Lightweight check used by the login screen to validate the password
-    // without spending an Anthropic call. Auth is already verified above.
     if (check) return res.status(200).json({ ok: true });
 
     const content = [];
@@ -81,12 +100,10 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 4096,
-        system: SYSTEM_EXTRACT,
+        system: buildSystem(config),
         messages: [{ role: "user", content }],
       }),
     });
-    // Read the body as text first so a non-JSON error page from Anthropic
-    // surfaces with its real status/snippet instead of a generic parse error.
     const raw = await r.text();
     let data;
     try {
@@ -98,7 +115,6 @@ export default async function handler(req, res) {
         snippet: raw.slice(0, 300),
       });
     }
-    // Pass Anthropic's status through so an auth error (401) etc. is visible.
     return res.status(r.ok ? 200 : r.status).json(data);
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "handler" });

@@ -1,0 +1,8 @@
+# Live sourcing connectors (ACRIS / DOB via Socrata)
+requests>=2.31
+
+# Loads ANTHROPIC_API_KEY / SOCRATA_APP_TOKEN from .env
+python-dotenv>=1.0
+
+# Optional: only needed for `--enrich` (Claude contact normalization)
+anthropic>=0.40

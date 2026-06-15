@@ -1,0 +1,4 @@
+id,doc_type,borough,address,owner_name,owner_address,city,state,zip,amount,date
+L-1001,OFF-MARKET,Brooklyn,123 Example Ave,SMITH JOHN,123 Example Ave,Brooklyn,NY,11201,,2026-05-01
+L-1002,OFF-MARKET,Queens,45-10 Sample Blvd,PARK AVE HOLDINGS LLC,1 Wall St,New York,NY,10005,1850000,2026-04-22
+L-1003,OFF-MARKET,Bronx,900 Test St,"DOE, JANE A",900 Test St,Bronx,NY,10456,,2026-03-18

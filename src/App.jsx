@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from "react";
+import React, { useState, useRef, useMemo, useEffect } from "react";
 
 // FRONTAGE — Retail Acquisitions Screener
 // Ingests a retail offering memorandum, extracts underwriting data, breaks out
@@ -114,6 +114,9 @@ export default function App() {
   const [config, setConfigState] = useState(loadActive);
   const [presets, setPresetsState] = useState(loadPresets);
   const [showSettings, setShowSettings] = useState(false);
+
+  // Which tool is showing: the OM screener or the NYC sourcing page.
+  const [view, setView] = useState("screener");
 
   function setConfig(updater) {
     setConfigState((prev) => {
@@ -306,19 +309,36 @@ export default function App() {
             <div className="serif" style={{ fontSize: 30, letterSpacing: "-0.01em", fontWeight: 600 }}>
               FRONTAGE<span style={{ color: C.gold }}>.</span>
             </div>
-            <div style={{ color: C.muted, fontSize: 13, marginTop: 2 }}>Retail acquisitions screener — high-street trophy assets</div>
+            <div style={{ color: C.muted, fontSize: 13, marginTop: 2 }}>
+              {view === "screener"
+                ? "Retail acquisitions screener — high-street trophy assets"
+                : "Deal & contact sourcing — NYC Open Data (ACRIS + DOB)"}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              {[["screener", "SCREENER"], ["sourcing", "SOURCING"]].map(([v, lab]) => (
+                <button key={v} onClick={() => setView(v)} className="mono"
+                  style={{ cursor: "pointer", fontSize: 12, padding: "6px 13px", borderRadius: 7, border: `1px solid ${view === v ? C.gold : C.line}`, background: view === v ? C.goldSoft : "transparent", color: view === v ? C.gold : C.muted }}>
+                  {lab}
+                </button>
+              ))}
+            </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-            <button onClick={() => setShowSettings((s) => !s)} className="mono lift"
-              style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${showSettings ? C.gold : C.line}`, background: showSettings ? C.goldSoft : C.panel, color: showSettings ? C.gold : C.ivory }}>
-              ⚙ GRADING CRITERIA
-            </button>
+            {view === "screener" && (
+              <button onClick={() => setShowSettings((s) => !s)} className="mono lift"
+                style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${showSettings ? C.gold : C.line}`, background: showSettings ? C.goldSoft : C.panel, color: showSettings ? C.gold : C.ivory }}>
+                ⚙ GRADING CRITERIA
+              </button>
+            )}
             <div className="mono" style={{ fontSize: 11, color: C.gold, textAlign: "right", lineHeight: 1.5 }}>
-              POWERED BY CLAUDE<br /><span style={{ color: C.muted }}>mandate · {config.name}</span>
+              POWERED BY CLAUDE<br /><span style={{ color: C.muted }}>{view === "screener" ? `mandate · ${config.name}` : "ACRIS · DOB"}</span>
             </div>
           </div>
         </div>
 
+        {view === "sourcing" && <Sourcing pw={pw} />}
+
+        {view === "screener" && (<>
         {showSettings && (
           <Settings config={config} setConfig={setConfig} presets={presets} setPresets={setPresets} onClose={() => setShowSettings(false)} />
         )}
@@ -368,6 +388,7 @@ export default function App() {
             score thresholds, and free-text rules.
           </div>
         )}
+        </>)}
       </div>
     </div>
   );
@@ -638,5 +659,282 @@ function Gauge({ score, color }) {
         style={{ transition: "stroke-dashoffset 1s cubic-bezier(.2,.8,.2,1)" }} />
       <text x="39" y="44" textAnchor="middle" className="mono" fill={C.ivory} fontSize="20">{Math.round(score)}</text>
     </svg>
+  );
+}
+
+// ───────────────────────── Sourcing page ─────────────────────────
+
+function downloadBlob(content, name, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
+}
+
+const LEAD_COLS = [
+  { key: "name", label: "Name" }, { key: "entity_type", label: "Type" }, { key: "role", label: "Role" },
+  { key: "address", label: "Property" }, { key: "borough", label: "Borough" }, { key: "amount", label: "Amount" },
+  { key: "deal_date", label: "Date" }, { key: "doc_type", label: "Doc" }, { key: "source", label: "Source" },
+  { key: "contact_address", label: "Contact address" }, { key: "city", label: "City" },
+  { key: "state", label: "State" }, { key: "zip", label: "Zip" }, { key: "status", label: "Status" },
+];
+
+function leadsToCSV(rows) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const head = LEAD_COLS.map((c) => esc(c.label)).join(",");
+  const body = rows.map((r) => LEAD_COLS.map((c) => esc(r[c.key])).join(",")).join("\n");
+  return head + "\n" + body;
+}
+const fmtAmount = (a) => (a == null || a === "" ? "" : "$" + Number(a).toLocaleString());
+
+const STATUS_COLOR = { new: C.gold, working: C.amber, contacted: C.green, dead: C.muted };
+const BOROUGHS = ["", "Manhattan", "Bronx", "Brooklyn", "Queens", "Staten Island"];
+
+const fieldStyle = { background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "Archivo, sans-serif" };
+const labelStyle = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
+
+function Sourcing({ pw }) {
+  const [tab, setTab] = useState("source");
+  const [sources, setSources] = useState({ acris: true, dob: true });
+  const [borough, setBorough] = useState("");
+  const [docType, setDocType] = useState("");
+  const [since, setSince] = useState("");
+  const [limit, setLimit] = useState(100);
+  const [saveOnRun, setSaveOnRun] = useState(false);
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [leads, setLeads] = useState(null);
+
+  async function run() {
+    setError(""); setInfo(""); setLeads(null);
+    const picked = Object.keys(sources).filter((s) => sources[s]);
+    if (!picked.length) { setError("Pick at least one source (ACRIS or DOB)."); return; }
+    setLoading(true);
+    try {
+      const res = await fetch("/api/source", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, limit, save: saveOnRun }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setLeads(data.leads || []);
+      if (saveOnRun) {
+        setInfo(data.dbConfigured
+          ? `Saved ${data.saved} new lead(s) to the shared list (duplicates skipped).`
+          : "Sourced — but no database is connected, so nothing was saved. See SOURCING_SETUP.md.");
+      }
+    } catch (e) { setError(e.message || "Sourcing failed."); }
+    finally { setLoading(false); }
+  }
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {[["source", "SOURCE LIVE"], ["shared", "SHARED LIST"]].map(([t, lab]) => (
+          <button key={t} onClick={() => setTab(t)} className="mono"
+            style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${tab === t ? C.gold : C.line}`, background: tab === t ? C.goldSoft : "transparent", color: tab === t ? C.gold : C.muted }}>
+            {lab}
+          </button>
+        ))}
+      </div>
+
+      {tab === "shared" ? <SharedLeads pw={pw} /> : (
+        <>
+          {/* Filters */}
+          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+            <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SOURCES</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+              {[["acris", "ACRIS (deeds + parties)"], ["dob", "DOB (filings + owners)"]].map(([s, lab]) => (
+                <button key={s} onClick={() => setSources((p) => ({ ...p, [s]: !p[s] }))} className="mono"
+                  style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${sources[s] ? C.gold : C.line}`, background: sources[s] ? C.goldSoft : "transparent", color: sources[s] ? C.gold : C.muted }}>
+                  {sources[s] ? "✓ " : ""}{lab}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+              <label>
+                <div className="mono" style={labelStyle}>BOROUGH</div>
+                <select value={borough} onChange={(e) => setBorough(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
+                  {BOROUGHS.map((b) => <option key={b} value={b}>{b || "All boroughs"}</option>)}
+                </select>
+              </label>
+              <label>
+                <div className="mono" style={labelStyle}>DOC TYPE (ACRIS)</div>
+                <input value={docType} onChange={(e) => setDocType(e.target.value)} placeholder="e.g. DEED" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
+              </label>
+              <label>
+                <div className="mono" style={labelStyle}>SINCE</div>
+                <input type="date" value={since} onChange={(e) => setSince(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
+              </label>
+              <label>
+                <div className="mono" style={labelStyle}>MAX PER SOURCE</div>
+                <input type="number" min="1" max="250" value={limit} onChange={(e) => setLimit(Number(e.target.value))} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
+              </label>
+            </div>
+
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, fontSize: 13, color: C.ivory, cursor: "pointer" }}>
+              <input type="checkbox" checked={saveOnRun} onChange={(e) => setSaveOnRun(e.target.checked)} style={{ accentColor: C.gold }} />
+              Save results to the shared list (deduped)
+            </label>
+
+            <button onClick={run} disabled={loading}
+              style={{ marginTop: 14, width: "100%", cursor: loading ? "default" : "pointer", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: loading ? C.panel2 : C.gold, color: loading ? C.muted : "#ffffff" }}>
+              {loading ? "Sourcing from NYC Open Data…" : "Source deals & contacts →"}
+            </button>
+            {error && <div style={{ marginTop: 12, color: C.red, fontSize: 13 }}>{error}</div>}
+            {info && <div style={{ marginTop: 12, color: C.green, fontSize: 13 }}>{info}</div>}
+          </div>
+
+          {leads && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "22px 0 12px", flexWrap: "wrap", gap: 10 }}>
+                <div className="serif" style={{ fontSize: 17 }}>{leads.length} contact{leads.length === 1 ? "" : "s"} sourced</div>
+                <button onClick={() => leads.length && downloadBlob(leadsToCSV(leads), "frontage_leads.csv", "text/csv")} className="lift mono"
+                  style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>
+              </div>
+              <LeadTable rows={leads} />
+              {leads.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No records matched those filters. Try widening the date or borough.</div>}
+            </>
+          )}
+
+          {!leads && !loading && (
+            <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
+              <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>What this does.</span> Pulls recently recorded deeds (ACRIS) and
+              building-job filings (DOB) for the filters above, and extracts the people and companies attached to each — sellers, buyers,
+              and owners — as your leads. Check <strong>Save to the shared list</strong> to push them into the team's deduped database.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function LeadTable({ rows, statusEditor }) {
+  if (!rows.length) return null;
+  const cols = ["Name", "Type", "Role", "Property", "Borough", "Amount", "Date", "Source"];
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr className="mono" style={{ color: C.muted, fontSize: 11, letterSpacing: "0.04em" }}>
+            {cols.map((c) => <th key={c} style={{ textAlign: "left", padding: "11px 14px", borderBottom: `1px solid ${C.line}`, whiteSpace: "nowrap" }}>{c.toUpperCase()}</th>)}
+            {statusEditor && <th style={{ textAlign: "left", padding: "11px 14px", borderBottom: `1px solid ${C.line}` }}>STATUS</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={r.id ?? i} style={{ borderBottom: i < rows.length - 1 ? `1px solid ${C.line}` : "none" }}>
+              <td style={{ padding: "10px 14px", fontWeight: 600 }}>{r.name}</td>
+              <td style={{ padding: "10px 14px", color: C.muted }}>{r.entity_type}</td>
+              <td style={{ padding: "10px 14px", color: C.muted }}>{r.role}</td>
+              <td style={{ padding: "10px 14px" }}>{r.address || "—"}</td>
+              <td style={{ padding: "10px 14px", color: C.muted }}>{r.borough || "—"}</td>
+              <td className="mono" style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>{fmtAmount(r.amount) || "—"}</td>
+              <td className="mono" style={{ padding: "10px 14px", color: C.muted, whiteSpace: "nowrap" }}>{(r.deal_date || "").slice(0, 10) || "—"}</td>
+              <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.source}</td>
+              {statusEditor && <td style={{ padding: "10px 14px" }}>{statusEditor(r)}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SharedLeads({ pw }) {
+  const [rows, setRows] = useState(null);
+  const [stats, setStats] = useState([]);
+  const [dbConfigured, setDbConfigured] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [f, setF] = useState({ status: "", source: "", q: "" });
+
+  async function load() {
+    setLoading(true); setError("");
+    try {
+      const res = await fetch("/api/leads", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: pw, action: "list", filters: f }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setDbConfigured(data.dbConfigured !== false);
+      setRows(data.rows || []); setStats(data.stats || []);
+    } catch (e) { setError(e.message || "Could not load the shared list."); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  async function setStatus(id, status) {
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, status } : r)));
+    await fetch("/api/leads", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pw, action: "update", id, status }),
+    }).catch(() => {});
+  }
+
+  if (!dbConfigured) {
+    return (
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 22, color: C.muted, fontSize: 13.5, lineHeight: 1.6 }}>
+        <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>No database connected.</span> The shared list needs a Postgres
+        database. Create one (Vercel → Storage → Neon), run <span className="mono" style={{ color: C.gold }}>db/schema.sql</span>, set
+        <span className="mono" style={{ color: C.gold }}> DATABASE_URL</span> in your Vercel env, and redeploy. Live sourcing and CSV export
+        work without it. See <strong>SOURCING_SETUP.md</strong>.
+      </div>
+    );
+  }
+
+  const statusEditor = (r) => (
+    <select value={r.status || "new"} onChange={(e) => setStatus(r.id, e.target.value)}
+      style={{ ...fieldStyle, padding: "5px 8px", color: STATUS_COLOR[r.status] || C.ivory, fontFamily: "IBM Plex Mono, monospace", fontSize: 12 }}>
+      {["new", "working", "contacted", "dead"].map((s) => <option key={s} value={s}>{s}</option>)}
+    </select>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 14 }}>
+        <label>
+          <div className="mono" style={labelStyle}>STATUS</div>
+          <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} style={{ ...fieldStyle, marginTop: 4 }}>
+            {["", "new", "working", "contacted", "dead"].map((s) => <option key={s} value={s}>{s || "All"}</option>)}
+          </select>
+        </label>
+        <label>
+          <div className="mono" style={labelStyle}>SOURCE</div>
+          <select value={f.source} onChange={(e) => setF({ ...f, source: e.target.value })} style={{ ...fieldStyle, marginTop: 4 }}>
+            {["", "acris", "dob"].map((s) => <option key={s} value={s}>{s || "All"}</option>)}
+          </select>
+        </label>
+        <label style={{ flex: "1 1 180px" }}>
+          <div className="mono" style={labelStyle}>SEARCH NAME / ADDRESS</div>
+          <input value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} placeholder="e.g. LLC, Madison Ave" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
+        </label>
+        <button onClick={load} className="mono lift" style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>↻ APPLY</button>
+        {rows && rows.length > 0 && (
+          <button onClick={() => downloadBlob(leadsToCSV(rows), "frontage_shared_leads.csv", "text/csv")} className="mono lift"
+            style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>
+        )}
+      </div>
+
+      {stats.length > 0 && (
+        <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
+          {stats.map((s) => (
+            <span key={s.status} className="mono" style={{ fontSize: 12, color: STATUS_COLOR[s.status] || C.muted }}>
+              {s.n} {s.status}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {error && <div style={{ marginBottom: 12, color: C.red, fontSize: 13 }}>{error}</div>}
+      {loading && <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>}
+      {rows && !loading && rows.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No saved leads yet. Source some on the “Source live” tab and check “Save to the shared list”.</div>}
+      {rows && rows.length > 0 && <LeadTable rows={rows} statusEditor={statusEditor} />}
+    </div>
   );
 }

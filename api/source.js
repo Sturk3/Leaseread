@@ -345,6 +345,88 @@ function buildLeads(deals, contacts) {
   });
 }
 
+// PLUTO only carries the owner's NAME, not where they get mail — so by default the
+// mailing column would just repeat the property address. Fix it by deriving each
+// property's mailing address from the grantee (buyer) on its most recent ACRIS deed,
+// i.e. the current owner's address on record. Capped to the nearest `cap` properties
+// to stay within the serverless time budget; uncapped properties keep the fallback.
+async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
+  const targets = deals
+    .filter((d) => d.source === "pluto" && d.block && d.lot && d.borough)
+    .slice(0, cap);
+  if (!targets.length) return;
+
+  const codeOf = (boro) => BOROUGH_NAME_TO_CODE[String(boro).toLowerCase()] || null;
+  const keyOf = (code, block, lot) => `${code}|${Number(block)}|${Number(lot)}`;
+
+  // 1. lot -> ACRIS document ids (query Legals by exact block/lot, grouped by borough)
+  const byBoro = {};
+  for (const d of targets) {
+    const code = codeOf(d.borough);
+    if (code) (byBoro[code] = byBoro[code] || []).push(d);
+  }
+  const docToKey = {};
+  for (const [code, list] of Object.entries(byBoro)) {
+    for (const group of chunk(list, 40)) {
+      const ors = group.map((d) => `(block=${Number(d.block)} AND lot=${Number(d.lot)})`).join(" OR ");
+      const rows = await fetchSocrata(ACRIS_LEGALS, {
+        where: `borough='${code}' AND (${ors})`, select: "document_id,block,lot", limit: 5000, appToken,
+      }).catch(() => []);
+      for (const r of rows) {
+        const id = clean(r.document_id);
+        if (id) docToKey[id] = keyOf(code, r.block, r.lot);
+      }
+    }
+  }
+
+  // 2. which of those docs are DEEDs, and when (parallel waves to keep it quick)
+  const deedDate = {};
+  const docBatches = chunk([...new Set(Object.keys(docToKey))], 75);
+  for (const wave of chunk(docBatches, 6)) {
+    const res = await Promise.all(wave.map((b) =>
+      fetchSocrata(ACRIS_MASTER, { where: `document_id in (${sodaQuote(b)}) AND doc_type='DEED'`, select: "document_id,document_date,recorded_datetime", limit: 2000, appToken }).catch(() => [])));
+    for (const rows of res) for (const r of rows) deedDate[clean(r.document_id)] = clean(r.document_date || r.recorded_datetime);
+  }
+
+  // 3. latest deed per lot
+  const latestByKey = {};
+  for (const [id, date] of Object.entries(deedDate)) {
+    const key = docToKey[id];
+    if (!key) continue;
+    if (!latestByKey[key] || (date || "") > (latestByKey[key].date || "")) latestByKey[key] = { id, date };
+  }
+
+  // 4. grantee (buyer) mailing address on each latest deed
+  const granteeByDoc = {};
+  const latestDocs = [...new Set(Object.values(latestByKey).map((v) => v.id))];
+  for (const wave of chunk(chunk(latestDocs, 75), 6)) {
+    const res = await Promise.all(wave.map((b) =>
+      fetchSocrata(ACRIS_PARTIES, { where: `document_id in (${sodaQuote(b)}) AND party_type='2'`, select: "document_id,name,address_1,address_2,city,state,zip", limit: 2000, appToken }).catch(() => [])));
+    for (const rows of res) for (const r of rows) { const id = clean(r.document_id); if (!granteeByDoc[id]) granteeByDoc[id] = r; }
+  }
+
+  // 5. apply to the PLUTO owner contacts
+  const dealKey = {};
+  for (const d of targets) { const code = codeOf(d.borough); if (code) dealKey[d.deal_id] = keyOf(code, d.block, d.lot); }
+  for (const c of contacts) {
+    if (c.source !== "pluto") continue;
+    const v = latestByKey[dealKey[c.deal_id]];
+    const g = v && granteeByDoc[v.id];
+    if (!g) continue;
+    const addr = clean(`${g.address_1 || ""} ${g.address_2 || ""}`);
+    const city = clean(g.city);
+    // Only overwrite the property-address fallback when the deed actually recorded a
+    // usable owner address (some deeds leave it blank or just a 00000 zip).
+    if (addr || city) {
+      const zip = clean(g.zip);
+      c.address = addr;
+      c.city = city;
+      c.state = clean(g.state);
+      c.zip = zip === "00000" ? "" : zip;
+    }
+  }
+}
+
 async function saveLeads(leads) {
   if (!process.env.DATABASE_URL) return { saved: 0, dbConfigured: false };
   const { Client } = await import("pg");
@@ -433,6 +515,13 @@ export default async function handler(req, res) {
 
     deals = dedupeDeals(deals);
     contacts = dedupeContacts(contacts).map(normalizeContact);
+
+    // Replace PLUTO's property-address placeholder with the real owner mailing
+    // address (from the latest deed's buyer).
+    if (contacts.some((c) => c.source === "pluto")) {
+      await enrichOwnerMailing(deals, contacts, appToken);
+    }
+
     const leads = buildLeads(deals, contacts);
 
     let savedInfo = { saved: 0, dbConfigured: !!process.env.DATABASE_URL };

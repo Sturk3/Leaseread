@@ -373,7 +373,7 @@ async function saveLeads(leads) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles } = req.body || {};
+    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon } = req.body || {};
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
@@ -384,12 +384,20 @@ export default async function handler(req, res) {
     const wanted = Array.isArray(sources) && sources.length ? sources : ["acris", "dob"];
     const lim = Math.max(1, Math.min(Number(limit) || 100, 250));
 
-    // Radius search needs a geocoded center (PLUTO only — it's the source with coords).
+    // Radius search needs a center (PLUTO only — it's the source with coords). If the
+    // browser already picked an address from autocomplete it sends exact coords; else
+    // geocode the typed text.
     let center = null;
     if (nearAddress && radiusMiles) {
-      center = await geocodeNyc(nearAddress);
-      if (!center) {
-        return res.status(200).json({ error: `Couldn't find "${nearAddress}". Try a fuller NYC address, e.g. "350 5 Avenue, Manhattan".` });
+      const clat = Number(centerLat);
+      const clon = Number(centerLon);
+      if (Number.isFinite(clat) && Number.isFinite(clon)) {
+        center = { lat: clat, lon: clon, label: nearAddress };
+      } else {
+        center = await geocodeNyc(nearAddress);
+        if (!center) {
+          return res.status(200).json({ error: `Couldn't find "${nearAddress}". Try picking an address from the dropdown.` });
+        }
       }
     }
 

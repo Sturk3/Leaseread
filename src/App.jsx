@@ -300,6 +300,7 @@ export default function App() {
         .lift { transition: transform .15s ease, border-color .15s ease; }
         .lift:hover { transform: translateY(-1px); border-color: ${C.gold}; }
         input[type=range] { accent-color: ${C.gold}; }
+        .addr-opt:hover { background: ${C.goldSoft}; color: ${C.gold}; }
       `}</style>
 
       <div style={{ maxWidth: 1040, margin: "0 auto", padding: "28px 22px 80px" }}>
@@ -697,6 +698,53 @@ function mapUrl(r) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
 
+// Google-Maps-style address lookup using NYC GeoSearch autocomplete (free, no key,
+// CORS-open so the browser calls it directly). Pick a suggestion -> exact coords.
+function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
+  const [sugs, setSugs] = useState([]);
+  const [open, setOpen] = useState(false);
+  const timer = useRef(null);
+  const box = useRef(null);
+
+  useEffect(() => {
+    const onDoc = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  function handle(text) {
+    onChange(text);
+    if (timer.current) clearTimeout(timer.current);
+    if (!text || text.trim().length < 3) { setSugs([]); setOpen(false); return; }
+    timer.current = setTimeout(async () => {
+      try {
+        const r = await fetch(`https://geosearch.planninglabs.nyc/v2/autocomplete?text=${encodeURIComponent(text)}`);
+        const d = await r.json();
+        const items = (d.features || [])
+          .filter((f) => f.geometry && f.properties)
+          .map((f) => ({ label: f.properties.label, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }));
+        setSugs(items); setOpen(items.length > 0);
+      } catch { setSugs([]); setOpen(false); }
+    }, 220);
+  }
+
+  return (
+    <div ref={box} style={{ position: "relative" }}>
+      <input value={value} onChange={(e) => handle(e.target.value)} onFocus={() => sugs.length && setOpen(true)} placeholder={placeholder} autoComplete="off" style={style} />
+      {open && (
+        <div style={{ position: "absolute", zIndex: 30, top: "100%", left: 0, right: 0, marginTop: 4, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, boxShadow: "0 10px 28px rgba(20,16,48,0.18)", maxHeight: 240, overflow: "auto" }}>
+          {sugs.map((s, i) => (
+            <div key={i} className="addr-opt" onClick={() => { onPick(s.label, s.lat, s.lon); setOpen(false); setSugs([]); }}
+              style={{ padding: "9px 12px", fontSize: 13, cursor: "pointer", borderBottom: i < sugs.length - 1 ? `1px solid ${C.line}` : "none" }}>
+              {s.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const STATUS_COLOR = { new: C.gold, working: C.amber, contacted: C.green, dead: C.muted };
 const BOROUGHS = ["", "Manhattan", "Bronx", "Brooklyn", "Queens", "Staten Island"];
 const ASSET_OPTIONS = [
@@ -716,6 +764,7 @@ function Sourcing({ pw }) {
   const [assetType, setAssetType] = useState("any");
   const [street, setStreet] = useState("");
   const [nearAddress, setNearAddress] = useState("");
+  const [pickedCoords, setPickedCoords] = useState(null);
   const [radiusMiles, setRadiusMiles] = useState("");
   const [limit, setLimit] = useState(100);
 
@@ -732,7 +781,7 @@ function Sourcing({ pw }) {
     try {
       const res = await fetch("/api/source", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles, limit }),
+        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles, limit, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon } : {}) }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -783,8 +832,16 @@ function Sourcing({ pw }) {
                 <input value={street} onChange={(e) => setStreet(e.target.value)} placeholder="e.g. 5 AVENUE · BROADWAY · 9 STREET" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
               </label>
               <label style={{ gridColumn: "span 2" }}>
-                <div className="mono" style={labelStyle}>NEAR ADDRESS — radius (PLUTO)</div>
-                <input value={nearAddress} onChange={(e) => setNearAddress(e.target.value)} placeholder="e.g. 200 5 Avenue, Brooklyn" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
+                <div className="mono" style={labelStyle}>ADDRESS — type &amp; pick (radius · PLUTO)</div>
+                <div style={{ marginTop: 4 }}>
+                  <AddressAutocomplete
+                    value={nearAddress}
+                    onChange={(t) => { setNearAddress(t); setPickedCoords(null); }}
+                    onPick={(label, lat, lon) => { setNearAddress(label); setPickedCoords({ lat, lon }); if (!radiusMiles) setRadiusMiles("0.25"); }}
+                    placeholder="Start typing an address, e.g. 200 5th Ave…"
+                    style={{ ...fieldStyle, width: "100%" }}
+                  />
+                </div>
               </label>
               <label>
                 <div className="mono" style={labelStyle}>RADIUS</div>
@@ -808,7 +865,7 @@ function Sourcing({ pw }) {
             <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
               <strong style={{ color: C.ivory }}>Asset type</strong> uses PLUTO (turn it on above) — e.g. Retail finds store buildings + their owners.
               <strong style={{ color: C.ivory }}> Street</strong> filters every source by street name (NYC format: “9 STREET”, “5 AVENUE”).
-              <strong style={{ color: C.ivory }}> Near address + radius</strong> returns every PLUTO property within that distance, nearest first. Click an address for Google Maps, or “▸ history” for a property’s deeds &amp; mortgages.
+              <strong style={{ color: C.ivory }}> Address</strong> — start typing and pick from the dropdown; with a radius it returns every PLUTO property in that circle, nearest first. Click an address for Google Maps, or “▸ deed history” for a property’s deeds &amp; mortgages.
             </div>
 
             <button onClick={run} disabled={loading}

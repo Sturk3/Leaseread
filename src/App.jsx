@@ -677,6 +677,7 @@ const LEAD_COLS = [
   { key: "deal_date", label: "Date" }, { key: "doc_type", label: "Doc" }, { key: "source", label: "Source" },
   { key: "contact_address", label: "Contact address" }, { key: "city", label: "City" },
   { key: "state", label: "State" }, { key: "zip", label: "Zip" },
+  { key: "lat", label: "Lat" }, { key: "lon", label: "Lon" },
 ];
 
 function leadsToCSV(rows) {
@@ -688,6 +689,13 @@ function leadsToCSV(rows) {
 const fmtAmount = (a) => (a == null || a === "" ? "" : "$" + Number(a).toLocaleString());
 // The party's mailing address (mainly from ACRIS) — where to reach the lead.
 const mailing = (r) => [r.contact_address, [r.city, r.state].filter(Boolean).join(", "), r.zip].filter(Boolean).join(" · ");
+// Google Maps link for a result — precise pin when we have coordinates (PLUTO),
+// otherwise a text address search. No API key required.
+function mapUrl(r) {
+  if (r.lat != null && r.lon != null) return `https://www.google.com/maps/search/?api=1&query=${r.lat},${r.lon}`;
+  const q = [r.address, r.borough, "NY"].filter(Boolean).join(", ");
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+}
 
 const STATUS_COLOR = { new: C.gold, working: C.amber, contacted: C.green, dead: C.muted };
 const BOROUGHS = ["", "Manhattan", "Bronx", "Brooklyn", "Queens", "Staten Island"];
@@ -707,25 +715,29 @@ function Sourcing({ pw }) {
   const [since, setSince] = useState("");
   const [assetType, setAssetType] = useState("any");
   const [street, setStreet] = useState("");
+  const [nearAddress, setNearAddress] = useState("");
+  const [radiusMiles, setRadiusMiles] = useState("");
   const [limit, setLimit] = useState(100);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [leads, setLeads] = useState(null);
+  const [center, setCenter] = useState(null);
 
   async function run() {
-    setError(""); setLeads(null);
+    setError(""); setLeads(null); setCenter(null);
     const picked = Object.keys(sources).filter((s) => sources[s]);
     if (!picked.length) { setError("Pick at least one source (ACRIS, DOB, or PLUTO)."); return; }
     setLoading(true);
     try {
       const res = await fetch("/api/source", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, limit }),
+        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles, limit }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setLeads(data.leads || []);
+      setCenter(data.center || null);
     } catch (e) { setError(e.message || "Sourcing failed."); }
     finally { setLoading(false); }
   }
@@ -770,6 +782,16 @@ function Sourcing({ pw }) {
                 <div className="mono" style={labelStyle}>STREET</div>
                 <input value={street} onChange={(e) => setStreet(e.target.value)} placeholder="e.g. 5 AVENUE · BROADWAY · 9 STREET" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
               </label>
+              <label style={{ gridColumn: "span 2" }}>
+                <div className="mono" style={labelStyle}>NEAR ADDRESS — radius (PLUTO)</div>
+                <input value={nearAddress} onChange={(e) => setNearAddress(e.target.value)} placeholder="e.g. 200 5 Avenue, Brooklyn" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
+              </label>
+              <label>
+                <div className="mono" style={labelStyle}>RADIUS</div>
+                <select value={radiusMiles} onChange={(e) => setRadiusMiles(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
+                  {[["", "off"], ["0.1", "0.1 mi"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"], ["1", "1 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </label>
               <label>
                 <div className="mono" style={labelStyle}>DOC TYPE (ACRIS)</div>
                 <input value={docType} onChange={(e) => setDocType(e.target.value)} placeholder="e.g. DEED" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
@@ -785,7 +807,8 @@ function Sourcing({ pw }) {
             </div>
             <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
               <strong style={{ color: C.ivory }}>Asset type</strong> uses PLUTO (turn it on above) — e.g. Retail finds store buildings + their owners.
-              <strong style={{ color: C.ivory }}> Street</strong> filters every source by street name — use NYC’s format: numbered streets like “9 STREET”, avenues spelled out like “5 AVENUE”.
+              <strong style={{ color: C.ivory }}> Street</strong> filters every source by street name (NYC format: “9 STREET”, “5 AVENUE”).
+              <strong style={{ color: C.ivory }}> Near address + radius</strong> finds PLUTO properties within that distance, nearest first. Click any address to open it in Google Maps.
             </div>
 
             <button onClick={run} disabled={loading}
@@ -802,6 +825,11 @@ function Sourcing({ pw }) {
                 <button onClick={() => leads.length && downloadBlob(leadsToCSV(leads), csvName(), "text/csv")} className="lift mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>
               </div>
+              {center && (
+                <div style={{ margin: "-4px 0 12px", fontSize: 12.5, color: C.muted }}>
+                  Within <strong style={{ color: C.gold }}>{center.radiusMiles} mi</strong> of {center.label} — nearest first.
+                </div>
+              )}
               <LeadTable rows={leads} />
               {leads.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No records matched those filters. Try widening the date or borough.</div>}
             </>
@@ -836,7 +864,12 @@ function LeadTable({ rows, statusEditor }) {
               <td style={{ padding: "10px 14px", fontWeight: 600 }}>{r.name}</td>
               <td style={{ padding: "10px 14px", color: C.muted }}>{r.entity_type}</td>
               <td style={{ padding: "10px 14px", color: C.muted }}>{r.role}</td>
-              <td style={{ padding: "10px 14px" }}>{r.address || "—"}</td>
+              <td style={{ padding: "10px 14px" }}>
+                {r.address
+                  ? <a href={mapUrl(r)} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{r.address} ↗</a>
+                  : "—"}
+                {r.distance != null && <span className="mono" style={{ color: C.muted, fontSize: 11 }}> · {Number(r.distance).toFixed(2)} mi</span>}
+              </td>
               <td style={{ padding: "10px 14px", color: C.muted }}>{mailing(r) || "—"}</td>
               <td style={{ padding: "10px 14px", color: C.muted }}>{r.borough || "—"}</td>
               <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.doc_type || "—"}</td>

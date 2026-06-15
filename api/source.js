@@ -88,6 +88,30 @@ function streetClause(field, street) {
   const s = likeEsc(street);
   return `(upper(${field})='${s}' OR upper(${field}) like '% ${s}' OR upper(${field}) like '${s} %' OR upper(${field}) like '% ${s} %')`;
 }
+
+// Geocode an address with NYC Planning's GeoSearch (free, no API key).
+async function geocodeNyc(text) {
+  try {
+    const r = await fetch(`https://geosearch.planninglabs.nyc/v2/search?size=1&text=${encodeURIComponent(text)}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const f = d.features && d.features[0];
+    if (!f || !f.geometry) return null;
+    const [lon, lat] = f.geometry.coordinates;
+    return { lat, lon, label: (f.properties && f.properties.label) || text };
+  } catch {
+    return null;
+  }
+}
+
+function haversineMiles(lat1, lon1, lat2, lon2) {
+  const R = 3958.8;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
 function chunk(arr, size) {
   const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -219,8 +243,8 @@ async function sourceDob({ borough, since, street, limit, appToken }) {
   return { deals, contacts };
 }
 
-// PLUTO: find lots by asset type + street, with the owner as the lead.
-async function sourcePluto({ borough, assetType, street, limit, appToken }) {
+// PLUTO: find lots by asset type + street or radius, with the owner as the lead.
+async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, limit, appToken }) {
   const where = [];
   const code = PLUTO_BOROUGH[borough] || null;
   if (code) where.push(`borough='${code}'`);
@@ -228,19 +252,41 @@ async function sourcePluto({ borough, assetType, street, limit, appToken }) {
   if (prefixes) where.push("(" + prefixes.map((p) => `starts_with(bldgclass,'${p}')`).join(" OR ") + ")");
   if (street) where.push(streetClause("address", street));
 
+  const radius = radiusMiles ? Number(radiusMiles) : null;
+  const hasCenter = centerLat != null && centerLon != null && radius;
+  if (hasCenter) {
+    // Bounding box around the point (a square that contains the circle); the exact
+    // circle is enforced below with haversine distance.
+    const dlat = radius / 69;
+    const dlon = radius / ((69 * Math.cos((centerLat * Math.PI) / 180)) || 1);
+    where.push(`latitude between ${centerLat - dlat} and ${centerLat + dlat}`);
+    where.push(`longitude between ${centerLon - dlon} and ${centerLon + dlon}`);
+  }
+
+  const fetchLimit = hasCenter ? Math.min(Math.max(limit * 3, 100), 500) : limit;
   const rows = await fetchSocrata(PLUTO, {
-    where: where.join(" AND ") || undefined, order: "address", limit, appToken,
+    where: where.join(" AND ") || undefined,
+    order: hasCenter ? undefined : "address",
+    limit: fetchLimit, appToken,
   });
-  const deals = [];
+
+  let deals = [];
   const contacts = [];
   for (const row of rows) {
     const bbl = clean(row.bbl) || clean(`${row.borough}${row.block}${row.lot}`);
     if (!bbl) continue;
+    const lat = toNum(row.latitude);
+    const lon = toNum(row.longitude);
+    let distance = null;
+    if (hasCenter && lat != null && lon != null) {
+      distance = haversineMiles(centerLat, centerLon, lat, lon);
+      if (distance > radius) continue; // trim the bbox square down to the circle
+    }
     deals.push({
       source: "pluto", deal_id: bbl, doc_type: clean(row.bldgclass),
       borough: PLUTO_BOROUGH_NAME[clean(row.borough)] || clean(row.borough),
       address: clean(row.address), block: clean(row.block), lot: clean(row.lot),
-      amount: toNum(row.assesstot), date: "",
+      amount: toNum(row.assesstot), date: "", lat, lon, distance,
     });
     const owner = clean(row.ownername);
     if (owner) {
@@ -249,6 +295,13 @@ async function sourcePluto({ borough, assetType, street, limit, appToken }) {
         city: "", state: "", zip: "", source: "pluto", deal_id: bbl,
       });
     }
+  }
+
+  if (hasCenter) {
+    deals.sort((a, b) => (a.distance ?? 1e9) - (b.distance ?? 1e9));
+    deals = deals.slice(0, limit);
+    const keep = new Set(deals.map((d) => d.deal_id));
+    return { deals, contacts: contacts.filter((c) => keep.has(c.deal_id)) };
   }
   return { deals, contacts };
 }
@@ -282,6 +335,7 @@ function buildLeads(deals, contacts) {
       source: c.source, deal_id: c.deal_id, doc_type: d.doc_type || "", borough: d.borough || "",
       address: d.address || "", block: d.block || "", lot: d.lot || "",
       amount: d.amount ?? null, deal_date: d.date || "",
+      lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null,
       name: c.name, role: c.role, entity_type: c.entity_type || "unknown",
       first_name: c.first_name || "", last_name: c.last_name || "",
       contact_address: c.address || "", city: c.city || "", state: c.state || "", zip: c.zip || "",
@@ -317,7 +371,7 @@ async function saveLeads(leads) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, check, sources, borough, docType, since, limit, save, assetType, street } = req.body || {};
+    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles } = req.body || {};
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
@@ -327,9 +381,21 @@ export default async function handler(req, res) {
     const appToken = process.env.SOCRATA_APP_TOKEN;
     const wanted = Array.isArray(sources) && sources.length ? sources : ["acris", "dob"];
     const lim = Math.max(1, Math.min(Number(limit) || 100, 250));
+
+    // Radius search needs a geocoded center (PLUTO only — it's the source with coords).
+    let center = null;
+    if (nearAddress && radiusMiles) {
+      center = await geocodeNyc(nearAddress);
+      if (!center) {
+        return res.status(200).json({ error: `Couldn't find "${nearAddress}". Try a fuller NYC address, e.g. "350 5 Avenue, Manhattan".` });
+      }
+    }
+
     const filters = {
       borough: borough || undefined, docType: docType || undefined, since: since || undefined,
-      assetType: assetType || "any", street: (street || "").trim() || undefined, limit: lim, appToken,
+      assetType: assetType || "any", street: (street || "").trim() || undefined,
+      centerLat: center ? center.lat : undefined, centerLon: center ? center.lon : undefined,
+      radiusMiles: center ? Number(radiusMiles) : undefined, limit: lim, appToken,
     };
 
     let deals = [];
@@ -360,6 +426,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       counts: { deals: deals.length, contacts: contacts.length },
       deals, leads, saved: savedInfo.saved, dbConfigured: savedInfo.dbConfigured,
+      center: center ? { lat: center.lat, lon: center.lon, label: center.label, radiusMiles: Number(radiusMiles) } : null,
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "source" });

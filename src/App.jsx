@@ -681,6 +681,7 @@ const LEAD_COLS = [
   { key: "last_sale_date", label: "Last sale date" }, { key: "last_sale_price", label: "Last sale price" },
   { key: "years_owned", label: "Years owned" }, { key: "absentee", label: "Absentee" },
   { key: "tax_lien", label: "Tax lien" }, { key: "portfolio_count", label: "Owner #props in set" },
+  { key: "built_far", label: "Built FAR" }, { key: "max_far", label: "Max FAR" }, { key: "buildable_sqft", label: "Unused buildable sf" },
   { key: "lat", label: "Lat" }, { key: "lon", label: "Lon" },
 ];
 
@@ -814,6 +815,8 @@ function Sourcing({ pw }) {
   const [minUnits, setMinUnits] = useState("");
   const [builtAfter, setBuiltAfter] = useState("");
   const [builtBefore, setBuiltBefore] = useState("");
+  const [devOnly, setDevOnly] = useState(false);
+  const [minBuildable, setMinBuildable] = useState("");
   const [showMore, setShowMore] = useState(false);
 
   const [loading, setLoading] = useState(false);
@@ -829,7 +832,7 @@ function Sourcing({ pw }) {
     try {
       const res = await fetch("/api/source", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles, limit, minSqft, minUnits, builtAfter, builtBefore, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) }),
+        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles, limit, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -914,12 +917,19 @@ function Sourcing({ pw }) {
               {showMore ? "▾ fewer filters" : "▸ more filters — size · units · year (PLUTO)"}
             </button>
             {showMore && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginTop: 10 }}>
-                <label><div className="mono" style={labelStyle}>MIN BLDG SQFT</div><input type="number" value={minSqft} onChange={(e) => setMinSqft(e.target.value)} placeholder="e.g. 5000" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
-                <label><div className="mono" style={labelStyle}>MIN UNITS</div><input type="number" value={minUnits} onChange={(e) => setMinUnits(e.target.value)} placeholder="e.g. 10" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
-                <label><div className="mono" style={labelStyle}>BUILT AFTER</div><input type="number" value={builtAfter} onChange={(e) => setBuiltAfter(e.target.value)} placeholder="e.g. 1900" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
-                <label><div className="mono" style={labelStyle}>BUILT BEFORE</div><input type="number" value={builtBefore} onChange={(e) => setBuiltBefore(e.target.value)} placeholder="e.g. 1940" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
-              </div>
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginTop: 10 }}>
+                  <label><div className="mono" style={labelStyle}>MIN BLDG SQFT</div><input type="number" value={minSqft} onChange={(e) => setMinSqft(e.target.value)} placeholder="e.g. 5000" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+                  <label><div className="mono" style={labelStyle}>MIN UNITS</div><input type="number" value={minUnits} onChange={(e) => setMinUnits(e.target.value)} placeholder="e.g. 10" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+                  <label><div className="mono" style={labelStyle}>BUILT AFTER</div><input type="number" value={builtAfter} onChange={(e) => setBuiltAfter(e.target.value)} placeholder="e.g. 1900" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+                  <label><div className="mono" style={labelStyle}>BUILT BEFORE</div><input type="number" value={builtBefore} onChange={(e) => setBuiltBefore(e.target.value)} placeholder="e.g. 1940" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+                  <label><div className="mono" style={labelStyle}>MIN UNUSED BUILDABLE SF</div><input type="number" value={minBuildable} onChange={(e) => setMinBuildable(e.target.value)} placeholder="e.g. 5000" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 13, color: C.ivory, cursor: "pointer" }}>
+                  <input type="checkbox" checked={devOnly} onChange={(e) => setDevOnly(e.target.checked)} style={{ accentColor: C.gold }} />
+                  Development sites only — underbuilt lots with unused air rights (PLUTO zoning)
+                </label>
+              </>
             )}
 
             <button onClick={run} disabled={loading}
@@ -1012,9 +1022,10 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
       <tr style={{ borderBottom: last && !open ? "none" : `1px solid ${C.line}` }}>
         <td style={{ padding: "10px 14px", fontWeight: 600, minWidth: 200 }}>
           {r.name}
-          {(r.tax_lien || r.portfolio_count > 1) && (
+          {(r.tax_lien || r.portfolio_count > 1 || r.underbuilt) && (
             <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {r.tax_lien && <span className="mono" style={{ fontSize: 9.5, padding: "1px 6px", borderRadius: 5, background: "rgba(209,74,60,0.12)", color: C.red, whiteSpace: "nowrap" }}>⚑ TAX LIEN</span>}
+              {r.underbuilt && <span className="mono" style={{ fontSize: 9.5, padding: "1px 6px", borderRadius: 5, background: "rgba(31,157,99,0.12)", color: C.green, whiteSpace: "nowrap" }} title={`Built ${r.built_far} of max ${r.max_far} FAR`}>▲ +{Number(r.buildable_sqft).toLocaleString()} SF</span>}
               {r.portfolio_count > 1 && <span className="mono" style={{ fontSize: 9.5, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.gold, whiteSpace: "nowrap" }}>OWNS {r.portfolio_count}</span>}
             </div>
           )}

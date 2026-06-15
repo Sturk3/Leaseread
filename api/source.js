@@ -255,6 +255,16 @@ async function sourceDob({ borough, since, street, limit, appToken }) {
   return { deals, contacts };
 }
 
+// Development potential from PLUTO zoning: how much more can be built as-of-right.
+// Unused FAR (max allowable − built) × lot area = additional buildable sqft (air rights).
+function devFields(row) {
+  const lotarea = toNum(row.lotarea) || 0;
+  const builtFar = toNum(row.builtfar) || (lotarea ? (toNum(row.bldgarea) || 0) / lotarea : 0);
+  const maxFar = Math.max(toNum(row.residfar) || 0, toNum(row.commfar) || 0, toNum(row.facilfar) || 0);
+  const buildable = maxFar > builtFar && lotarea ? Math.round((maxFar - builtFar) * lotarea) : 0;
+  return { built_far: builtFar || null, max_far: maxFar || null, buildable_sqft: buildable, underbuilt: buildable >= 2500 };
+}
+
 // Fetch one exact PLUTO lot by BBL (the typed address), ignoring asset filters, so
 // it can be pinned as the first result. BBL = boro(1) + block(5) + lot(4).
 const DIGIT_BOROUGH = { 1: "MN", 2: "BX", 3: "BK", 4: "QN", 5: "SI" };
@@ -274,7 +284,7 @@ async function fetchAnchorPluto(bbl, appToken) {
     borough: PLUTO_BOROUGH_NAME[clean(row.borough)] || clean(row.borough),
     address: clean(row.address), block: clean(row.block), lot: clean(row.lot),
     amount: toNum(row.assesstot), date: "", lat: toNum(row.latitude), lon: toNum(row.longitude),
-    distance: 0, pinned: true,
+    distance: 0, pinned: true, ...devFields(row),
   };
   const owner = clean(row.ownername);
   const contact = owner ? { name: owner, role: "owner", address: clean(row.address), city: "", state: "", zip: "", source: "pluto", deal_id: id } : null;
@@ -330,7 +340,7 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
       source: "pluto", deal_id: bbl, doc_type: clean(row.bldgclass),
       borough: PLUTO_BOROUGH_NAME[clean(row.borough)] || clean(row.borough),
       address: clean(row.address), block: clean(row.block), lot: clean(row.lot),
-      amount: toNum(row.assesstot), date: "", lat, lon, distance,
+      amount: toNum(row.assesstot), date: "", lat, lon, distance, ...devFields(row),
     });
     const owner = clean(row.ownername);
     if (owner) {
@@ -397,6 +407,8 @@ function buildLeads(deals, contacts) {
       last_sale_date: d.last_sale_date || "", last_sale_price: d.last_sale_price ?? null,
       years_owned: d.last_sale_date ? Math.max(0, new Date().getFullYear() - Number(String(d.last_sale_date).slice(0, 4))) : null,
       tax_lien: d.tax_lien || false,
+      built_far: d.built_far ?? null, max_far: d.max_far ?? null,
+      buildable_sqft: d.buildable_sqft ?? null, underbuilt: d.underbuilt || false,
       lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null, pinned: d.pinned || false,
       name: c.name, role: c.role, entity_type: c.entity_type || "unknown",
       first_name: c.first_name || "", last_name: c.last_name || "",
@@ -538,7 +550,7 @@ async function saveLeads(leads) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, minUnits, builtAfter, builtBefore } = req.body || {};
+    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable } = req.body || {};
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
@@ -609,11 +621,16 @@ export default async function handler(req, res) {
       await enrichOwnerMailing(deals, contacts, appToken);
     }
 
-    const leads = buildLeads(deals, contacts);
+    let leads = buildLeads(deals, contacts);
     // Display order for area searches: typed address first, then nearest outward.
     if (center) {
       leads.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (a.distance ?? 1e9) - (b.distance ?? 1e9));
     }
+
+    // Development-potential filters (keep the pinned typed address regardless).
+    if (devOnly) leads = leads.filter((l) => l.underbuilt || l.pinned);
+    const minB = Number(minBuildable);
+    if (Number.isFinite(minB) && minB > 0) leads = leads.filter((l) => (l.buildable_sqft || 0) >= minB || l.pinned);
 
     // Portfolio: how many properties in this result set share the same owner.
     const ownerCount = {};

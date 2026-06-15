@@ -686,6 +686,8 @@ function leadsToCSV(rows) {
   return head + "\n" + body;
 }
 const fmtAmount = (a) => (a == null || a === "" ? "" : "$" + Number(a).toLocaleString());
+// The party's mailing address (mainly from ACRIS) — where to reach the lead.
+const mailing = (r) => [r.contact_address, [r.city, r.state].filter(Boolean).join(", "), r.zip].filter(Boolean).join(" · ");
 
 const STATUS_COLOR = { new: C.gold, working: C.amber, contacted: C.green, dead: C.muted };
 const BOROUGHS = ["", "Manhattan", "Bronx", "Brooklyn", "Queens", "Staten Island"];
@@ -818,7 +820,7 @@ function Sourcing({ pw }) {
 
 function LeadTable({ rows, statusEditor }) {
   if (!rows.length) return null;
-  const cols = ["Name", "Type", "Role", "Property", "Borough", "Class", "Amount", "Date", "Source"];
+  const cols = ["Name", "Type", "Role", "Property", "Mailing address", "Borough", "Class", "Amount", "Date", "Source"];
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -835,6 +837,7 @@ function LeadTable({ rows, statusEditor }) {
               <td style={{ padding: "10px 14px", color: C.muted }}>{r.entity_type}</td>
               <td style={{ padding: "10px 14px", color: C.muted }}>{r.role}</td>
               <td style={{ padding: "10px 14px" }}>{r.address || "—"}</td>
+              <td style={{ padding: "10px 14px", color: C.muted }}>{mailing(r) || "—"}</td>
               <td style={{ padding: "10px 14px", color: C.muted }}>{r.borough || "—"}</td>
               <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.doc_type || "—"}</td>
               <td className="mono" style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>{fmtAmount(r.amount) || "—"}</td>

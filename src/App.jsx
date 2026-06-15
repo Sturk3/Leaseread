@@ -698,26 +698,35 @@ function mapUrl(r) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
 
-// Free one-click contact-lookup links per owner (no API/key). Companies -> NY
-// business registry (OpenCorporates) + Google; individuals -> TruePeopleSearch + Google.
+// Free one-click contact-lookup links per owner (no API/key) — targeted tools, not
+// generic search. People -> Whitepages + TruePeopleSearch (phone). Companies ->
+// OpenCorporates (find the principals) + LinkedIn + RocketReach (business email/phone).
 const ACTION_PILL = { display: "inline-block", cursor: "pointer", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6, padding: "3px 8px", color: C.gold, fontSize: 11, textDecoration: "none", whiteSpace: "nowrap" };
 
 function isCompanyRow(r) {
   return r.entity_type === "company" || /\b(LLC|INC|CORP|CO|COMPANY|LP|LLP|TRUST|ASSOCIATES|REALTY|PARTNERS|HOLDINGS|GROUP|MANAGEMENT|PROPERTIES|HDFC|FUND|BANK)\b/i.test(r.name || "");
 }
 function lookupLinks(r) {
-  const loc = r.borough || "New York";
+  const enc = encodeURIComponent;
+  const slug = (s) => String(s || "").trim().replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   if (isCompanyRow(r)) {
+    const co = r.name || "";
     return [
-      { label: "🔎 NY biz", href: `https://opencorporates.com/companies?q=${encodeURIComponent(r.name || "")}&jurisdiction_code=us_ny` },
-      { label: "🔎 Google", href: `https://www.google.com/search?q=${encodeURIComponent(`${r.name || ""} ${loc} owner contact`)}` },
+      { label: "🏢 NY registry", href: `https://opencorporates.com/companies?q=${enc(co)}&jurisdiction_code=us_ny` },
+      { label: "👤 LinkedIn", href: `https://www.linkedin.com/search/results/all/?keywords=${enc(co)}` },
+      { label: "✉️ RocketReach", href: `https://rocketreach.co/search?q=${enc(co)}` },
     ];
   }
-  const name = (r.first_name && r.last_name) ? `${r.first_name} ${r.last_name}` : (r.name || "");
+  const first = r.first_name || "";
+  const last = r.last_name || "";
+  const name = (first && last) ? `${first} ${last}` : (r.name || "");
   const cityState = [r.city, r.state].filter(Boolean).join(", ");
+  const wpName = [slug(first), slug(last)].filter(Boolean).join("-") || slug(name);
+  const wpLoc = (r.city && r.state) ? `${slug(r.city)}-${r.state}` : "";
+  const wp = wpName ? `https://www.whitepages.com/name/${wpName}${wpLoc ? `/${wpLoc}` : ""}` : "https://www.whitepages.com/";
   return [
-    { label: "🔎 People", href: `https://www.truepeoplesearch.com/results?name=${encodeURIComponent(name)}${cityState ? `&citystatezip=${encodeURIComponent(cityState)}` : ""}` },
-    { label: "🔎 Google", href: `https://www.google.com/search?q=${encodeURIComponent(`${name} ${loc}`)}` },
+    { label: "📞 Whitepages", href: wp },
+    { label: "📞 TruePeopleSearch", href: `https://www.truepeoplesearch.com/results?name=${enc(name)}${cityState ? `&citystatezip=${enc(cityState)}` : ""}` },
   ];
 }
 

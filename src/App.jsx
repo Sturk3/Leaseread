@@ -828,16 +828,12 @@ function Sourcing({ pw }) {
                 </select>
               </label>
               <label style={{ gridColumn: "span 2" }}>
-                <div className="mono" style={labelStyle}>STREET</div>
-                <input value={street} onChange={(e) => setStreet(e.target.value)} placeholder="e.g. 5 AVENUE · BROADWAY · 9 STREET" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
-              </label>
-              <label style={{ gridColumn: "span 2" }}>
                 <div className="mono" style={labelStyle}>ADDRESS — type &amp; pick (radius · PLUTO)</div>
                 <div style={{ marginTop: 4 }}>
                   <AddressAutocomplete
                     value={nearAddress}
                     onChange={(t) => { setNearAddress(t); setPickedCoords(null); }}
-                    onPick={(label, lat, lon) => { setNearAddress(label); setPickedCoords({ lat, lon }); if (!radiusMiles) setRadiusMiles("0.25"); }}
+                    onPick={(label, lat, lon) => { setNearAddress(label); setPickedCoords({ lat, lon }); if (!radiusMiles) setRadiusMiles("0.1"); }}
                     placeholder="Start typing an address, e.g. 200 5th Ave…"
                     style={{ ...fieldStyle, width: "100%" }}
                   />
@@ -846,7 +842,7 @@ function Sourcing({ pw }) {
               <label>
                 <div className="mono" style={labelStyle}>RADIUS</div>
                 <select value={radiusMiles} onChange={(e) => setRadiusMiles(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
-                  {[["", "off"], ["0.1", "0.1 mi"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"], ["1", "1 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  {[["", "off"], ["0.05", "0.05 mi · ~1 block"], ["0.1", "0.1 mi · ~2 blocks"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"], ["1", "1 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </label>
               <label>
@@ -863,9 +859,7 @@ function Sourcing({ pw }) {
               </label>
             </div>
             <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
-              <strong style={{ color: C.ivory }}>Asset type</strong> uses PLUTO (turn it on above) — e.g. Retail finds store buildings + their owners.
-              <strong style={{ color: C.ivory }}> Street</strong> filters every source by street name (NYC format: “9 STREET”, “5 AVENUE”).
-              <strong style={{ color: C.ivory }}> Address</strong> — start typing and pick from the dropdown; with a radius it returns every PLUTO property in that circle, nearest first. Click an address for Google Maps, or “▸ deed history” for a property’s deeds &amp; mortgages.
+              <strong style={{ color: C.ivory }}>Address</strong> — type and pick from the dropdown to search a tight area. A radius search returns the PLUTO properties in that circle (it ignores ACRIS/DOB, which can’t do radius). <strong style={{ color: C.ivory }}>Too many results? Use a smaller radius.</strong> Click an address for Google Maps, or “▸ deed history” for a property’s deeds &amp; mortgages.
             </div>
 
             <button onClick={run} disabled={loading}

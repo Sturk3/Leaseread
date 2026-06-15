@@ -408,19 +408,24 @@ export default async function handler(req, res) {
       radiusMiles: center ? Number(radiusMiles) : undefined, limit: lim, appToken,
     };
 
+    // A radius search is inherently about an area — only PLUTO has coordinates, so
+    // ACRIS/DOB can't honor it. When a center is set, query PLUTO alone so the
+    // result is just the properties in the circle (not the deed/filing feeds too).
+    const effectiveWanted = center ? ["pluto"] : wanted;
+
     let deals = [];
     let contacts = [];
-    if (wanted.includes("acris")) {
+    if (effectiveWanted.includes("acris")) {
       const a = await sourceAcris(filters);
       deals = deals.concat(a.deals);
       contacts = contacts.concat(a.contacts);
     }
-    if (wanted.includes("dob")) {
+    if (effectiveWanted.includes("dob")) {
       const d = await sourceDob(filters);
       deals = deals.concat(d.deals);
       contacts = contacts.concat(d.contacts);
     }
-    if (wanted.includes("pluto")) {
+    if (effectiveWanted.includes("pluto")) {
       const p = await sourcePluto(filters);
       deals = deals.concat(p.deals);
       contacts = contacts.concat(p.contacts);

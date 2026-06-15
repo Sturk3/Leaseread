@@ -263,7 +263,9 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
     where.push(`longitude between ${centerLon - dlon} and ${centerLon + dlon}`);
   }
 
-  const fetchLimit = hasCenter ? Math.min(Math.max(limit * 3, 100), 500) : limit;
+  // In radius mode pull the whole area (then trim to the exact circle below) so the
+  // result is every matching property, not an arbitrary capped slice.
+  const fetchLimit = hasCenter ? 5000 : limit;
   const rows = await fetchSocrata(PLUTO, {
     where: where.join(" AND ") || undefined,
     order: hasCenter ? undefined : "address",
@@ -298,8 +300,8 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
   }
 
   if (hasCenter) {
+    // Return EVERY property inside the circle, nearest first — no trim to `limit`.
     deals.sort((a, b) => (a.distance ?? 1e9) - (b.distance ?? 1e9));
-    deals = deals.slice(0, limit);
     const keep = new Set(deals.map((d) => d.deal_id));
     return { deals, contacts: contacts.filter((c) => keep.has(c.deal_id)) };
   }

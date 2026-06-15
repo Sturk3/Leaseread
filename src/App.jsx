@@ -808,7 +808,7 @@ function Sourcing({ pw }) {
             <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
               <strong style={{ color: C.ivory }}>Asset type</strong> uses PLUTO (turn it on above) — e.g. Retail finds store buildings + their owners.
               <strong style={{ color: C.ivory }}> Street</strong> filters every source by street name (NYC format: “9 STREET”, “5 AVENUE”).
-              <strong style={{ color: C.ivory }}> Near address + radius</strong> finds PLUTO properties within that distance, nearest first. Click any address to open it in Google Maps.
+              <strong style={{ color: C.ivory }}> Near address + radius</strong> returns every PLUTO property within that distance, nearest first. Click an address for Google Maps, or “▸ history” for a property’s deeds &amp; mortgages.
             </div>
 
             <button onClick={run} disabled={loading}
@@ -830,7 +830,7 @@ function Sourcing({ pw }) {
                   Within <strong style={{ color: C.gold }}>{center.radiusMiles} mi</strong> of {center.label} — nearest first.
                 </div>
               )}
-              <LeadTable rows={leads} />
+              <LeadTable rows={leads} pw={pw} />
               {leads.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No records matched those filters. Try widening the date or borough.</div>}
             </>
           )}
@@ -846,9 +846,10 @@ function Sourcing({ pw }) {
   );
 }
 
-function LeadTable({ rows, statusEditor }) {
+function LeadTable({ rows, statusEditor, pw }) {
   if (!rows.length) return null;
   const cols = ["Name", "Type", "Role", "Property", "Mailing address", "Borough", "Class", "Amount", "Date", "Source"];
+  const colSpan = cols.length + (statusEditor ? 1 : 0);
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -860,27 +861,95 @@ function LeadTable({ rows, statusEditor }) {
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={r.id ?? i} style={{ borderBottom: i < rows.length - 1 ? `1px solid ${C.line}` : "none" }}>
-              <td style={{ padding: "10px 14px", fontWeight: 600 }}>{r.name}</td>
-              <td style={{ padding: "10px 14px", color: C.muted }}>{r.entity_type}</td>
-              <td style={{ padding: "10px 14px", color: C.muted }}>{r.role}</td>
-              <td style={{ padding: "10px 14px" }}>
-                {r.address
-                  ? <a href={mapUrl(r)} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{r.address} ↗</a>
-                  : "—"}
-                {r.distance != null && <span className="mono" style={{ color: C.muted, fontSize: 11 }}> · {Number(r.distance).toFixed(2)} mi</span>}
-              </td>
-              <td style={{ padding: "10px 14px", color: C.muted }}>{mailing(r) || "—"}</td>
-              <td style={{ padding: "10px 14px", color: C.muted }}>{r.borough || "—"}</td>
-              <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.doc_type || "—"}</td>
-              <td className="mono" style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>{fmtAmount(r.amount) || "—"}</td>
-              <td className="mono" style={{ padding: "10px 14px", color: C.muted, whiteSpace: "nowrap" }}>{(r.deal_date || "").slice(0, 10) || "—"}</td>
-              <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.source}</td>
-              {statusEditor && <td style={{ padding: "10px 14px" }}>{statusEditor(r)}</td>}
-            </tr>
+            <LeadRow key={r.id ?? `${r.source}-${r.deal_id}-${i}`} r={r} last={i === rows.length - 1} statusEditor={statusEditor} pw={pw} colSpan={colSpan} />
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function LeadRow({ r, last, statusEditor, pw, colSpan }) {
+  const [open, setOpen] = useState(false);
+  const [hist, setHist] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  // History needs a tax lot — PLUTO rows have block/lot; ACRIS/DOB don't.
+  const canHist = r.source === "pluto" && r.block && r.lot;
+
+  async function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && hist == null && canHist) {
+      setLoading(true); setErr("");
+      try {
+        const res = await fetch("/api/history", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pw, borough: r.borough, block: r.block, lot: r.lot }),
+        });
+        const d = await res.json();
+        if (d.error) throw new Error(d.error);
+        setHist(d.history || []);
+      } catch (e) { setErr(e.message || "Could not load history."); setHist([]); }
+      finally { setLoading(false); }
+    }
+  }
+
+  return (
+    <>
+      <tr style={{ borderBottom: last && !open ? "none" : `1px solid ${C.line}` }}>
+        <td style={{ padding: "10px 14px", fontWeight: 600 }}>
+          {r.name}
+          {canHist && (
+            <button onClick={toggle} className="mono" style={{ display: "block", marginTop: 3, cursor: "pointer", background: "none", border: "none", padding: 0, color: C.gold, fontSize: 11 }}>
+              {open ? "▾ hide history" : "▸ history"}
+            </button>
+          )}
+        </td>
+        <td style={{ padding: "10px 14px", color: C.muted }}>{r.entity_type}</td>
+        <td style={{ padding: "10px 14px", color: C.muted }}>{r.role}</td>
+        <td style={{ padding: "10px 14px" }}>
+          {r.address
+            ? <a href={mapUrl(r)} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{r.address} ↗</a>
+            : "—"}
+          {r.distance != null && <span className="mono" style={{ color: C.muted, fontSize: 11 }}> · {Number(r.distance).toFixed(2)} mi</span>}
+        </td>
+        <td style={{ padding: "10px 14px", color: C.muted }}>{mailing(r) || "—"}</td>
+        <td style={{ padding: "10px 14px", color: C.muted }}>{r.borough || "—"}</td>
+        <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.doc_type || "—"}</td>
+        <td className="mono" style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>{fmtAmount(r.amount) || "—"}</td>
+        <td className="mono" style={{ padding: "10px 14px", color: C.muted, whiteSpace: "nowrap" }}>{(r.deal_date || "").slice(0, 10) || "—"}</td>
+        <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.source}</td>
+        {statusEditor && <td style={{ padding: "10px 14px" }}>{statusEditor(r)}</td>}
+      </tr>
+      {open && (
+        <tr style={{ borderBottom: last ? "none" : `1px solid ${C.line}` }}>
+          <td colSpan={colSpan} style={{ background: C.ink, padding: "4px 16px 14px" }}>
+            {loading ? <div style={{ color: C.muted, fontSize: 12, padding: "10px 0" }}>Loading history…</div>
+              : err ? <div style={{ color: C.red, fontSize: 12, padding: "10px 0" }}>{err}</div>
+              : hist && hist.length === 0 ? <div style={{ color: C.muted, fontSize: 12, padding: "10px 0" }}>No recorded ACRIS documents for this lot.</div>
+              : <HistoryList hist={hist || []} />}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function HistoryList({ hist }) {
+  return (
+    <div style={{ padding: "6px 0" }}>
+      <div className="mono" style={{ fontSize: 10.5, color: C.muted, letterSpacing: "0.05em", padding: "4px 0" }}>
+        TRANSACTION HISTORY — {hist.length} document{hist.length === 1 ? "" : "s"} (ACRIS)
+      </div>
+      {hist.map((h, i) => (
+        <div key={i} style={{ display: "flex", gap: 12, padding: "6px 0", borderTop: `1px solid ${C.line}`, fontSize: 12.5, alignItems: "baseline", flexWrap: "wrap" }}>
+          <span className="mono" style={{ color: C.muted, width: 84 }}>{h.date || "—"}</span>
+          <span style={{ width: 150, color: h.doc_type === "DEED" ? C.green : C.ivory }}>{h.doc_label}</span>
+          <span className="mono" style={{ width: 110, color: C.muted, whiteSpace: "nowrap" }}>{h.amount ? "$" + Number(h.amount).toLocaleString() : "—"}</span>
+          <span style={{ color: C.muted, flex: "1 1 220px" }}>{h.parties.map((p) => p.name).join(" · ") || "—"}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -974,7 +1043,7 @@ function SharedLeads({ pw }) {
       {error && <div style={{ marginBottom: 12, color: C.red, fontSize: 13 }}>{error}</div>}
       {loading && <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>}
       {rows && !loading && rows.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No saved leads yet. Source some on the “Source live” tab and check “Save to the shared list”.</div>}
-      {rows && rows.length > 0 && <LeadTable rows={rows} statusEditor={statusEditor} />}
+      {rows && rows.length > 0 && <LeadTable rows={rows} statusEditor={statusEditor} pw={pw} />}
     </div>
   );
 }

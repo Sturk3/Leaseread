@@ -789,7 +789,7 @@ const fieldStyle = { background: C.ink, color: C.ivory, border: `1px solid ${C.l
 const labelStyle = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
 
 function Sourcing({ pw }) {
-  const [sources, setSources] = useState({ acris: true, dob: true, pluto: false });
+  const [sources, setSources] = useState({ acris: true, dob: true, pluto: true });
   const [borough, setBorough] = useState("");
   const [docType, setDocType] = useState("");
   const [since, setSince] = useState("");

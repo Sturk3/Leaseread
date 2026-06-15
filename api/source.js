@@ -79,6 +79,17 @@ function normalizeContact(c) {
   return c;
 }
 
+// NYC 3-digit ZIP prefixes (Manhattan/Bronx/SI/Brooklyn/Queens). Owner mailing ZIPs
+// outside this set flag an out-of-area / absentee owner — a strong sourcing signal.
+const NYC_ZIP3 = new Set(["100", "101", "102", "103", "104", "110", "111", "112", "113", "114", "116"]);
+function absenteeFlag(state, zip) {
+  const st = clean(state).toUpperCase();
+  if (st && st !== "NY") return "out-of-state";
+  const z3 = clean(zip).replace(/\D/g, "").slice(0, 3);
+  if (z3 && !NYC_ZIP3.has(z3)) return "out-of-area";
+  return "";
+}
+
 const sodaQuote = (vals) => vals.map((v) => "'" + String(v).replace(/'/g, "''") + "'").join(", ");
 // Escape user text for a SoQL upper(...) like '%...%' clause.
 const likeEsc = (s) => String(s).toUpperCase().replace(/'/g, "''");
@@ -378,10 +389,13 @@ function buildLeads(deals, contacts) {
       source: c.source, deal_id: c.deal_id, doc_type: d.doc_type || "", borough: d.borough || "",
       address: d.address || "", block: d.block || "", lot: d.lot || "",
       amount: d.amount ?? null, deal_date: d.date || "",
+      last_sale_date: d.last_sale_date || "", last_sale_price: d.last_sale_price ?? null,
+      years_owned: d.last_sale_date ? Math.max(0, new Date().getFullYear() - Number(String(d.last_sale_date).slice(0, 4))) : null,
       lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null, pinned: d.pinned || false,
       name: c.name, role: c.role, entity_type: c.entity_type || "unknown",
       first_name: c.first_name || "", last_name: c.last_name || "",
       contact_address: c.address || "", city: c.city || "", state: c.state || "", zip: c.zip || "",
+      absentee: absenteeFlag(c.state, c.zip),
     };
   });
 }
@@ -422,11 +436,12 @@ async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
 
   // 2. which of those docs are DEEDs, and when (parallel waves to keep it quick)
   const deedDate = {};
+  const deedAmt = {};
   const docBatches = chunk([...new Set(Object.keys(docToKey))], 75);
   for (const wave of chunk(docBatches, 6)) {
     const res = await Promise.all(wave.map((b) =>
-      fetchSocrata(ACRIS_MASTER, { where: `document_id in (${sodaQuote(b)}) AND doc_type='DEED'`, select: "document_id,document_date,recorded_datetime", limit: 2000, appToken }).catch(() => [])));
-    for (const rows of res) for (const r of rows) deedDate[clean(r.document_id)] = clean(r.document_date || r.recorded_datetime);
+      fetchSocrata(ACRIS_MASTER, { where: `document_id in (${sodaQuote(b)}) AND doc_type='DEED'`, select: "document_id,document_date,recorded_datetime,document_amt", limit: 2000, appToken }).catch(() => [])));
+    for (const rows of res) for (const r of rows) { const id = clean(r.document_id); deedDate[id] = clean(r.document_date || r.recorded_datetime); deedAmt[id] = toNum(r.document_amt); }
   }
 
   // 3. latest deed per lot
@@ -446,9 +461,16 @@ async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
     for (const rows of res) for (const r of rows) { const id = clean(r.document_id); if (!granteeByDoc[id]) granteeByDoc[id] = r; }
   }
 
-  // 5. apply to the PLUTO owner contacts
+  // 5. apply: last sale onto each PLUTO deal, mailing onto its owner contact
   const dealKey = {};
-  for (const d of targets) { const code = codeOf(d.borough); if (code) dealKey[d.deal_id] = keyOf(code, d.block, d.lot); }
+  for (const d of targets) {
+    const code = codeOf(d.borough);
+    if (!code) continue;
+    const key = keyOf(code, d.block, d.lot);
+    dealKey[d.deal_id] = key;
+    const v = latestByKey[key];
+    if (v) { d.last_sale_date = v.date || ""; d.last_sale_price = deedAmt[v.id] ?? null; }
+  }
   for (const c of contacts) {
     if (c.source !== "pluto") continue;
     const v = latestByKey[dealKey[c.deal_id]];

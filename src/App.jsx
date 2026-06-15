@@ -678,6 +678,8 @@ const LEAD_COLS = [
   { key: "deal_date", label: "Date" }, { key: "doc_type", label: "Doc" }, { key: "source", label: "Source" },
   { key: "contact_address", label: "Contact address" }, { key: "city", label: "City" },
   { key: "state", label: "State" }, { key: "zip", label: "Zip" },
+  { key: "last_sale_date", label: "Last sale date" }, { key: "last_sale_price", label: "Last sale price" },
+  { key: "years_owned", label: "Years owned" }, { key: "absentee", label: "Absentee" },
   { key: "lat", label: "Lat" }, { key: "lon", label: "Lon" },
 ];
 
@@ -688,6 +690,14 @@ function leadsToCSV(rows) {
   return head + "\n" + body;
 }
 const fmtAmount = (a) => (a == null || a === "" ? "" : "$" + Number(a).toLocaleString());
+const fmtMoneyShort = (n) => {
+  if (n == null || n === "") return "";
+  n = Number(n);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n >= 1e6) return "$" + (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+  if (n >= 1e3) return "$" + Math.round(n / 1e3) + "K";
+  return "$" + n;
+};
 // The party's mailing address (mainly from ACRIS) — where to reach the lead.
 const mailing = (r) => [r.contact_address, [r.city, r.state].filter(Boolean).join(", "), r.zip].filter(Boolean).join(" · ");
 // Google Maps link for a result — precise pin when we have coordinates (PLUTO),
@@ -931,7 +941,7 @@ function Sourcing({ pw }) {
 
 function LeadTable({ rows, statusEditor, pw }) {
   if (!rows.length) return null;
-  const cols = ["Name", "Type", "Role", "Property", "Mailing address", "Borough", "Class", "Amount", "Date", "Source"];
+  const cols = ["Name", "Type", "Role", "Property", "Mailing address", "Borough", "Class", "Last sale", "Amount", "Date", "Source"];
   const colSpan = cols.length + (statusEditor ? 1 : 0);
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "auto" }}>
@@ -1003,9 +1013,16 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
             : "—"}
           {r.distance != null && <span className="mono" style={{ color: C.muted, fontSize: 11 }}> · {Number(r.distance).toFixed(2)} mi</span>}
         </td>
-        <td style={{ padding: "10px 14px", color: C.muted }}>{mailing(r) || "—"}</td>
+        <td style={{ padding: "10px 14px", color: C.muted }}>
+          {mailing(r) || "—"}
+          {r.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9.5, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber, whiteSpace: "nowrap" }}>{r.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}
+        </td>
         <td style={{ padding: "10px 14px", color: C.muted }}>{r.borough || "—"}</td>
         <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.doc_type || "—"}</td>
+        <td className="mono" style={{ padding: "10px 14px", color: C.muted, whiteSpace: "nowrap" }}>
+          {r.last_sale_date ? `${String(r.last_sale_date).slice(0, 4)}${r.last_sale_price ? " · " + fmtMoneyShort(r.last_sale_price) : ""}` : "—"}
+          {r.years_owned != null && <span style={{ color: r.years_owned >= 15 ? C.green : C.muted }}> · {r.years_owned}y</span>}
+        </td>
         <td className="mono" style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>{fmtAmount(r.amount) || "—"}</td>
         <td className="mono" style={{ padding: "10px 14px", color: C.muted, whiteSpace: "nowrap" }}>{(r.deal_date || "").slice(0, 10) || "—"}</td>
         <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.source}</td>

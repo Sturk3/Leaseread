@@ -1,64 +1,56 @@
-# FRONTAGE Sourcing — going live for the team
+# FRONTAGE Sourcing
 
 The **Sourcing** tab (next to Screener) sources NYC real-estate deals and the
-people/companies attached to them (ACRIS deeds + DOB filings), shows them in a
-table, exports CSV, and — once a database is connected — saves them to a shared,
-deduped list the whole team can work and track.
+people/companies attached to them, and exports a **clean CSV**. It runs in the
+existing FRONTAGE Vercel app, behind the same password. No database, no saving —
+each run produces a CSV you download.
 
-Everything runs in the existing FRONTAGE Vercel app, behind the same password.
+## Sources
 
-## What works with no extra setup
+| Source | What it finds | Lead it gives you |
+| --- | --- | --- |
+| **ACRIS** | Recently recorded deeds/mortgages | The parties — sellers (grantors) and buyers (grantees) |
+| **DOB** | Building job filings | The property owner on each filing |
+| **PLUTO** | Tax lots by **asset type** (retail, office, multifamily, …) | The owner of each matching property |
 
-After deploying this code, the **Source live** tab and **CSV export** work
-immediately — no database needed. The serverless function `api/source.js` calls
-NYC Open Data directly.
+## Filters
 
-## Turning on the shared list (one-time, ~10 min)
+- **Sources** — toggle ACRIS / DOB / PLUTO.
+- **Borough** — Manhattan / Bronx / Brooklyn / Queens / Staten Island.
+- **Asset type** — Retail, Office, Multifamily, Mixed-use, Industrial, Hotel,
+  Development site, 1–2 family, Condo. Applies to **PLUTO** (the only dataset
+  with building class). Turn PLUTO on to use it.
+- **Block from / to** — a tax-block region within the borough. Drives PLUTO
+  server-side and refines ACRIS/DOB results.
+- **Doc type** (ACRIS only, e.g. `DEED`), **Since** date, **Max per source**.
 
-The **Shared list** tab and the "Save to the shared list" checkbox need Postgres.
+## Output
 
-1. **Create a database.** In the Vercel dashboard for this project:
-   **Storage → Create Database → Neon (Postgres)** (free tier is fine).
-   Vercel will add a `DATABASE_URL` env var to the project automatically.
-   (Supabase or any Postgres also works — just set `DATABASE_URL` yourself.)
+Hit **Source deals & contacts**, review the table, and **Export CSV**. The file
+is named for your filters, e.g. `frontage_leads_brooklyn_retail_2026-06-15.csv`,
+with columns: name, type (person/company), role, property address, borough,
+building class, amount, date, source, and contact address.
 
-2. **Create the table.** Open the database's SQL editor (Neon console, or
-   `psql "$DATABASE_URL"`) and run the contents of [`db/schema.sql`](db/schema.sql).
+## Nothing to set up
 
-3. **Confirm env vars** (Vercel → Settings → Environment Variables):
-   | Var | Needed for | Notes |
-   | --- | --- | --- |
-   | `SITE_PASSWORD` | the password gate | you already have this |
-   | `ANTHROPIC_API_KEY` | the Screener | you already have this |
-   | `DATABASE_URL` | the shared list | added by Neon in step 1 |
-   | `SOCRATA_APP_TOKEN` | higher rate limits | optional — [get one free](https://data.cityofnewyork.us/profile/edit/developer_settings) |
+Live sourcing + CSV export work on the free tier with no database and no extra
+config. Just deploy and use it.
 
-4. **Redeploy** (push to the branch Vercel tracks, or hit Redeploy). Done — the
-   Shared list tab now loads, and "Save to the shared list" persists leads.
+## Cost
 
-## Deploy
+$0. NYC Open Data is free, the sourcing tab makes no Claude calls, and Vercel's
+free tier covers it. (Vercel's free tier is technically non-commercial — revisit
+Pro only once it's a real team workflow.)
 
-```bash
-npm install        # picks up the new `pg` dependency
-git add -A && git commit -m "Add NYC sourcing tab + shared leads store"
-git push           # Vercel auto-deploys
-```
+## Parked for later (optional)
 
-## How the team uses it
+If this becomes a team workflow and you want a shared, persisted lead list
+instead of per-run CSVs, the groundwork is already in the repo but **not wired
+into the UI**: `api/leads.js` (Postgres read/update) and `db/schema.sql` (the
+`leads` table). To turn it on you'd add a Neon `DATABASE_URL` and re-expose the
+"shared list" UI — ask and I'll light it up. Until then, ignore it.
 
-- **Source live** — pick sources (ACRIS/DOB), borough, doc type, date, and a max
-  count; hit Source. Review the table, export CSV, or check **Save to the shared
-  list** to push deduped leads into the database.
-- **Shared list** — everyone sees the same accumulated leads. Filter by status /
-  source, search names/addresses, and set each lead's status
-  (`new → working → contacted → dead`). Changes are saved for the whole team.
+## Standalone Python agent
 
-## Notes
-
-- Dedupe key is `(source, deal_id, name, role)` — re-sourcing the same records
-  won't create duplicates; the saved count reflects only genuinely new leads.
-- The standalone Python agent in `nyc-sourcing-agent/` still exists for offline /
-  bulk runs and the optional Claude name-normalization (`--enrich`). The web tool
-  uses the same connectors and heuristic normalization, ported to JS.
-- `api/source.js` is capped at 250 records per source per run to stay within the
-  serverless time limit. For larger pulls, use the Python agent.
+`nyc-sourcing-agent/` is the same connectors as a local CLI (offline `--selftest`,
+optional Claude name-cleanup via `--enrich`) for bulk/offline runs.

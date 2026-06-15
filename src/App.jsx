@@ -676,7 +676,7 @@ const LEAD_COLS = [
   { key: "address", label: "Property" }, { key: "borough", label: "Borough" }, { key: "amount", label: "Amount" },
   { key: "deal_date", label: "Date" }, { key: "doc_type", label: "Doc" }, { key: "source", label: "Source" },
   { key: "contact_address", label: "Contact address" }, { key: "city", label: "City" },
-  { key: "state", label: "State" }, { key: "zip", label: "Zip" }, { key: "status", label: "Status" },
+  { key: "state", label: "State" }, { key: "zip", label: "Zip" },
 ];
 
 function leadsToCSV(rows) {
@@ -699,7 +699,6 @@ const fieldStyle = { background: C.ink, color: C.ivory, border: `1px solid ${C.l
 const labelStyle = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
 
 function Sourcing({ pw }) {
-  const [tab, setTab] = useState("source");
   const [sources, setSources] = useState({ acris: true, dob: true, pluto: false });
   const [borough, setBorough] = useState("");
   const [docType, setDocType] = useState("");
@@ -708,48 +707,38 @@ function Sourcing({ pw }) {
   const [blockFrom, setBlockFrom] = useState("");
   const [blockTo, setBlockTo] = useState("");
   const [limit, setLimit] = useState(100);
-  const [saveOnRun, setSaveOnRun] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
   const [leads, setLeads] = useState(null);
 
   async function run() {
-    setError(""); setInfo(""); setLeads(null);
+    setError(""); setLeads(null);
     const picked = Object.keys(sources).filter((s) => sources[s]);
-    if (!picked.length) { setError("Pick at least one source (ACRIS or DOB)."); return; }
+    if (!picked.length) { setError("Pick at least one source (ACRIS, DOB, or PLUTO)."); return; }
     setLoading(true);
     try {
       const res = await fetch("/api/source", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, blockFrom, blockTo, limit, save: saveOnRun }),
+        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, blockFrom, blockTo, limit }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setLeads(data.leads || []);
-      if (saveOnRun) {
-        setInfo(data.dbConfigured
-          ? `Saved ${data.saved} new lead(s) to the shared list (duplicates skipped).`
-          : "Sourced — but no database is connected, so nothing was saved. See SOURCING_SETUP.md.");
-      }
     } catch (e) { setError(e.message || "Sourcing failed."); }
     finally { setLoading(false); }
   }
 
+  function csvName() {
+    const parts = ["frontage_leads"];
+    if (borough) parts.push(borough.toLowerCase().replace(/\s+/g, "_"));
+    if (assetType && assetType !== "any") parts.push(assetType);
+    parts.push(new Date().toISOString().slice(0, 10));
+    return parts.join("_") + ".csv";
+  }
+
   return (
     <div style={{ marginTop: 22 }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {[["source", "SOURCE LIVE"], ["shared", "SHARED LIST"]].map(([t, lab]) => (
-          <button key={t} onClick={() => setTab(t)} className="mono"
-            style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${tab === t ? C.gold : C.line}`, background: tab === t ? C.goldSoft : "transparent", color: tab === t ? C.gold : C.muted }}>
-            {lab}
-          </button>
-        ))}
-      </div>
-
-      {tab === "shared" ? <SharedLeads pw={pw} /> : (
-        <>
           {/* Filters */}
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
             <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SOURCES</div>
@@ -801,24 +790,18 @@ function Sourcing({ pw }) {
               <strong style={{ color: C.ivory }}> Block from/to</strong> sets a tax-block region within the borough and refines every source.
             </div>
 
-            <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, fontSize: 13, color: C.ivory, cursor: "pointer" }}>
-              <input type="checkbox" checked={saveOnRun} onChange={(e) => setSaveOnRun(e.target.checked)} style={{ accentColor: C.gold }} />
-              Save results to the shared list (deduped)
-            </label>
-
             <button onClick={run} disabled={loading}
               style={{ marginTop: 14, width: "100%", cursor: loading ? "default" : "pointer", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: loading ? C.panel2 : C.gold, color: loading ? C.muted : "#ffffff" }}>
               {loading ? "Sourcing from NYC Open Data…" : "Source deals & contacts →"}
             </button>
             {error && <div style={{ marginTop: 12, color: C.red, fontSize: 13 }}>{error}</div>}
-            {info && <div style={{ marginTop: 12, color: C.green, fontSize: 13 }}>{info}</div>}
           </div>
 
           {leads && (
             <>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "22px 0 12px", flexWrap: "wrap", gap: 10 }}>
                 <div className="serif" style={{ fontSize: 17 }}>{leads.length} contact{leads.length === 1 ? "" : "s"} sourced</div>
-                <button onClick={() => leads.length && downloadBlob(leadsToCSV(leads), "frontage_leads.csv", "text/csv")} className="lift mono"
+                <button onClick={() => leads.length && downloadBlob(leadsToCSV(leads), csvName(), "text/csv")} className="lift mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>
               </div>
               <LeadTable rows={leads} />
@@ -830,11 +813,9 @@ function Sourcing({ pw }) {
             <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
               <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>What this does.</span> Pulls recently recorded deeds (ACRIS) and
               building-job filings (DOB) for the filters above, and extracts the people and companies attached to each — sellers, buyers,
-              and owners — as your leads. Check <strong>Save to the shared list</strong> to push them into the team's deduped database.
+              and owners — as your leads. Pick an asset type and tax-block region to narrow it down, then export a clean CSV.
             </div>
           )}
-        </>
-      )}
     </div>
   );
 }

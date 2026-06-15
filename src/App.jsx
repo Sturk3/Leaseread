@@ -689,16 +689,24 @@ const fmtAmount = (a) => (a == null || a === "" ? "" : "$" + Number(a).toLocaleS
 
 const STATUS_COLOR = { new: C.gold, working: C.amber, contacted: C.green, dead: C.muted };
 const BOROUGHS = ["", "Manhattan", "Bronx", "Brooklyn", "Queens", "Staten Island"];
+const ASSET_OPTIONS = [
+  ["any", "Any asset type"], ["retail", "Retail / store"], ["office", "Office"],
+  ["multifamily", "Multifamily"], ["mixed_use", "Mixed-use"], ["industrial", "Industrial / warehouse"],
+  ["hotel", "Hotel"], ["vacant", "Development site (vacant)"], ["one_two_family", "1–2 family"], ["condo", "Condo"],
+];
 
 const fieldStyle = { background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "Archivo, sans-serif" };
 const labelStyle = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
 
 function Sourcing({ pw }) {
   const [tab, setTab] = useState("source");
-  const [sources, setSources] = useState({ acris: true, dob: true });
+  const [sources, setSources] = useState({ acris: true, dob: true, pluto: false });
   const [borough, setBorough] = useState("");
   const [docType, setDocType] = useState("");
   const [since, setSince] = useState("");
+  const [assetType, setAssetType] = useState("any");
+  const [blockFrom, setBlockFrom] = useState("");
+  const [blockTo, setBlockTo] = useState("");
   const [limit, setLimit] = useState(100);
   const [saveOnRun, setSaveOnRun] = useState(false);
 
@@ -715,7 +723,7 @@ function Sourcing({ pw }) {
     try {
       const res = await fetch("/api/source", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, limit, save: saveOnRun }),
+        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, blockFrom, blockTo, limit, save: saveOnRun }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -746,7 +754,7 @@ function Sourcing({ pw }) {
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
             <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SOURCES</div>
             <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-              {[["acris", "ACRIS (deeds + parties)"], ["dob", "DOB (filings + owners)"]].map(([s, lab]) => (
+              {[["acris", "ACRIS (deeds + parties)"], ["dob", "DOB (filings + owners)"], ["pluto", "PLUTO (properties by type)"]].map(([s, lab]) => (
                 <button key={s} onClick={() => setSources((p) => ({ ...p, [s]: !p[s] }))} className="mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${sources[s] ? C.gold : C.line}`, background: sources[s] ? C.goldSoft : "transparent", color: sources[s] ? C.gold : C.muted }}>
                   {sources[s] ? "✓ " : ""}{lab}
@@ -762,6 +770,20 @@ function Sourcing({ pw }) {
                 </select>
               </label>
               <label>
+                <div className="mono" style={labelStyle}>ASSET TYPE</div>
+                <select value={assetType} onChange={(e) => setAssetType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
+                  {ASSET_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </label>
+              <label>
+                <div className="mono" style={labelStyle}>BLOCK FROM</div>
+                <input type="number" value={blockFrom} onChange={(e) => setBlockFrom(e.target.value)} placeholder="e.g. 1000" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
+              </label>
+              <label>
+                <div className="mono" style={labelStyle}>BLOCK TO</div>
+                <input type="number" value={blockTo} onChange={(e) => setBlockTo(e.target.value)} placeholder="e.g. 1100" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
+              </label>
+              <label>
                 <div className="mono" style={labelStyle}>DOC TYPE (ACRIS)</div>
                 <input value={docType} onChange={(e) => setDocType(e.target.value)} placeholder="e.g. DEED" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
               </label>
@@ -773,6 +795,10 @@ function Sourcing({ pw }) {
                 <div className="mono" style={labelStyle}>MAX PER SOURCE</div>
                 <input type="number" min="1" max="250" value={limit} onChange={(e) => setLimit(Number(e.target.value))} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
               </label>
+            </div>
+            <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+              <strong style={{ color: C.ivory }}>Asset type</strong> uses PLUTO (turn it on above) — e.g. Retail finds store buildings + their owners.
+              <strong style={{ color: C.ivory }}> Block from/to</strong> sets a tax-block region within the borough and refines every source.
             </div>
 
             <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, fontSize: 13, color: C.ivory, cursor: "pointer" }}>
@@ -815,7 +841,7 @@ function Sourcing({ pw }) {
 
 function LeadTable({ rows, statusEditor }) {
   if (!rows.length) return null;
-  const cols = ["Name", "Type", "Role", "Property", "Borough", "Amount", "Date", "Source"];
+  const cols = ["Name", "Type", "Role", "Property", "Borough", "Class", "Amount", "Date", "Source"];
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -833,6 +859,7 @@ function LeadTable({ rows, statusEditor }) {
               <td style={{ padding: "10px 14px", color: C.muted }}>{r.role}</td>
               <td style={{ padding: "10px 14px" }}>{r.address || "—"}</td>
               <td style={{ padding: "10px 14px", color: C.muted }}>{r.borough || "—"}</td>
+              <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.doc_type || "—"}</td>
               <td className="mono" style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>{fmtAmount(r.amount) || "—"}</td>
               <td className="mono" style={{ padding: "10px 14px", color: C.muted, whiteSpace: "nowrap" }}>{(r.deal_date || "").slice(0, 10) || "—"}</td>
               <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.source}</td>

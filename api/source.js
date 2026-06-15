@@ -9,6 +9,24 @@ const ACRIS_MASTER = process.env.ACRIS_MASTER_DATASET || "bnx9-e6tj"; // Real Pr
 const ACRIS_LEGALS = process.env.ACRIS_LEGALS_DATASET || "8h5j-fqxa"; // Real Property Legals
 const ACRIS_PARTIES = process.env.ACRIS_PARTIES_DATASET || "636b-3b5g"; // Real Property Parties
 const DOB_JOBS = process.env.DOB_JOBS_DATASET || "ic3t-wcy2"; // DOB Job Application Filings
+const PLUTO = process.env.PLUTO_DATASET || "64uk-42ks"; // Primary Land Use Tax Lot Output (PLUTO)
+
+const PLUTO_BOROUGH = { Manhattan: "MN", Bronx: "BX", Brooklyn: "BK", Queens: "QN", "Staten Island": "SI" };
+const PLUTO_BOROUGH_NAME = { MN: "Manhattan", BX: "Bronx", BK: "Brooklyn", QN: "Queens", SI: "Staten Island" };
+
+// Asset type -> NYC building-class prefixes (PLUTO `bldgclass`). null = any.
+const ASSET_TYPES = {
+  any: null,
+  retail: ["K"],                // store buildings
+  office: ["O"],
+  multifamily: ["C", "D"],      // walk-up + elevator apartments
+  mixed_use: ["S", "RM", "RR"], // mixed residential / commercial
+  industrial: ["E", "F"],       // warehouse + factory / industrial
+  hotel: ["H"],
+  vacant: ["V"],                // vacant land / development sites
+  one_two_family: ["A", "B"],
+  condo: ["R"],
+};
 
 const BOROUGH_CODE = { "1": "Manhattan", "2": "Bronx", "3": "Brooklyn", "4": "Queens", "5": "Staten Island" };
 const BOROUGH_NAME_TO_CODE = Object.fromEntries(Object.entries(BOROUGH_CODE).map(([k, v]) => [v.toLowerCase(), k]));
@@ -159,6 +177,44 @@ async function sourceDob({ borough, since, limit, appToken }) {
   return { deals, contacts };
 }
 
+// PLUTO: find lots by asset type + block region, with the owner as the lead.
+async function sourcePluto({ borough, assetType, blockFrom, blockTo, limit, appToken }) {
+  const where = [];
+  const code = PLUTO_BOROUGH[borough] || null;
+  if (code) where.push(`borough='${code}'`);
+  const prefixes = ASSET_TYPES[assetType] || null;
+  if (prefixes) where.push("(" + prefixes.map((p) => `starts_with(bldgclass,'${p}')`).join(" OR ") + ")");
+  const bf = blockFrom !== undefined && blockFrom !== null && blockFrom !== "" ? Number(blockFrom) : null;
+  const bt = blockTo !== undefined && blockTo !== null && blockTo !== "" ? Number(blockTo) : null;
+  if (bf != null && bt != null) where.push(`block between ${bf} and ${bt}`);
+  else if (bf != null) where.push(`block>=${bf}`);
+  else if (bt != null) where.push(`block<=${bt}`);
+
+  const rows = await fetchSocrata(PLUTO, {
+    where: where.join(" AND ") || undefined, order: "block, lot", limit, appToken,
+  });
+  const deals = [];
+  const contacts = [];
+  for (const row of rows) {
+    const bbl = clean(row.bbl) || clean(`${row.borough}${row.block}${row.lot}`);
+    if (!bbl) continue;
+    deals.push({
+      source: "pluto", deal_id: bbl, doc_type: clean(row.bldgclass),
+      borough: PLUTO_BOROUGH_NAME[clean(row.borough)] || clean(row.borough),
+      address: clean(row.address), block: clean(row.block), lot: clean(row.lot),
+      amount: toNum(row.assesstot), date: "",
+    });
+    const owner = clean(row.ownername);
+    if (owner) {
+      contacts.push({
+        name: owner, role: "owner", address: clean(row.address),
+        city: "", state: "", zip: "", source: "pluto", deal_id: bbl,
+      });
+    }
+  }
+  return { deals, contacts };
+}
+
 function dedupeDeals(deals) {
   const seen = new Set();
   return deals.filter((d) => {
@@ -223,7 +279,7 @@ async function saveLeads(leads) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, check, sources, borough, docType, since, limit, save } = req.body || {};
+    const { password, check, sources, borough, docType, since, limit, save, assetType, blockFrom, blockTo } = req.body || {};
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
@@ -233,7 +289,10 @@ export default async function handler(req, res) {
     const appToken = process.env.SOCRATA_APP_TOKEN;
     const wanted = Array.isArray(sources) && sources.length ? sources : ["acris", "dob"];
     const lim = Math.max(1, Math.min(Number(limit) || 100, 250));
-    const filters = { borough: borough || undefined, docType: docType || undefined, since: since || undefined, limit: lim, appToken };
+    const filters = {
+      borough: borough || undefined, docType: docType || undefined, since: since || undefined,
+      assetType: assetType || "any", blockFrom, blockTo, limit: lim, appToken,
+    };
 
     let deals = [];
     let contacts = [];
@@ -247,9 +306,28 @@ export default async function handler(req, res) {
       deals = deals.concat(d.deals);
       contacts = contacts.concat(d.contacts);
     }
+    if (wanted.includes("pluto")) {
+      const p = await sourcePluto(filters);
+      deals = deals.concat(p.deals);
+      contacts = contacts.concat(p.contacts);
+    }
 
     deals = dedupeDeals(deals);
     contacts = dedupeContacts(contacts).map(normalizeContact);
+
+    // Block-range refinement. PLUTO already filtered server-side; this also
+    // narrows the ACRIS/DOB transaction feeds (which carry block on each record).
+    const bf = blockFrom !== undefined && blockFrom !== null && blockFrom !== "" ? Number(blockFrom) : null;
+    const bt = blockTo !== undefined && blockTo !== null && blockTo !== "" ? Number(blockTo) : null;
+    if (bf != null || bt != null) {
+      const lo = bf != null ? bf : -Infinity;
+      const hi = bt != null ? bt : Infinity;
+      const inRange = (b) => { const n = Number(b); return Number.isFinite(n) && n >= lo && n <= hi; };
+      deals = deals.filter((d) => inRange(d.block));
+      const allowed = new Set(deals.map((d) => `${d.source}|${d.deal_id}`));
+      contacts = contacts.filter((c) => allowed.has(`${c.source}|${c.deal_id}`));
+    }
+
     const leads = buildLeads(deals, contacts);
 
     let savedInfo = { saved: 0, dbConfigured: !!process.env.DATABASE_URL };

@@ -704,8 +704,7 @@ function Sourcing({ pw }) {
   const [docType, setDocType] = useState("");
   const [since, setSince] = useState("");
   const [assetType, setAssetType] = useState("any");
-  const [blockFrom, setBlockFrom] = useState("");
-  const [blockTo, setBlockTo] = useState("");
+  const [street, setStreet] = useState("");
   const [limit, setLimit] = useState(100);
 
   const [loading, setLoading] = useState(false);
@@ -720,7 +719,7 @@ function Sourcing({ pw }) {
     try {
       const res = await fetch("/api/source", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, blockFrom, blockTo, limit }),
+        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, limit }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -733,6 +732,7 @@ function Sourcing({ pw }) {
     const parts = ["frontage_leads"];
     if (borough) parts.push(borough.toLowerCase().replace(/\s+/g, "_"));
     if (assetType && assetType !== "any") parts.push(assetType);
+    if (street) parts.push(street.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""));
     parts.push(new Date().toISOString().slice(0, 10));
     return parts.join("_") + ".csv";
   }
@@ -764,13 +764,9 @@ function Sourcing({ pw }) {
                   {ASSET_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </label>
-              <label>
-                <div className="mono" style={labelStyle}>BLOCK FROM</div>
-                <input type="number" value={blockFrom} onChange={(e) => setBlockFrom(e.target.value)} placeholder="e.g. 1000" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
-              </label>
-              <label>
-                <div className="mono" style={labelStyle}>BLOCK TO</div>
-                <input type="number" value={blockTo} onChange={(e) => setBlockTo(e.target.value)} placeholder="e.g. 1100" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
+              <label style={{ gridColumn: "span 2" }}>
+                <div className="mono" style={labelStyle}>STREET</div>
+                <input value={street} onChange={(e) => setStreet(e.target.value)} placeholder="e.g. 5 AVENUE · BROADWAY · 9 STREET" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
               </label>
               <label>
                 <div className="mono" style={labelStyle}>DOC TYPE (ACRIS)</div>
@@ -787,7 +783,7 @@ function Sourcing({ pw }) {
             </div>
             <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
               <strong style={{ color: C.ivory }}>Asset type</strong> uses PLUTO (turn it on above) — e.g. Retail finds store buildings + their owners.
-              <strong style={{ color: C.ivory }}> Block from/to</strong> sets a tax-block region within the borough and refines every source.
+              <strong style={{ color: C.ivory }}> Street</strong> filters every source by street name — use NYC’s format: numbered streets like “9 STREET”, avenues spelled out like “5 AVENUE”.
             </div>
 
             <button onClick={run} disabled={loading}
@@ -813,7 +809,7 @@ function Sourcing({ pw }) {
             <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
               <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>What this does.</span> Pulls recently recorded deeds (ACRIS) and
               building-job filings (DOB) for the filters above, and extracts the people and companies attached to each — sellers, buyers,
-              and owners — as your leads. Pick an asset type and tax-block region to narrow it down, then export a clean CSV.
+              and owners — as your leads. Narrow by asset type and street, then export a clean CSV.
             </div>
           )}
     </div>

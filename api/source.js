@@ -80,6 +80,14 @@ function normalizeContact(c) {
 }
 
 const sodaQuote = (vals) => vals.map((v) => "'" + String(v).replace(/'/g, "''") + "'").join(", ");
+// Escape user text for a SoQL upper(...) like '%...%' clause.
+const likeEsc = (s) => String(s).toUpperCase().replace(/'/g, "''");
+// Whole-street match: treats the input as a complete street token, so "9 STREET"
+// matches "9 STREET" / "EAST 9 STREET" but NOT "19 STREET" or "29 STREET".
+function streetClause(field, street) {
+  const s = likeEsc(street);
+  return `(upper(${field})='${s}' OR upper(${field}) like '% ${s}' OR upper(${field}) like '${s} %' OR upper(${field}) like '% ${s} %')`;
+}
 function chunk(arr, size) {
   const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -96,23 +104,56 @@ async function fetchSocrata(dataset, { where, order, limit, appToken }) {
   return r.json();
 }
 
-async function sourceAcris({ borough, docType, since, limit, appToken }) {
-  const where = [];
-  if (borough) where.push(`recorded_borough='${BOROUGH_NAME_TO_CODE[borough.toLowerCase()] || borough}'`);
-  if (docType) where.push(`upper(doc_type)='${docType.toUpperCase()}'`);
-  if (since) where.push(`document_date>='${since}'`);
-  const master = await fetchSocrata(ACRIS_MASTER, {
-    where: where.join(" AND ") || undefined, order: "recorded_datetime DESC", limit, appToken,
-  });
-  const docIds = master.map((r) => clean(r.document_id)).filter(Boolean);
-  if (!docIds.length) return { deals: [], contacts: [] };
+async function sourceAcris({ borough, docType, since, street, limit, appToken }) {
+  const code = borough ? (BOROUGH_NAME_TO_CODE[borough.toLowerCase()] || borough) : null;
+  let master;
+  let legals;
 
-  let legals = [];
+  if (street) {
+    // Street-first: find lots on this street (ACRIS Legals carries street_name),
+    // then pull the deeds recorded against them. Without this, a street filter on
+    // the recent-deeds feed would almost always come back empty.
+    const lw = [];
+    if (code) lw.push(`borough='${code}'`);
+    lw.push(streetClause("street_name", street));
+    // Pull a generous candidate set (newest documents first — ACRIS document_id is
+    // year-prefixed), then filter by doc_type/date and trim, so a doc-type filter
+    // doesn't accidentally prune the few legals we happened to fetch.
+    const candidateCap = Math.min(Math.max(limit * 6, 150), 400);
+    legals = await fetchSocrata(ACRIS_LEGALS, { where: lw.join(" AND "), order: "document_id DESC", limit: candidateCap, appToken });
+    const docIds = [...new Set(legals.map((r) => clean(r.document_id)).filter(Boolean))];
+    if (!docIds.length) return { deals: [], contacts: [] };
+    let masterAll = [];
+    for (const batch of chunk(docIds, 75)) {
+      const mw = [`document_id in (${sodaQuote(batch)})`];
+      if (docType) mw.push(`upper(doc_type)='${docType.toUpperCase()}'`);
+      if (since) mw.push(`document_date>='${since}'`);
+      masterAll = masterAll.concat(await fetchSocrata(ACRIS_MASTER, { where: mw.join(" AND "), limit: 2000, appToken }));
+    }
+    masterAll.sort((a, b) =>
+      String(b.recorded_datetime || b.document_date || "").localeCompare(String(a.recorded_datetime || a.document_date || "")));
+    master = masterAll.slice(0, limit);
+  } else {
+    const mw = [];
+    if (code) mw.push(`recorded_borough='${code}'`);
+    if (docType) mw.push(`upper(doc_type)='${docType.toUpperCase()}'`);
+    if (since) mw.push(`document_date>='${since}'`);
+    master = await fetchSocrata(ACRIS_MASTER, {
+      where: mw.join(" AND ") || undefined, order: "recorded_datetime DESC", limit, appToken,
+    });
+    const docIds = master.map((r) => clean(r.document_id)).filter(Boolean);
+    if (!docIds.length) return { deals: [], contacts: [] };
+    legals = [];
+    for (const batch of chunk(docIds, 75)) {
+      legals = legals.concat(await fetchSocrata(ACRIS_LEGALS, { where: `document_id in (${sodaQuote(batch)})`, limit: 2000, appToken }));
+    }
+  }
+
+  const masterDocIds = [...new Set(master.map((r) => clean(r.document_id)).filter(Boolean))];
+  if (!masterDocIds.length) return { deals: [], contacts: [] };
   let parties = [];
-  for (const batch of chunk(docIds, 75)) {
-    const inClause = `document_id in (${sodaQuote(batch)})`;
-    legals = legals.concat(await fetchSocrata(ACRIS_LEGALS, { where: inClause, limit: 2000, appToken }));
-    parties = parties.concat(await fetchSocrata(ACRIS_PARTIES, { where: inClause, limit: 4000, appToken }));
+  for (const batch of chunk(masterDocIds, 75)) {
+    parties = parties.concat(await fetchSocrata(ACRIS_PARTIES, { where: `document_id in (${sodaQuote(batch)})`, limit: 4000, appToken }));
   }
 
   const legalByDoc = {};
@@ -145,10 +186,11 @@ async function sourceAcris({ borough, docType, since, limit, appToken }) {
   return { deals, contacts };
 }
 
-async function sourceDob({ borough, since, limit, appToken }) {
+async function sourceDob({ borough, since, street, limit, appToken }) {
   const where = [];
   if (borough) where.push(`upper(borough)='${borough.toUpperCase()}'`);
   if (since) where.push(`pre__filing_date>='${since}'`);
+  if (street) where.push(streetClause("street_name", street));
   const rows = await fetchSocrata(DOB_JOBS, {
     where: where.join(" AND ") || undefined, order: "pre__filing_date DESC", limit, appToken,
   });
@@ -177,21 +219,17 @@ async function sourceDob({ borough, since, limit, appToken }) {
   return { deals, contacts };
 }
 
-// PLUTO: find lots by asset type + block region, with the owner as the lead.
-async function sourcePluto({ borough, assetType, blockFrom, blockTo, limit, appToken }) {
+// PLUTO: find lots by asset type + street, with the owner as the lead.
+async function sourcePluto({ borough, assetType, street, limit, appToken }) {
   const where = [];
   const code = PLUTO_BOROUGH[borough] || null;
   if (code) where.push(`borough='${code}'`);
   const prefixes = ASSET_TYPES[assetType] || null;
   if (prefixes) where.push("(" + prefixes.map((p) => `starts_with(bldgclass,'${p}')`).join(" OR ") + ")");
-  const bf = blockFrom !== undefined && blockFrom !== null && blockFrom !== "" ? Number(blockFrom) : null;
-  const bt = blockTo !== undefined && blockTo !== null && blockTo !== "" ? Number(blockTo) : null;
-  if (bf != null && bt != null) where.push(`block between ${bf} and ${bt}`);
-  else if (bf != null) where.push(`block>=${bf}`);
-  else if (bt != null) where.push(`block<=${bt}`);
+  if (street) where.push(streetClause("address", street));
 
   const rows = await fetchSocrata(PLUTO, {
-    where: where.join(" AND ") || undefined, order: "block, lot", limit, appToken,
+    where: where.join(" AND ") || undefined, order: "address", limit, appToken,
   });
   const deals = [];
   const contacts = [];
@@ -279,7 +317,7 @@ async function saveLeads(leads) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, check, sources, borough, docType, since, limit, save, assetType, blockFrom, blockTo } = req.body || {};
+    const { password, check, sources, borough, docType, since, limit, save, assetType, street } = req.body || {};
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
@@ -291,7 +329,7 @@ export default async function handler(req, res) {
     const lim = Math.max(1, Math.min(Number(limit) || 100, 250));
     const filters = {
       borough: borough || undefined, docType: docType || undefined, since: since || undefined,
-      assetType: assetType || "any", blockFrom, blockTo, limit: lim, appToken,
+      assetType: assetType || "any", street: (street || "").trim() || undefined, limit: lim, appToken,
     };
 
     let deals = [];
@@ -314,20 +352,6 @@ export default async function handler(req, res) {
 
     deals = dedupeDeals(deals);
     contacts = dedupeContacts(contacts).map(normalizeContact);
-
-    // Block-range refinement. PLUTO already filtered server-side; this also
-    // narrows the ACRIS/DOB transaction feeds (which carry block on each record).
-    const bf = blockFrom !== undefined && blockFrom !== null && blockFrom !== "" ? Number(blockFrom) : null;
-    const bt = blockTo !== undefined && blockTo !== null && blockTo !== "" ? Number(blockTo) : null;
-    if (bf != null || bt != null) {
-      const lo = bf != null ? bf : -Infinity;
-      const hi = bt != null ? bt : Infinity;
-      const inRange = (b) => { const n = Number(b); return Number.isFinite(n) && n >= lo && n <= hi; };
-      deals = deals.filter((d) => inRange(d.block));
-      const allowed = new Set(deals.map((d) => `${d.source}|${d.deal_id}`));
-      contacts = contacts.filter((c) => allowed.has(`${c.source}|${c.deal_id}`));
-    }
-
     const leads = buildLeads(deals, contacts);
 
     let savedInfo = { saved: 0, dbConfigured: !!process.env.DATABASE_URL };

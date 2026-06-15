@@ -698,6 +698,29 @@ function mapUrl(r) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
 
+// Free one-click contact-lookup links per owner (no API/key). Companies -> NY
+// business registry (OpenCorporates) + Google; individuals -> TruePeopleSearch + Google.
+const ACTION_PILL = { display: "inline-block", cursor: "pointer", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6, padding: "3px 8px", color: C.gold, fontSize: 11, textDecoration: "none", whiteSpace: "nowrap" };
+
+function isCompanyRow(r) {
+  return r.entity_type === "company" || /\b(LLC|INC|CORP|CO|COMPANY|LP|LLP|TRUST|ASSOCIATES|REALTY|PARTNERS|HOLDINGS|GROUP|MANAGEMENT|PROPERTIES|HDFC|FUND|BANK)\b/i.test(r.name || "");
+}
+function lookupLinks(r) {
+  const loc = r.borough || "New York";
+  if (isCompanyRow(r)) {
+    return [
+      { label: "🔎 NY biz", href: `https://opencorporates.com/companies?q=${encodeURIComponent(r.name || "")}&jurisdiction_code=us_ny` },
+      { label: "🔎 Google", href: `https://www.google.com/search?q=${encodeURIComponent(`${r.name || ""} ${loc} owner contact`)}` },
+    ];
+  }
+  const name = (r.first_name && r.last_name) ? `${r.first_name} ${r.last_name}` : (r.name || "");
+  const cityState = [r.city, r.state].filter(Boolean).join(", ");
+  return [
+    { label: "🔎 People", href: `https://www.truepeoplesearch.com/results?name=${encodeURIComponent(name)}${cityState ? `&citystatezip=${encodeURIComponent(cityState)}` : ""}` },
+    { label: "🔎 Google", href: `https://www.google.com/search?q=${encodeURIComponent(`${name} ${loc}`)}` },
+  ];
+}
+
 // Google-Maps-style address lookup using NYC GeoSearch autocomplete (free, no key,
 // CORS-open so the browser calls it directly). Pick a suggestion -> exact coords.
 function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
@@ -950,13 +973,18 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
   return (
     <>
       <tr style={{ borderBottom: last && !open ? "none" : `1px solid ${C.line}` }}>
-        <td style={{ padding: "10px 14px", fontWeight: 600 }}>
+        <td style={{ padding: "10px 14px", fontWeight: 600, minWidth: 200 }}>
           {r.name}
-          {canHist && (
-            <button onClick={toggle} className="mono lift" style={{ display: "inline-block", marginTop: 6, cursor: "pointer", background: open ? C.goldSoft : C.panel, border: `1px solid ${open ? C.gold : C.line}`, borderRadius: 6, padding: "3px 9px", color: C.gold, fontSize: 11 }}>
-              {open ? "▾ hide history" : "▸ deed history"}
-            </button>
-          )}
+          <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {canHist && (
+              <button onClick={toggle} className="mono lift" style={{ ...ACTION_PILL, background: open ? C.goldSoft : C.panel, border: `1px solid ${open ? C.gold : C.line}` }}>
+                {open ? "▾ hide history" : "▸ deed history"}
+              </button>
+            )}
+            {lookupLinks(r).map((lk) => (
+              <a key={lk.label} href={lk.href} target="_blank" rel="noreferrer" className="mono lift" style={ACTION_PILL}>{lk.label}</a>
+            ))}
+          </div>
         </td>
         <td style={{ padding: "10px 14px", color: C.muted }}>{r.entity_type}</td>
         <td style={{ padding: "10px 14px", color: C.muted }}>{r.role}</td>

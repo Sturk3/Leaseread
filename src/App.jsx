@@ -680,6 +680,7 @@ const LEAD_COLS = [
   { key: "state", label: "State" }, { key: "zip", label: "Zip" },
   { key: "last_sale_date", label: "Last sale date" }, { key: "last_sale_price", label: "Last sale price" },
   { key: "years_owned", label: "Years owned" }, { key: "absentee", label: "Absentee" },
+  { key: "tax_lien", label: "Tax lien" }, { key: "portfolio_count", label: "Owner #props in set" },
   { key: "lat", label: "Lat" }, { key: "lon", label: "Lon" },
 ];
 
@@ -809,6 +810,11 @@ function Sourcing({ pw }) {
   const [pickedCoords, setPickedCoords] = useState(null);
   const [radiusMiles, setRadiusMiles] = useState("");
   const [limit, setLimit] = useState(100);
+  const [minSqft, setMinSqft] = useState("");
+  const [minUnits, setMinUnits] = useState("");
+  const [builtAfter, setBuiltAfter] = useState("");
+  const [builtBefore, setBuiltBefore] = useState("");
+  const [showMore, setShowMore] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -823,7 +829,7 @@ function Sourcing({ pw }) {
     try {
       const res = await fetch("/api/source", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles, limit, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) }),
+        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles, limit, minSqft, minUnits, builtAfter, builtBefore, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -903,6 +909,18 @@ function Sourcing({ pw }) {
             <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
               <strong style={{ color: C.ivory }}>Address</strong> — type and pick from the dropdown to search a tight area. A radius search returns the PLUTO properties in that circle (it ignores ACRIS/DOB, which can’t do radius). <strong style={{ color: C.ivory }}>Too many results? Use a smaller radius.</strong> Click an address for Google Maps, or “▸ deed history” for a property’s deeds &amp; mortgages.
             </div>
+
+            <button onClick={() => setShowMore((s) => !s)} className="mono" style={{ marginTop: 12, cursor: "pointer", background: "none", border: "none", padding: 0, color: C.gold, fontSize: 12 }}>
+              {showMore ? "▾ fewer filters" : "▸ more filters — size · units · year (PLUTO)"}
+            </button>
+            {showMore && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginTop: 10 }}>
+                <label><div className="mono" style={labelStyle}>MIN BLDG SQFT</div><input type="number" value={minSqft} onChange={(e) => setMinSqft(e.target.value)} placeholder="e.g. 5000" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+                <label><div className="mono" style={labelStyle}>MIN UNITS</div><input type="number" value={minUnits} onChange={(e) => setMinUnits(e.target.value)} placeholder="e.g. 10" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+                <label><div className="mono" style={labelStyle}>BUILT AFTER</div><input type="number" value={builtAfter} onChange={(e) => setBuiltAfter(e.target.value)} placeholder="e.g. 1900" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+                <label><div className="mono" style={labelStyle}>BUILT BEFORE</div><input type="number" value={builtBefore} onChange={(e) => setBuiltBefore(e.target.value)} placeholder="e.g. 1940" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+              </div>
+            )}
 
             <button onClick={run} disabled={loading}
               style={{ marginTop: 14, width: "100%", cursor: loading ? "default" : "pointer", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: loading ? C.panel2 : C.gold, color: loading ? C.muted : "#ffffff" }}>
@@ -994,6 +1012,12 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
       <tr style={{ borderBottom: last && !open ? "none" : `1px solid ${C.line}` }}>
         <td style={{ padding: "10px 14px", fontWeight: 600, minWidth: 200 }}>
           {r.name}
+          {(r.tax_lien || r.portfolio_count > 1) && (
+            <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {r.tax_lien && <span className="mono" style={{ fontSize: 9.5, padding: "1px 6px", borderRadius: 5, background: "rgba(209,74,60,0.12)", color: C.red, whiteSpace: "nowrap" }}>⚑ TAX LIEN</span>}
+              {r.portfolio_count > 1 && <span className="mono" style={{ fontSize: 9.5, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.gold, whiteSpace: "nowrap" }}>OWNS {r.portfolio_count}</span>}
+            </div>
+          )}
           <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             {canHist && (
               <button onClick={toggle} className="mono lift" style={{ ...ACTION_PILL, background: open ? C.goldSoft : C.panel, border: `1px solid ${open ? C.gold : C.line}` }}>

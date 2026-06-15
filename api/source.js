@@ -10,6 +10,7 @@ const ACRIS_LEGALS = process.env.ACRIS_LEGALS_DATASET || "8h5j-fqxa"; // Real Pr
 const ACRIS_PARTIES = process.env.ACRIS_PARTIES_DATASET || "636b-3b5g"; // Real Property Parties
 const DOB_JOBS = process.env.DOB_JOBS_DATASET || "ic3t-wcy2"; // DOB Job Application Filings
 const PLUTO = process.env.PLUTO_DATASET || "64uk-42ks"; // Primary Land Use Tax Lot Output (PLUTO)
+const TAX_LIEN = process.env.TAX_LIEN_DATASET || "9rz4-mjek"; // Tax Lien Sale List (distress signal)
 
 const PLUTO_BOROUGH = { Manhattan: "MN", Bronx: "BX", Brooklyn: "BK", Queens: "QN", "Staten Island": "SI" };
 const PLUTO_BOROUGH_NAME = { MN: "Manhattan", BX: "Bronx", BK: "Brooklyn", QN: "Queens", SI: "Staten Island" };
@@ -281,13 +282,17 @@ async function fetchAnchorPluto(bbl, appToken) {
 }
 
 // PLUTO: find lots by asset type + street or radius, with the owner as the lead.
-async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, limit, appToken }) {
+async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, minSqft, minUnits, builtAfter, builtBefore, limit, appToken }) {
   const where = [];
   const code = PLUTO_BOROUGH[borough] || null;
   if (code) where.push(`borough='${code}'`);
   const prefixes = ASSET_TYPES[assetType] || null;
   if (prefixes) where.push("(" + prefixes.map((p) => `starts_with(bldgclass,'${p}')`).join(" OR ") + ")");
   if (street) where.push(streetClause("address", street));
+  if (minSqft) where.push(`bldgarea>=${Number(minSqft)}`);
+  if (minUnits) where.push(`unitstotal>=${Number(minUnits)}`);
+  if (builtAfter) where.push(`yearbuilt>=${Number(builtAfter)}`);
+  if (builtBefore) where.push(`(yearbuilt<=${Number(builtBefore)} AND yearbuilt>0)`);
 
   const radius = radiusMiles ? Number(radiusMiles) : null;
   const hasCenter = centerLat != null && centerLon != null && radius;
@@ -391,6 +396,7 @@ function buildLeads(deals, contacts) {
       amount: d.amount ?? null, deal_date: d.date || "",
       last_sale_date: d.last_sale_date || "", last_sale_price: d.last_sale_price ?? null,
       years_owned: d.last_sale_date ? Math.max(0, new Date().getFullYear() - Number(String(d.last_sale_date).slice(0, 4))) : null,
+      tax_lien: d.tax_lien || false,
       lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null, pinned: d.pinned || false,
       name: c.name, role: c.role, entity_type: c.entity_type || "unknown",
       first_name: c.first_name || "", last_name: c.last_name || "",
@@ -488,6 +494,20 @@ async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
       c.zip = zip === "00000" ? "" : zip;
     }
   }
+
+  // 6. tax-lien distress flag (property is on the lien sale list — behind on taxes/water)
+  const lienSet = new Set();
+  for (const [code, list] of Object.entries(byBoro)) {
+    for (const group of chunk(list, 50)) {
+      const ors = group.map((d) => `(block=${Number(d.block)} AND lot=${Number(d.lot)})`).join(" OR ");
+      const rows = await fetchSocrata(TAX_LIEN, { where: `borough='${code}' AND (${ors})`, select: "block,lot", limit: 5000, appToken }).catch(() => []);
+      for (const r of rows) lienSet.add(keyOf(code, r.block, r.lot));
+    }
+  }
+  for (const d of targets) {
+    const code = codeOf(d.borough);
+    if (code && lienSet.has(keyOf(code, d.block, d.lot))) d.tax_lien = true;
+  }
 }
 
 async function saveLeads(leads) {
@@ -518,7 +538,7 @@ async function saveLeads(leads) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl } = req.body || {};
+    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, minUnits, builtAfter, builtBefore } = req.body || {};
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
@@ -551,7 +571,10 @@ export default async function handler(req, res) {
       assetType: assetType || "any", street: (street || "").trim() || undefined,
       centerLat: center ? center.lat : undefined, centerLon: center ? center.lon : undefined,
       radiusMiles: center ? Number(radiusMiles) : undefined,
-      anchorBbl: center && pickedBbl ? pickedBbl : undefined, limit: lim, appToken,
+      anchorBbl: center && pickedBbl ? pickedBbl : undefined,
+      minSqft: minSqft || undefined, minUnits: minUnits || undefined,
+      builtAfter: builtAfter || undefined, builtBefore: builtBefore || undefined,
+      limit: lim, appToken,
     };
 
     // A radius search is inherently about an area — only PLUTO has coordinates, so
@@ -591,6 +614,11 @@ export default async function handler(req, res) {
     if (center) {
       leads.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (a.distance ?? 1e9) - (b.distance ?? 1e9));
     }
+
+    // Portfolio: how many properties in this result set share the same owner.
+    const ownerCount = {};
+    for (const l of leads) { const k = clean(l.name).toUpperCase(); if (k) ownerCount[k] = (ownerCount[k] || 0) + 1; }
+    for (const l of leads) l.portfolio_count = ownerCount[clean(l.name).toUpperCase()] || 1;
 
     let savedInfo = { saved: 0, dbConfigured: !!process.env.DATABASE_URL };
     if (save) savedInfo = await saveLeads(leads);

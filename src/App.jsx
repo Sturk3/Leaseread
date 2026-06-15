@@ -874,8 +874,9 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
   const [hist, setHist] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  // History needs a tax lot — PLUTO rows have block/lot; ACRIS/DOB don't.
-  const canHist = r.source === "pluto" && r.block && r.lot;
+  // History needs a tax lot (borough + block + lot). PLUTO, ACRIS, and DOB rows
+  // all carry these, so the deed history is available on every located result.
+  const canHist = !!(r.borough && r.block && r.lot);
 
   async function toggle() {
     const next = !open;
@@ -901,8 +902,8 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
         <td style={{ padding: "10px 14px", fontWeight: 600 }}>
           {r.name}
           {canHist && (
-            <button onClick={toggle} className="mono" style={{ display: "block", marginTop: 3, cursor: "pointer", background: "none", border: "none", padding: 0, color: C.gold, fontSize: 11 }}>
-              {open ? "▾ hide history" : "▸ history"}
+            <button onClick={toggle} className="mono lift" style={{ display: "inline-block", marginTop: 6, cursor: "pointer", background: open ? C.goldSoft : C.panel, border: `1px solid ${open ? C.gold : C.line}`, borderRadius: 6, padding: "3px 9px", color: C.gold, fontSize: 11 }}>
+              {open ? "▾ hide history" : "▸ deed history"}
             </button>
           )}
         </td>

@@ -754,7 +754,7 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
         const d = await r.json();
         const items = (d.features || [])
           .filter((f) => f.geometry && f.properties)
-          .map((f) => ({ label: f.properties.label, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }));
+          .map((f) => ({ label: f.properties.label, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], bbl: ((f.properties.addendum || {}).pad || {}).bbl || null }));
         setSugs(items); setOpen(items.length > 0);
       } catch { setSugs([]); setOpen(false); }
     }, 220);
@@ -766,7 +766,7 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
       {open && (
         <div style={{ position: "absolute", zIndex: 30, top: "100%", left: 0, right: 0, marginTop: 4, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, boxShadow: "0 10px 28px rgba(20,16,48,0.18)", maxHeight: 240, overflow: "auto" }}>
           {sugs.map((s, i) => (
-            <div key={i} className="addr-opt" onClick={() => { onPick(s.label, s.lat, s.lon); setOpen(false); setSugs([]); }}
+            <div key={i} className="addr-opt" onClick={() => { onPick(s.label, s.lat, s.lon, s.bbl); setOpen(false); setSugs([]); }}
               style={{ padding: "9px 12px", fontSize: 13, cursor: "pointer", borderBottom: i < sugs.length - 1 ? `1px solid ${C.line}` : "none" }}>
               {s.label}
             </div>
@@ -813,7 +813,7 @@ function Sourcing({ pw }) {
     try {
       const res = await fetch("/api/source", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles, limit, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon } : {}) }),
+        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles, limit, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -865,7 +865,7 @@ function Sourcing({ pw }) {
                   <AddressAutocomplete
                     value={nearAddress}
                     onChange={(t) => { setNearAddress(t); setPickedCoords(null); }}
-                    onPick={(label, lat, lon) => { setNearAddress(label); setPickedCoords({ lat, lon }); if (!radiusMiles) setRadiusMiles("0.1"); }}
+                    onPick={(label, lat, lon, bbl) => { setNearAddress(label); setPickedCoords({ lat, lon, bbl }); if (!radiusMiles) setRadiusMiles("0.1"); }}
                     placeholder="Start typing an address, e.g. 200 5th Ave…"
                     style={{ ...fieldStyle, width: "100%" }}
                   />

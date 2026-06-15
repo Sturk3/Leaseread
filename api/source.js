@@ -243,8 +243,34 @@ async function sourceDob({ borough, since, street, limit, appToken }) {
   return { deals, contacts };
 }
 
+// Fetch one exact PLUTO lot by BBL (the typed address), ignoring asset filters, so
+// it can be pinned as the first result. BBL = boro(1) + block(5) + lot(4).
+const DIGIT_BOROUGH = { 1: "MN", 2: "BX", 3: "BK", 4: "QN", 5: "SI" };
+async function fetchAnchorPluto(bbl, appToken) {
+  const m = /^(\d)(\d{5})(\d{4})$/.exec(String(bbl));
+  if (!m) return null;
+  const boro2 = DIGIT_BOROUGH[m[1]];
+  if (!boro2) return null;
+  const rows = await fetchSocrata(PLUTO, {
+    where: `borough='${boro2}' AND block=${Number(m[2])} AND lot=${Number(m[3])}`, limit: 1, appToken,
+  }).catch(() => []);
+  const row = rows[0];
+  if (!row) return null;
+  const id = clean(row.bbl) || String(bbl);
+  const deal = {
+    source: "pluto", deal_id: id, doc_type: clean(row.bldgclass),
+    borough: PLUTO_BOROUGH_NAME[clean(row.borough)] || clean(row.borough),
+    address: clean(row.address), block: clean(row.block), lot: clean(row.lot),
+    amount: toNum(row.assesstot), date: "", lat: toNum(row.latitude), lon: toNum(row.longitude),
+    distance: 0, pinned: true,
+  };
+  const owner = clean(row.ownername);
+  const contact = owner ? { name: owner, role: "owner", address: clean(row.address), city: "", state: "", zip: "", source: "pluto", deal_id: id } : null;
+  return { deal, contact };
+}
+
 // PLUTO: find lots by asset type + street or radius, with the owner as the lead.
-async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, limit, appToken }) {
+async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, limit, appToken }) {
   const where = [];
   const code = PLUTO_BOROUGH[borough] || null;
   if (code) where.push(`borough='${code}'`);
@@ -302,6 +328,21 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
   if (hasCenter) {
     // Return EVERY property inside the circle, nearest first — no trim to `limit`.
     deals.sort((a, b) => (a.distance ?? 1e9) - (b.distance ?? 1e9));
+    // Pin the typed address itself as the first result (even if the asset filter
+    // would exclude it), then everyone else by proximity.
+    if (anchorBbl) {
+      const norm = String(anchorBbl).split(".")[0];
+      let anchor = deals.find((d) => String(d.deal_id).split(".")[0] === norm);
+      if (!anchor) {
+        const fetched = await fetchAnchorPluto(norm, appToken);
+        if (fetched) {
+          deals.push(fetched.deal);
+          if (fetched.contact) contacts.push(fetched.contact);
+          anchor = fetched.deal;
+        }
+      }
+      if (anchor) { anchor.distance = 0; anchor.pinned = true; }
+    }
     const keep = new Set(deals.map((d) => d.deal_id));
     return { deals, contacts: contacts.filter((c) => keep.has(c.deal_id)) };
   }
@@ -337,7 +378,7 @@ function buildLeads(deals, contacts) {
       source: c.source, deal_id: c.deal_id, doc_type: d.doc_type || "", borough: d.borough || "",
       address: d.address || "", block: d.block || "", lot: d.lot || "",
       amount: d.amount ?? null, deal_date: d.date || "",
-      lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null,
+      lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null, pinned: d.pinned || false,
       name: c.name, role: c.role, entity_type: c.entity_type || "unknown",
       first_name: c.first_name || "", last_name: c.last_name || "",
       contact_address: c.address || "", city: c.city || "", state: c.state || "", zip: c.zip || "",
@@ -455,7 +496,7 @@ async function saveLeads(leads) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon } = req.body || {};
+    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl } = req.body || {};
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
@@ -487,7 +528,8 @@ export default async function handler(req, res) {
       borough: borough || undefined, docType: docType || undefined, since: since || undefined,
       assetType: assetType || "any", street: (street || "").trim() || undefined,
       centerLat: center ? center.lat : undefined, centerLon: center ? center.lon : undefined,
-      radiusMiles: center ? Number(radiusMiles) : undefined, limit: lim, appToken,
+      radiusMiles: center ? Number(radiusMiles) : undefined,
+      anchorBbl: center && pickedBbl ? pickedBbl : undefined, limit: lim, appToken,
     };
 
     // A radius search is inherently about an area — only PLUTO has coordinates, so
@@ -523,6 +565,10 @@ export default async function handler(req, res) {
     }
 
     const leads = buildLeads(deals, contacts);
+    // Display order for area searches: typed address first, then nearest outward.
+    if (center) {
+      leads.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (a.distance ?? 1e9) - (b.distance ?? 1e9));
+    }
 
     let savedInfo = { saved: 0, dbConfigured: !!process.env.DATABASE_URL };
     if (save) savedInfo = await saveLeads(leads);

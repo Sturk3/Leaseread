@@ -889,7 +889,6 @@ const labelStyle = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
 function Sourcing({ pw }) {
   const [sources, setSources] = useState({ acris: true, dob: true, pluto: true });
   const [borough, setBorough] = useState("");
-  const [since, setSince] = useState("");
   const [assetType, setAssetType] = useState("any");
   const [street, setStreet] = useState("");
   const [nearAddress, setNearAddress] = useState("");
@@ -915,7 +914,7 @@ function Sourcing({ pw }) {
     if (!picked.length) { setError("Pick at least one source (ACRIS, DOB, or PLUTO)."); return; }
     setLoading(true);
     try {
-      const data = await postJSON("/api/source", { password: pw, sources: picked, borough, since, assetType, street, nearAddress, radiusMiles, limit, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) });
+      const data = await postJSON("/api/source", { password: pw, sources: picked, borough, assetType, street, nearAddress, radiusMiles, limit, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) });
       setLeads(data.leads || []);
       setCenter(data.center || null);
     } catch (e) { setError(e.message || "Sourcing failed."); }
@@ -975,10 +974,6 @@ function Sourcing({ pw }) {
                 <select value={radiusMiles} onChange={(e) => setRadiusMiles(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
                   {[["", "off · just this property"], ["0.05", "0.05 mi · ~1 block"], ["0.1", "0.1 mi · ~2 blocks"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"], ["1", "1 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
-              </label>
-              <label>
-                <div className="mono" style={labelStyle}>SINCE</div>
-                <input type="date" value={since} onChange={(e) => setSince(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
               </label>
             </div>
             <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>

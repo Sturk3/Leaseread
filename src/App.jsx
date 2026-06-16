@@ -847,14 +847,37 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
     if (timer.current) clearTimeout(timer.current);
     if (!text || text.trim().length < 3) { setSugs([]); setOpen(false); return; }
     timer.current = setTimeout(async () => {
+      let items = [];
+      // 1) NYC GeoSearch — best for NYC and carries the lot's BBL.
       try {
         const r = await fetch(`https://geosearch.planninglabs.nyc/v2/autocomplete?text=${encodeURIComponent(text)}`);
-        const d = await r.json();
-        const items = (d.features || [])
-          .filter((f) => f.geometry && f.properties)
-          .map((f) => ({ label: f.properties.label, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], bbl: ((f.properties.addendum || {}).pad || {}).bbl || null }));
-        setSugs(items); setOpen(items.length > 0);
-      } catch { setSugs([]); setOpen(false); }
+        if (r.ok) {
+          const d = await r.json();
+          items = (d.features || [])
+            .filter((f) => f.geometry && f.properties)
+            .map((f) => ({ label: f.properties.label, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], bbl: ((f.properties.addendum || {}).pad || {}).bbl || null }));
+        }
+      } catch { /* fall through to backup */ }
+      // 2) Backup: Photon (free, no key, CORS-open) when GeoSearch is down/empty.
+      //    No BBL — the backend then snaps to the nearest lot from the coordinates.
+      if (items.length === 0) {
+        try {
+          const r = await fetch(`https://photon.komoot.io/api?q=${encodeURIComponent(text)}&limit=6&lat=40.75&lon=-73.98&bbox=-74.3,40.49,-73.69,40.92`);
+          if (r.ok) {
+            const d = await r.json();
+            items = (d.features || [])
+              .filter((f) => f.geometry)
+              .map((f) => {
+                const p = f.properties || {};
+                const line1 = [p.housenumber, p.street].filter(Boolean).join(" ") || p.name || "";
+                const label = [line1, p.city || p.district, p.state].filter(Boolean).join(", ");
+                return { label: label || p.name, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], bbl: null };
+              })
+              .filter((x) => x.label);
+          }
+        } catch { /* leave items empty */ }
+      }
+      setSugs(items); setOpen(items.length > 0);
     }, 220);
   }
 

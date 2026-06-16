@@ -744,22 +744,19 @@ function lookupLinks(r) {
 
 // Deep links into NYC property-research sites + commercial listing/lease sources.
 const BORO_CODE = { Manhattan: "1", Bronx: "2", Brooklyn: "3", Queens: "4", "Staten Island": "5" };
+// Deep-links that land on THIS property where the site allows it (Property portal,
+// ZoLa, Street View); the ⌕ ones are web searches (those sites have no per-lot URL).
 function researchLinks(r) {
   const boro = BORO_CODE[r.borough];
   const block = r.block ? Number(r.block) : null;
   const lot = r.lot ? Number(r.lot) : null;
-  const addrQ = encodeURIComponent(`${r.address || ""} ${r.borough || ""} NY`);
+  const bbl = boro && block && lot ? `${boro}${String(block).padStart(5, "0")}${String(lot).padStart(4, "0")}` : "";
   const links = [];
-  if (boro && block && lot) {
-    links.push({ label: "ZoLa zoning", href: `https://zola.planning.nyc.gov/lot/${boro}/${block}/${lot}` });
-    links.push({ label: "DOB filings", href: `http://a810-bisweb.nyc.gov/bisweb/PropertyProfileOverviewServlet?boro=${boro}&block=${block}&lot=${lot}` });
-    links.push({ label: "ACRIS", href: `https://a836-acris.nyc.gov/DS/DocumentSearch/BBL` });
-  }
+  if (bbl) links.push({ label: "Property portal", href: `https://propertyinformationportal.nyc.gov/parcels/parcel/${bbl}` });
+  if (boro && block && lot) links.push({ label: "ZoLa zoning", href: `https://zola.planning.nyc.gov/lot/${boro}/${block}/${lot}` });
   if (r.lat != null && r.lon != null) links.push({ label: "Street View", href: `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${r.lat},${r.lon}` });
-  links.push({ label: "PropertyShark", href: `https://www.google.com/search?q=${encodeURIComponent(`site:propertyshark.com ${r.address} ${r.borough}`)}` });
-  links.push({ label: "LoopNet", href: `https://www.google.com/search?q=${encodeURIComponent(`site:loopnet.com ${r.address} ${r.borough}`)}` });
-  links.push({ label: "Crexi", href: `https://www.google.com/search?q=${encodeURIComponent(`site:crexi.com ${r.address} ${r.borough}`)}` });
-  links.push({ label: "Tenants", href: `https://www.google.com/search?q=${addrQ}+store+OR+tenant` });
+  links.push({ label: "Listings ⌕", href: `https://www.google.com/search?q=${encodeURIComponent(`${r.address} ${r.borough} NY for lease OR for sale (loopnet OR crexi)`)}` });
+  links.push({ label: "Tenants ⌕", href: `https://www.google.com/search?q=${encodeURIComponent(`${r.address} ${r.borough} NY store OR tenant`)}` });
   return links;
 }
 
@@ -853,7 +850,7 @@ function Sourcing({ pw }) {
     try {
       const res = await fetch("/api/source", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles, limit, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) }),
+        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles: radiusMiles || (nearAddress.trim() ? "0.1" : ""), limit, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);

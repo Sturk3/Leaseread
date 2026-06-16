@@ -101,19 +101,33 @@ function streetClause(field, street) {
   return `(upper(${field})='${s}' OR upper(${field}) like '% ${s}' OR upper(${field}) like '${s} %' OR upper(${field}) like '% ${s} %')`;
 }
 
-// Geocode an address with NYC Planning's GeoSearch (free, no API key).
+// Geocode an address — NYC GeoSearch (free, no key), with a US Census geocoder
+// fallback so radius search keeps working when GeoSearch is down/unavailable.
 async function geocodeNyc(text) {
   try {
     const r = await fetch(`https://geosearch.planninglabs.nyc/v2/search?size=1&text=${encodeURIComponent(text)}`);
-    if (!r.ok) return null;
-    const d = await r.json();
-    const f = d.features && d.features[0];
-    if (!f || !f.geometry) return null;
-    const [lon, lat] = f.geometry.coordinates;
-    return { lat, lon, label: (f.properties && f.properties.label) || text };
+    if (r.ok) {
+      const d = await r.json();
+      const f = d.features && d.features[0];
+      if (f && f.geometry) {
+        const [lon, lat] = f.geometry.coordinates;
+        return { lat, lon, label: (f.properties && f.properties.label) || text };
+      }
+    }
   } catch {
-    return null;
+    /* fall through to Census */
   }
+  try {
+    const r = await fetch(`https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?benchmark=Public_AR_Current&format=json&address=${encodeURIComponent(text)}`);
+    if (r.ok) {
+      const d = await r.json();
+      const m = d.result && d.result.addressMatches && d.result.addressMatches[0];
+      if (m && m.coordinates) return { lat: m.coordinates.y, lon: m.coordinates.x, label: m.matchedAddress || text };
+    }
+  } catch {
+    /* no geocoder available */
+  }
+  return null;
 }
 
 function haversineMiles(lat1, lon1, lat2, lon2) {

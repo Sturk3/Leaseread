@@ -1092,6 +1092,22 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
   );
 }
 
+// A street-level photo of the property. Uses Google's keyless Street View embed
+// (no API key, no billing — same no-key approach as the Maps links) keyed off the
+// PLUTO lat/lon. Falls back to an address search when there are no coordinates.
+function PropertyPhoto({ r }) {
+  if (r.lat == null || r.lon == null) return null;
+  const src = `https://maps.google.com/maps?q=&layer=c&cbll=${r.lat},${r.lon}&cbp=12,0,0,0,0&output=svembed`;
+  const pano = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${r.lat},${r.lon}`;
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <iframe title="Street View" src={src} loading="lazy" referrerPolicy="no-referrer-when-downgrade"
+        style={{ width: "100%", height: 190, border: `1px solid ${C.line}`, borderRadius: 10, display: "block" }} />
+      <a href={pano} target="_blank" rel="noreferrer" className="mono" style={{ display: "inline-block", marginTop: 5, fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ open full Street View</a>
+    </div>
+  );
+}
+
 function PropertyDetail({ r, pw }) {
   const [hist, setHist] = useState(null);
   const [histErr, setHistErr] = useState("");
@@ -1124,6 +1140,7 @@ function PropertyDetail({ r, pw }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 22, paddingTop: 8 }}>
       <div>
+        <PropertyPhoto r={r} />
         <div className="mono" style={{ ...title, marginTop: 0 }}>HOW TO REACH</div>
         <div style={{ fontSize: 13, fontWeight: 600 }}>{r.name} <span style={{ color: C.muted, fontWeight: 400, fontSize: 12 }}>· {r.entity_type}</span></div>
         <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>

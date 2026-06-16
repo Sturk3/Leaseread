@@ -1216,24 +1216,26 @@ function ResearchBrief({ r, pw }) {
   const run = async () => {
     setState("loading"); setErr("");
     try {
-      const d = await postJSON("/api/research", { password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned });
+      // Knowledge mode (instant). Live web search exceeds Vercel's 60s function limit
+      // on the current plan; flip to mode "web" once on a plan with a higher timeout.
+      const d = await postJSON("/api/research", { mode: "knowledge", password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned });
       setBrief(d.brief || ""); setState("done");
     } catch (e) { setErr(e.message || "Research failed."); setState("error"); }
   };
   return (
     <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>✦ AI RESEARCH — scours the web for this owner & asset</div>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>✦ AI QUICK TAKE — what’s known about this owner</div>
         {state !== "loading" && (
           <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>
-            {state === "done" || state === "error" ? "↻ re-run" : "▸ run research"}
+            {state === "done" || state === "error" ? "↻ re-run" : "▸ run"}
           </button>
         )}
       </div>
-      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Searching the web &amp; compiling the brief… this takes ~15–30s.</div>}
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Compiling… (a few seconds)</div>}
       {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
       {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={brief} /></div>}
-      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Runs live web searches and writes an intelligence brief — principals behind the LLC, portfolio, news/distress signals, and whether it’s worth pursuing. On-demand only.</div>}
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Instant AI take from the model’s knowledge — great for recognizable owners (REITs, named developers). For obscure single-asset LLCs it will say there’s no public info rather than guess. (Live web search is coming once the hosting plan allows longer runs.)</div>}
     </div>
   );
 }

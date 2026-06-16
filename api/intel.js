@@ -11,6 +11,11 @@ const ECB_VIOL = process.env.ECB_VIOL_DATASET || "6bgk-3dad";
 const HPD_VIOL = process.env.HPD_VIOL_DATASET || "wvxf-dwi5";
 const NY_CORP = process.env.NY_CORP_DATASET || "n9v6-gdp6";
 const DCWP_BIZ = process.env.DCWP_BIZ_DATASET || "w7w3-xahh"; // licensed businesses (storefront occupants), has bbl + dba + phone
+const C311 = "erm2-nwe9";       // 311 service requests (bbl)
+const EVICT = "6z8x-wfk4";      // marshal evictions (bbl)
+const RESTAURANT = "43nn-pn8j"; // restaurant inspections — food tenants (bbl, has phone)
+const COFO = "bs8b-p36w";       // certificate of occupancy (bbl)
+const DOB_PERMIT = "ipu4-2q9a"; // DOB permit issuance (bbl)
 
 const BORO_CODE = { manhattan: "1", bronx: "2", brooklyn: "3", queens: "4", "staten island": "5" };
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
@@ -51,7 +56,9 @@ export default async function handler(req, res) {
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
     }
-    const appToken = null; // NYC account/token disconnected — anonymous requests only
+    // Anonymous by default; set a free SOCRATA_APP_TOKEN env var to avoid rate limits
+    // now that the dossier fans out to many datasets at once.
+    const appToken = process.env.SOCRATA_APP_TOKEN || null;
     const code = /^[1-5]$/.test(String(borough)) ? String(borough) : BORO_CODE[clean(borough).toLowerCase()];
     const b = Number(block);
     const l = Number(lot);
@@ -65,7 +72,7 @@ export default async function handler(req, res) {
 
     const variants = entityVariants(name);
 
-    const [corp, dob, ecb, hpd, biz] = await Promise.all([
+    const [corp, dob, ecb, hpd, biz, c311, evict, rest, cofo, permits] = await Promise.all([
       // NY State business registry — match the owner entity across common name variants
       variants.length ? getJson(NYS, NY_CORP, {
         $limit: "1",
@@ -84,6 +91,16 @@ export default async function handler(req, res) {
         $select: "business_name,dba_trade_name,business_category,license_status,contact_phone,license_creation_date",
         $order: "license_creation_date DESC", $limit: "40",
       }, appToken) : Promise.resolve([]),
+      // 311 — recent complaint volume (last ~2 years)
+      bbl10 ? getJson(NYC, C311, { $select: "count(*)", $where: `bbl='${bbl10}' AND created_date > '2024-06-01T00:00:00'` }, appToken) : Promise.resolve([]),
+      // Evictions at this lot (commercial = strong turnover/distress signal)
+      bbl10 ? getJson(NYC, EVICT, { $select: "executed_date,residential_commercial_ind", $where: `bbl='${bbl10}'`, $order: "executed_date DESC", $limit: "50" }, appToken) : Promise.resolve([]),
+      // Food tenants — restaurant inspections give the DBA + cuisine + grade + phone
+      bbl10 ? getJson(NYC, RESTAURANT, { $select: "dba,cuisine_description,grade,phone,inspection_date", $where: `bbl='${bbl10}'`, $order: "inspection_date DESC", $limit: "50" }, appToken) : Promise.resolve([]),
+      // Latest certificate of occupancy
+      bbl10 ? getJson(NYC, COFO, { $select: "c_o_issue_date,application_status_raw,job_type", $where: `bbl='${bbl10}' AND c_o_issue_date IS NOT NULL`, $order: "c_o_issue_date DESC", $limit: "1" }, appToken) : Promise.resolve([]),
+      // DOB permit activity (count)
+      bbl10 ? getJson(NYC, DOB_PERMIT, { $select: "count(*)", $where: `bbl='${bbl10}'` }, appToken) : Promise.resolve([]),
     ]);
 
     const c = corp[0];
@@ -98,15 +115,22 @@ export default async function handler(req, res) {
 
     const ecb_balance = ecb.reduce((s, r) => s + Math.max(0, toNum(r.balance_due)), 0);
 
-    // Storefront occupants — dedupe by trade name, active first, keep the top few.
+    // Storefront occupants — licensed businesses (DCWP) + food tenants (restaurant
+    // inspections). Dedupe by name, active first, keep the top few.
+    const fromDcwp = (biz || []).map((x) => ({
+      name: clean(x.dba_trade_name) || clean(x.business_name),
+      category: clean(x.business_category),
+      status: clean(x.license_status),
+      phone: clean(x.contact_phone),
+    }));
+    const fromFood = (rest || []).map((x) => ({
+      name: clean(x.dba),
+      category: [clean(x.cuisine_description), clean(x.grade) ? `grade ${clean(x.grade)}` : ""].filter(Boolean).join(" · "),
+      status: "Active",
+      phone: clean(x.phone),
+    }));
     const seenBiz = new Set();
-    const businesses = (biz || [])
-      .map((x) => ({
-        name: clean(x.dba_trade_name) || clean(x.business_name),
-        category: clean(x.business_category),
-        status: clean(x.license_status),
-        phone: clean(x.contact_phone),
-      }))
+    const businesses = [...fromDcwp, ...fromFood]
       .filter((x) => {
         if (!x.name) return false;
         const k = x.name.toUpperCase();
@@ -115,7 +139,14 @@ export default async function handler(req, res) {
         return true;
       })
       .sort((a, b) => (a.status === "Active" ? 0 : 1) - (b.status === "Active" ? 0 : 1))
-      .slice(0, 8);
+      .slice(0, 10);
+
+    const evictions = {
+      count: (evict || []).length,
+      latest: evict && evict[0] ? clean(evict[0].executed_date).slice(0, 10) : "",
+      commercial: (evict || []).some((e) => /comm/i.test(clean(e.residential_commercial_ind))),
+    };
+    const co = cofo && cofo[0] ? { date: clean(cofo[0].c_o_issue_date).slice(0, 10), status: clean(cofo[0].application_status_raw) } : null;
 
     return res.status(200).json({
       ny_corp,
@@ -124,6 +155,10 @@ export default async function handler(req, res) {
       ecb_violations: ecb.length,
       ecb_balance_due: Math.round(ecb_balance),
       hpd_violations: toNum(hpd[0] && hpd[0].count),
+      complaints_311: toNum(c311[0] && c311[0].count),
+      evictions,
+      cofo: co,
+      dob_permits: toNum(permits[0] && permits[0].count),
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "intel" });

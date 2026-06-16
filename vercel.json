@@ -11,6 +11,9 @@
     },
     "api/history.js": {
       "maxDuration": 30
+    },
+    "api/owner.js": {
+      "maxDuration": 30
     }
   }
 }

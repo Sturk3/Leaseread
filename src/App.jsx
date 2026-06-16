@@ -995,6 +995,10 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
   const [hist, setHist] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [portOpen, setPortOpen] = useState(false);
+  const [port, setPort] = useState(null);
+  const [portLoading, setPortLoading] = useState(false);
+  const [portErr, setPortErr] = useState("");
   // History needs a tax lot (borough + block + lot). PLUTO, ACRIS, and DOB rows
   // all carry these, so the deed history is available on every located result.
   const canHist = !!(r.borough && r.block && r.lot);
@@ -1017,9 +1021,27 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
     }
   }
 
+  async function togglePort() {
+    const next = !portOpen;
+    setPortOpen(next);
+    if (next && port == null) {
+      setPortLoading(true); setPortErr("");
+      try {
+        const res = await fetch("/api/owner", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pw, name: r.name }),
+        });
+        const d = await res.json();
+        if (d.error) throw new Error(d.error);
+        setPort(d);
+      } catch (e) { setPortErr(e.message || "Could not load portfolio."); setPort({ properties: [] }); }
+      finally { setPortLoading(false); }
+    }
+  }
+
   return (
     <>
-      <tr style={{ borderBottom: last && !open ? "none" : `1px solid ${C.line}` }}>
+      <tr style={{ borderBottom: last && !open && !portOpen ? "none" : `1px solid ${C.line}` }}>
         <td style={{ padding: "10px 14px", fontWeight: 600, minWidth: 200 }}>
           {r.name}
           {(r.tax_lien || r.portfolio_count > 1 || r.underbuilt) && (
@@ -1035,6 +1057,9 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
                 {open ? "▾ hide history" : "▸ deed history"}
               </button>
             )}
+            <button onClick={togglePort} className="mono lift" style={{ ...ACTION_PILL, background: portOpen ? C.goldSoft : C.panel, border: `1px solid ${portOpen ? C.gold : C.line}` }}>
+              {portOpen ? "▾ hide portfolio" : "▸ portfolio"}
+            </button>
             {lookupLinks(r).map((lk) => (
               <a key={lk.label} href={lk.href} target="_blank" rel="noreferrer" className="mono lift" style={ACTION_PILL}>{lk.label}</a>
             ))}
@@ -1073,7 +1098,38 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
           </td>
         </tr>
       )}
+      {portOpen && (
+        <tr style={{ borderBottom: last ? "none" : `1px solid ${C.line}` }}>
+          <td colSpan={colSpan} style={{ background: C.ink, padding: "4px 16px 14px" }}>
+            {portLoading ? <div style={{ color: C.muted, fontSize: 12, padding: "10px 0" }}>Loading owner’s NYC portfolio…</div>
+              : portErr ? <div style={{ color: C.red, fontSize: 12, padding: "10px 0" }}>{portErr}</div>
+              : <PortfolioList data={port} ownerName={r.name} />}
+          </td>
+        </tr>
+      )}
     </>
+  );
+}
+
+function PortfolioList({ data, ownerName }) {
+  const props = (data && data.properties) || [];
+  if (!props.length) {
+    return <div style={{ color: C.muted, fontSize: 12, padding: "10px 0" }}>No other NYC properties under this exact owner name. (Owners often use a separate LLC per building.)</div>;
+  }
+  return (
+    <div style={{ padding: "6px 0" }}>
+      <div className="mono" style={{ fontSize: 10.5, color: C.muted, letterSpacing: "0.05em", padding: "4px 0" }}>
+        OWNER PORTFOLIO — {props.length} NYC propert{props.length === 1 ? "y" : "ies"} under “{ownerName}”{data.total_assessed ? ` · $${Number(data.total_assessed).toLocaleString()} total assessed` : ""}
+      </div>
+      {props.map((p, i) => (
+        <div key={i} style={{ display: "flex", gap: 12, padding: "6px 0", borderTop: `1px solid ${C.line}`, fontSize: 12.5, alignItems: "baseline", flexWrap: "wrap" }}>
+          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.address || ""}, ${p.borough || ""} NY`)}`} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none", flex: "1 1 220px" }}>{p.address || "—"} ↗</a>
+          <span style={{ color: C.muted, width: 100 }}>{p.borough}</span>
+          <span className="mono" style={{ color: C.muted, width: 50 }}>{p.bldgclass}</span>
+          <span className="mono" style={{ color: C.muted, width: 120, whiteSpace: "nowrap" }}>{p.assessed ? "$" + Number(p.assessed).toLocaleString() : "—"}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 

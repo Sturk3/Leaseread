@@ -87,10 +87,13 @@ function gradeFrom(result, config) {
   return { overall, rec, scored };
 }
 
+// Editorial-luxury palette for trophy retail: warm paper neutrals, ink text, and a
+// refined brass/champagne accent (used sparingly). `gold`/`goldSoft` keys are kept so
+// every existing reference reskins at once. Fraunces serif + this palette = gallery feel.
 const C = {
-  ink: "#f4f4fb", panel: "#ffffff", panel2: "#eceaf7", line: "#e5e3f1",
-  ivory: "#1b1930", muted: "#6c6982", gold: "#6a5cf6", goldSoft: "rgba(106,92,246,0.10)",
-  green: "#1f9d63", amber: "#b7791f", red: "#d14a3c",
+  ink: "#f7f5f0", panel: "#ffffff", panel2: "#f0ece2", line: "#e7e1d3",
+  ivory: "#1c1a15", muted: "#8a8273", gold: "#8a6e36", goldSoft: "rgba(138,110,54,0.10)",
+  green: "#3b7a4e", amber: "#a9772a", red: "#b5483b",
 };
 
 function recColor(rec) {
@@ -307,13 +310,16 @@ export default function App() {
         {/* Header */}
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", borderBottom: `1px solid ${C.line}`, paddingBottom: 18 }}>
           <div>
-            <div className="serif" style={{ fontSize: 30, letterSpacing: "-0.01em", fontWeight: 600 }}>
+            <div className="serif" style={{ fontSize: 34, letterSpacing: "0.04em", fontWeight: 500, lineHeight: 1 }}>
               FRONTAGE<span style={{ color: C.gold }}>.</span>
             </div>
-            <div style={{ color: C.muted, fontSize: 13, marginTop: 2 }}>
+            <div className="mono" style={{ color: C.gold, fontSize: 10, marginTop: 7, letterSpacing: "0.22em" }}>
+              TROPHY RETAIL ACQUISITIONS
+            </div>
+            <div style={{ color: C.muted, fontSize: 13, marginTop: 6 }}>
               {view === "screener"
-                ? "Retail acquisitions screener — high-street trophy assets"
-                : "Deal & contact sourcing — NYC Open Data (ACRIS + DOB)"}
+                ? "Underwrite high-street flagship assets against your mandate."
+                : "Source owners & deals from NYC public records — ACRIS · DOB · PLUTO."}
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               {[["screener", "SCREENER"], ["sourcing", "SOURCING"]].map(([v, lab]) => (

@@ -10,6 +10,7 @@ const DOB_VIOL = process.env.DOB_VIOL_DATASET || "3h2n-5cm9";
 const ECB_VIOL = process.env.ECB_VIOL_DATASET || "6bgk-3dad";
 const HPD_VIOL = process.env.HPD_VIOL_DATASET || "wvxf-dwi5";
 const NY_CORP = process.env.NY_CORP_DATASET || "n9v6-gdp6";
+const DCWP_BIZ = process.env.DCWP_BIZ_DATASET || "w7w3-xahh"; // licensed businesses (storefront occupants), has bbl + dba + phone
 
 const BORO_CODE = { manhattan: "1", bronx: "2", brooklyn: "3", queens: "4", "staten island": "5" };
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
@@ -60,10 +61,11 @@ export default async function handler(req, res) {
     const blk = haveLot ? sodaQuote([String(b), String(b).padStart(5, "0")]) : "";
     const lt = haveLot ? sodaQuote([String(l), String(l).padStart(4, "0"), String(l).padStart(5, "0")]) : "";
     const lotWhere = (boroField) => `${boroField}='${code}' AND block in (${blk}) AND lot in (${lt})`;
+    const bbl10 = haveLot ? `${code}${String(b).padStart(5, "0")}${String(l).padStart(4, "0")}` : "";
 
     const variants = entityVariants(name);
 
-    const [corp, dob, ecb, hpd] = await Promise.all([
+    const [corp, dob, ecb, hpd, biz] = await Promise.all([
       // NY State business registry — match the owner entity across common name variants
       variants.length ? getJson(NYS, NY_CORP, {
         $limit: "1",
@@ -76,6 +78,12 @@ export default async function handler(req, res) {
       haveLot ? getJson(NYC, ECB_VIOL, { $select: "balance_due", $where: `${lotWhere("boro")} AND ecb_violation_status='ACTIVE'`, $limit: "500" }, appToken) : Promise.resolve([]),
       // HPD violations — open
       haveLot ? getJson(NYC, HPD_VIOL, { $select: "count(*)", $where: `${lotWhere("boroid")} AND violationstatus='Open'` }, appToken) : Promise.resolve([]),
+      // Storefront occupants — licensed businesses at this tax lot (the actual tenant/DBA)
+      bbl10 ? getJson(NYC, DCWP_BIZ, {
+        $where: `bbl='${bbl10}'`,
+        $select: "business_name,dba_trade_name,business_category,license_status,contact_phone,license_creation_date",
+        $order: "license_creation_date DESC", $limit: "40",
+      }, appToken) : Promise.resolve([]),
     ]);
 
     const c = corp[0];
@@ -90,8 +98,28 @@ export default async function handler(req, res) {
 
     const ecb_balance = ecb.reduce((s, r) => s + Math.max(0, toNum(r.balance_due)), 0);
 
+    // Storefront occupants — dedupe by trade name, active first, keep the top few.
+    const seenBiz = new Set();
+    const businesses = (biz || [])
+      .map((x) => ({
+        name: clean(x.dba_trade_name) || clean(x.business_name),
+        category: clean(x.business_category),
+        status: clean(x.license_status),
+        phone: clean(x.contact_phone),
+      }))
+      .filter((x) => {
+        if (!x.name) return false;
+        const k = x.name.toUpperCase();
+        if (seenBiz.has(k)) return false;
+        seenBiz.add(k);
+        return true;
+      })
+      .sort((a, b) => (a.status === "Active" ? 0 : 1) - (b.status === "Active" ? 0 : 1))
+      .slice(0, 8);
+
     return res.status(200).json({
       ny_corp,
+      businesses,
       dob_violations: toNum(dob[0] && dob[0].count),
       ecb_violations: ecb.length,
       ecb_balance_due: Math.round(ecb_balance),

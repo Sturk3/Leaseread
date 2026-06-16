@@ -1693,6 +1693,21 @@ function PropertyDetail({ r, pw }) {
         </div>
         <div style={{ color: C.muted, fontSize: 11, marginTop: 5 }}>No public feed of live availability — these check LoopNet/Crexi for any current listing.</div>
 
+        <div className="mono" style={title}>STOREFRONT / BUSINESS</div>
+        {intel == null ? <div style={muted}>Loading…</div> : (intel.businesses && intel.businesses.length > 0) ? (
+          <div style={{ fontSize: 12.5, lineHeight: 1.6 }}>
+            {intel.businesses.map((bz, i) => (
+              <div key={i} style={{ padding: "3px 0", borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                <span style={{ color: bz.status === "Active" ? C.ivory : C.muted, fontWeight: 600 }}>{bz.name}</span>
+                {bz.status && bz.status !== "Active" && <span className="mono" style={{ marginLeft: 6, fontSize: 9.5, color: C.amber }}>{bz.status.toUpperCase()}</span>}
+                <div style={{ color: C.muted }}>{[bz.category, bz.phone].filter(Boolean).join(" · ") || "—"}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={muted}>No licensed business on record at this lot. (Many retail tenants — clothing, banks, offices — don’t need a city license, so absence here doesn’t mean it’s vacant; check Street View / Google.)</div>
+        )}
+
         <div className="mono" style={title}>PUBLIC RECORDS</div>
         {intel == null ? <div style={muted}>Loading…</div> : (
           <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>

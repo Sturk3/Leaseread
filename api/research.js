@@ -9,12 +9,14 @@
 // burning tokens without returning). Bump to "claude-opus-4-8" for max quality only
 // if you also raise the function timeout (needs a Vercel Pro plan).
 const RESEARCH_MODEL = "claude-sonnet-4-6";
-const MAX_SEARCHES = 3; // hard cap on web searches per run — bounds both time and cost.
+// Each web_search round is a slow round-trip; >1 was blowing past Vercel's hard 60s
+// function limit. One focused search reliably fits and still grounds the brief.
+const MAX_SEARCHES = 1;
 
 function buildSystem() {
   return `You are an off-market real estate acquisitions research analyst for a firm that buys trophy / high-street RETAIL property in New York City. You are given one property and its owner of record (often an LLC). Use the web_search tool to compile a tight intelligence brief that helps the deal team decide whether to pursue the owner and how to reach the decision-maker.
 
-Be fast: run at most 3 short, targeted searches, then immediately write the brief. Do NOT narrate your searching — output ONLY the final brief.
+Be fast: run ONE focused web search (the owner/entity name + address or "New York"), then immediately write the brief from those results. Do NOT narrate your searching — output ONLY the final brief.
 
 Format the brief in markdown with these sections (omit a section only if you truly found nothing for it):
 - **Who's behind it** — the real principals/decision-makers behind the entity, any parent company or management firm, and any contact clues (names, affiliated firms).

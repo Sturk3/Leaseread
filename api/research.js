@@ -37,6 +37,10 @@ export default async function handler(req, res) {
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
     }
+    // Zero-cost deploy/version probe (no Anthropic call).
+    if (req.body && req.body.debug) {
+      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, build: "v3-single-search" });
+    }
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
     }

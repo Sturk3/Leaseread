@@ -1070,6 +1070,7 @@ function PropertyDetail({ r, pw }) {
   const [hist, setHist] = useState(null);
   const [histErr, setHistErr] = useState("");
   const [port, setPort] = useState(null);
+  const [intel, setIntel] = useState(null);
   const canHist = !!(r.borough && r.block && r.lot);
 
   useEffect(() => {
@@ -1084,6 +1085,10 @@ function PropertyDetail({ r, pw }) {
       .then((res) => res.json())
       .then((d) => { if (live) setPort(d.error ? { properties: [] } : d); })
       .catch(() => { if (live) setPort({ properties: [] }); });
+    fetch("/api/intel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: pw, borough: r.borough, block: r.block, lot: r.lot, name: r.name }) })
+      .then((res) => res.json())
+      .then((d) => { if (live) setIntel(d.error ? {} : d); })
+      .catch(() => { if (live) setIntel({}); });
     return () => { live = false; };
     // eslint-disable-next-line
   }, []);
@@ -1113,6 +1118,24 @@ function PropertyDetail({ r, pw }) {
           </div>
           {r.buildable_sqft > 0 && <div style={{ color: C.green, marginTop: 2 }}>▲ {Number(r.buildable_sqft).toLocaleString()} sf unused air rights (built {r.built_far} / max {r.max_far} FAR)</div>}
         </div>
+
+        <div className="mono" style={title}>PUBLIC RECORDS</div>
+        {intel == null ? <div style={muted}>Loading…</div> : (
+          <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>
+            {intel.ny_corp ? (
+              <div>
+                <span style={{ color: C.ivory }}>NY State registry:</span> {String(intel.ny_corp.entity_type || "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase())}{intel.ny_corp.filed ? ` · filed ${intel.ny_corp.filed}` : ""}
+                <div style={{ color: C.muted }}>Process: {intel.ny_corp.process_name}{intel.ny_corp.process_address ? ` — ${intel.ny_corp.process_address}` : ""}</div>
+              </div>
+            ) : <div style={{ color: C.muted }}>NY State registry: no exact entity match (often a single-building LLC, or an individual owner).</div>}
+            <div style={{ marginTop: 4 }}>
+              <span style={{ color: C.ivory }}>Violations:</span>{" "}
+              <span style={{ color: intel.dob_violations ? C.red : C.muted }}>DOB {intel.dob_violations || 0}</span> ·{" "}
+              <span style={{ color: intel.ecb_violations ? C.red : C.muted }}>ECB {intel.ecb_violations || 0}{intel.ecb_balance_due ? ` ($${Number(intel.ecb_balance_due).toLocaleString()} due)` : ""}</span> ·{" "}
+              <span style={{ color: intel.hpd_violations ? C.red : C.muted }}>HPD {intel.hpd_violations || 0} open</span>
+            </div>
+          </div>
+        )}
 
         <div className="mono" style={title}>RESEARCH — more sources</div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

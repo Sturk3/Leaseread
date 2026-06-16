@@ -1213,15 +1213,12 @@ function ResearchBrief({ r, pw }) {
   const [state, setState] = useState("idle"); // idle | loading | done | error
   const [brief, setBrief] = useState("");
   const [err, setErr] = useState("");
-  const run = () => {
+  const run = async () => {
     setState("loading"); setErr("");
-    fetch("/api/research", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned }),
-    })
-      .then((res) => res.json())
-      .then((d) => { if (d.error) { setErr(d.error); setState("error"); } else { setBrief(d.brief || ""); setState("done"); } })
-      .catch((e) => { setErr(e.message || "Research failed."); setState("error"); });
+    try {
+      const d = await postJSON("/api/research", { password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned });
+      setBrief(d.brief || ""); setState("done");
+    } catch (e) { setErr(e.message || "Research failed."); setState("error"); }
   };
   return (
     <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>

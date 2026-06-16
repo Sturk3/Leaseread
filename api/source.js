@@ -420,6 +420,16 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
       }
       if (anchor) { anchor.distance = 0; anchor.pinned = true; }
     }
+    // Cap nearest-first so a dense, large-radius search can't exceed Vercel's ~4.5MB
+    // response limit (which returns a non-JSON error page and breaks the client).
+    // Smaller radii return far fewer than the cap, so they're unaffected; only the
+    // farthest lots in a huge circle get dropped. The pinned anchor is always kept.
+    const RADIUS_CAP = 1200;
+    if (deals.length > RADIUS_CAP) {
+      const pinnedDeals = deals.filter((d) => d.pinned);
+      const rest = deals.filter((d) => !d.pinned).slice(0, Math.max(0, RADIUS_CAP - pinnedDeals.length));
+      deals = [...pinnedDeals, ...rest].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (a.distance ?? 1e9) - (b.distance ?? 1e9));
+    }
     const keep = new Set(deals.map((d) => d.deal_id));
     return { deals, contacts: contacts.filter((c) => keep.has(c.deal_id)) };
   }

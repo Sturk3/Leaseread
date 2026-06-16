@@ -20,6 +20,9 @@
     },
     "api/research.js": {
       "maxDuration": 60
+    },
+    "api/leasescan.js": {
+      "maxDuration": 60
     }
   }
 }

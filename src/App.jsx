@@ -316,10 +316,12 @@ export default function App() {
             <div style={{ color: C.muted, fontSize: 13, marginTop: 6 }}>
               {view === "screener"
                 ? "Underwrite high-street flagship assets against your mandate."
+                : view === "radar"
+                ? "Scan a corridor for leases estimated to be coming available — off-market, before they list."
                 : "Source owners & deals from NYC public records — ACRIS · DOB · PLUTO."}
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              {[["screener", "SCREENER"], ["sourcing", "SOURCING"]].map(([v, lab]) => (
+              {[["screener", "SCREENER"], ["sourcing", "SOURCING"], ["radar", "LEASE RADAR"]].map(([v, lab]) => (
                 <button key={v} onClick={() => setView(v)} className="mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "6px 13px", borderRadius: 7, border: `1px solid ${view === v ? C.gold : C.line}`, background: view === v ? C.goldSoft : "transparent", color: view === v ? C.gold : C.muted }}>
                   {lab}
@@ -341,6 +343,8 @@ export default function App() {
         </div>
 
         {view === "sourcing" && <Sourcing pw={pw} />}
+
+        {view === "radar" && <LeaseRadar pw={pw} />}
 
         {view === "screener" && (<>
         {showSettings && (
@@ -1035,6 +1039,287 @@ function Sourcing({ pw }) {
               and owners — as your leads. Narrow by asset type and street, then export a clean CSV.
             </div>
           )}
+    </div>
+  );
+}
+
+// ── LEASE RADAR ──────────────────────────────────────────────────────────────
+// Scans a corridor of properties, pulls their recorded ACRIS leases, and ranks by
+// an ESTIMATED expiration (latest recorded lease + assumed term). Surfaces lots
+// whose leases are estimated to be coming available — off-market, before they list.
+const radarNorm = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
+const monthYear = (d) => {
+  if (!d) return "";
+  const dt = new Date(d);
+  return Number.isNaN(dt.getTime()) ? "" : dt.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+};
+function radarBadge(L) {
+  if (!L) return null;
+  if (L.status === "expiring") return { text: "OFF-MARKET · EXPIRING", bg: C.goldSoft, fg: C.gold, border: C.gold };
+  if (L.status === "expired") return { text: "EST. LEASE ENDED", bg: "rgba(183,121,31,0.12)", fg: C.amber, border: C.amber };
+  if (L.status === "active") return { text: "LONG LEASE", bg: "transparent", fg: C.muted, border: C.line };
+  return { text: "NO LEASE ON RECORD", bg: "transparent", fg: C.muted, border: C.line };
+}
+function mteText(L) {
+  if (!L || L.months_to_expiry == null) return "";
+  const m = L.months_to_expiry;
+  if (m < 0) return `est. ended ~${-m} mo ago`;
+  if (m === 0) return "est. ending now";
+  return `est. ~${m} mo out`;
+}
+function ScoreBar({ score }) {
+  const col = score >= 60 ? C.green : score >= 35 ? C.amber : C.muted;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div style={{ width: 46, height: 6, background: C.panel2, borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ width: `${score}%`, height: "100%", background: col }} />
+      </div>
+      <span className="mono" style={{ fontSize: 11, color: col }}>{score}</span>
+    </div>
+  );
+}
+const RADAR_COLS = [
+  ["Rank", (r, i) => i + 1], ["Status", (r) => r.lease.status], ["Off-market", (r) => (r.lease.off_market_opportunity ? "YES" : "")],
+  ["Address", (r) => r.address], ["Borough", (r) => r.borough], ["Tenant", (r) => r.lease.tenant || ""],
+  ["Owner", (r) => r.name || ""], ["Latest lease", (r) => r.lease.latest_lease_date || ""],
+  ["Est. expiration", (r) => r.lease.estimated_expiration || ""], ["Months to expiry", (r) => r.lease.months_to_expiry ?? ""],
+  ["Term yrs", (r) => r.lease.term_years], ["Leases on file", (r) => r.lease.lease_count], ["Radar score", (r) => r.lease.score],
+];
+function radarCSV(rows) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const head = RADAR_COLS.map((c) => esc(c[0])).join(",");
+  const body = rows.map((r, i) => RADAR_COLS.map((c) => esc(c[1](r, i))).join(",")).join("\n");
+  return head + "\n" + body;
+}
+
+function RadarRow({ r, rank, pw, last }) {
+  const [open, setOpen] = useState(false);
+  const L = r.lease;
+  const badge = radarBadge(L);
+  const off = L.off_market_opportunity;
+  const td = { padding: "11px 14px", borderBottom: last && !open ? "none" : `1px solid ${C.line}`, verticalAlign: "top" };
+  return (
+    <>
+      <tr style={{ background: off ? C.goldSoft : "transparent" }}>
+        <td className="mono" style={{ ...td, color: C.muted }}>{rank}</td>
+        <td style={td}>
+          {badge && (
+            <span className="mono" style={{ fontSize: 10, padding: "3px 7px", borderRadius: 5, border: `1px solid ${badge.border}`, background: badge.bg, color: badge.fg, whiteSpace: "nowrap" }}>
+              {badge.text}
+            </span>
+          )}
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 4 }}>{mteText(L)}</div>
+        </td>
+        <td style={td}>
+          <a href={mapUrl(r)} target="_blank" rel="noreferrer" style={{ color: C.ivory, textDecoration: "none", fontWeight: 600 }}>{r.address || "—"}</a>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>{r.borough}</div>
+        </td>
+        <td style={td}>
+          <div style={{ fontSize: 13 }}>{L.estimated_expiration ? monthYear(L.estimated_expiration) : "—"}</div>
+          {L.latest_lease_date && (
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+              leased {monthYear(L.latest_lease_date)} · {L.term_years}yr term{L.lease_count > 1 ? ` · ${L.lease_count} on file` : ""}
+            </div>
+          )}
+        </td>
+        <td style={{ ...td, fontSize: 12.5 }}>{L.tenant || <span style={{ color: C.muted }}>—</span>}</td>
+        <td style={{ ...td, fontSize: 12.5 }}>{r.name || <span style={{ color: C.muted }}>—</span>}</td>
+        <td style={td}><ScoreBar score={L.score} /></td>
+        <td style={{ ...td, textAlign: "right" }}>
+          <button onClick={() => setOpen((o) => !o)} className="mono" style={{ ...ACTION_PILL, border: `1px solid ${open ? C.gold : C.line}` }}>
+            {open ? "▾ close" : "▸ details"}
+          </button>
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={8} style={{ padding: "0 14px 18px", borderBottom: last ? "none" : `1px solid ${C.line}`, background: off ? C.goldSoft : "transparent" }}>
+            <PropertyDetail r={r} pw={pw} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function LeaseRadar({ pw }) {
+  const [nearAddress, setNearAddress] = useState("");
+  const [pickedCoords, setPickedCoords] = useState(null);
+  const [radiusMiles, setRadiusMiles] = useState("0.25");
+  const [assetType, setAssetType] = useState("retail");
+  const [term, setTerm] = useState(10);
+  const [horizon, setHorizon] = useState(24);
+  const [offOnly, setOffOnly] = useState(false);
+
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState("");
+  const [rows, setRows] = useState(null);
+  const [meta, setMeta] = useState(null);
+
+  async function run() {
+    setError(""); setRows(null); setMeta(null);
+    if (!pickedCoords) { setError("Type an address and pick it from the dropdown to anchor the scan."); return; }
+    setLoading(true);
+    try {
+      setProgress("Finding properties in the radius (PLUTO)…");
+      const src = await postJSON("/api/source", {
+        password: pw, sources: ["pluto"], assetType, radiusMiles,
+        centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl,
+      });
+      const leads = src.leads || [];
+      if (!leads.length) { setRows([]); setMeta({ center: src.center }); return; }
+
+      setProgress(`Reading recorded leases for ${Math.min(leads.length, 60)} properties (ACRIS)…`);
+      const properties = leads.slice(0, 60).map((r) => ({ borough: r.borough, block: r.block, lot: r.lot, address: r.address }));
+      const scan = await postJSON("/api/leasescan", { password: pw, properties, termYears: term, horizonMonths: horizon });
+
+      const map = {};
+      for (const x of scan.results || []) map[x.key] = x;
+      const merged = leads
+        .map((r) => ({ ...r, lease: map[`${radarNorm(r.borough)}|${radarNorm(r.block)}|${radarNorm(r.lot)}`] || null }))
+        .filter((r) => r.lease)
+        .sort((a, b) => b.lease.score - a.lease.score);
+      setRows(merged);
+      setMeta({ center: src.center, termYears: scan.termYears, horizonMonths: scan.horizonMonths, scanned: merged.length });
+    } catch (e) {
+      setError(e.message || "Lease scan failed.");
+    } finally {
+      setLoading(false); setProgress("");
+    }
+  }
+
+  const shown = rows ? (offOnly ? rows.filter((r) => r.lease.off_market_opportunity) : rows) : null;
+  const offCount = rows ? rows.filter((r) => r.lease.off_market_opportunity).length : 0;
+
+  function csvName() {
+    const parts = ["frontage_lease_radar"];
+    if (nearAddress) parts.push(nearAddress.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 30));
+    parts.push(new Date().toISOString().slice(0, 10));
+    return parts.join("_") + ".csv";
+  }
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+          <label style={{ gridColumn: "span 2" }}>
+            <div className="mono" style={labelStyle}>ANCHOR ADDRESS — type &amp; pick</div>
+            <div style={{ marginTop: 4 }}>
+              <AddressAutocomplete
+                value={nearAddress}
+                onChange={(t) => { setNearAddress(t); setPickedCoords(null); }}
+                onPick={(label, lat, lon, bbl) => { setNearAddress(label); setPickedCoords({ lat, lon, bbl }); }}
+                placeholder="e.g. 200 5th Ave…"
+                style={{ ...fieldStyle, width: "100%" }}
+              />
+            </div>
+          </label>
+          <label>
+            <div className="mono" style={labelStyle}>RADIUS</div>
+            <select value={radiusMiles} onChange={(e) => setRadiusMiles(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
+              {[["0.05", "0.05 mi · ~1 block"], ["0.1", "0.1 mi · ~2 blocks"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"], ["1", "1 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          <label>
+            <div className="mono" style={labelStyle}>ASSET TYPE</div>
+            <select value={assetType} onChange={(e) => setAssetType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
+              {ASSET_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          <label>
+            <div className="mono" style={labelStyle}>ASSUMED LEASE TERM</div>
+            <select value={term} onChange={(e) => setTerm(Number(e.target.value))} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
+              {[[5, "5 years"], [10, "10 years (typical retail)"], [15, "15 years"], [20, "20 years"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          <label>
+            <div className="mono" style={labelStyle}>“EXPIRING SOON” WINDOW</div>
+            <select value={horizon} onChange={(e) => setHorizon(Number(e.target.value))} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
+              {[[12, "within 12 months"], [24, "within 24 months"], [36, "within 36 months"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+          Pick an address to anchor the scan, then a radius. FRONTAGE pulls every property in the circle (nearest 60),
+          reads each one’s recorded leases from ACRIS, and ranks by an <strong style={{ color: C.ivory }}>estimated</strong> expiration —
+          latest recorded lease + your assumed term. The <strong style={{ color: C.gold }}>off-market opportunities</strong> (leases
+          estimated to be ending soon, not yet listed) float to the top.
+        </div>
+
+        <button onClick={run} disabled={loading}
+          style={{ marginTop: 14, width: "100%", cursor: loading ? "default" : "pointer", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: loading ? C.panel2 : C.gold, color: loading ? C.muted : "#ffffff" }}>
+          {loading ? (progress || "Scanning…") : "Scan for expiring leases →"}
+        </button>
+        {error && <div style={{ marginTop: 12, color: C.red, fontSize: 13 }}>{error}</div>}
+      </div>
+
+      {/* Honest data disclaimer — these are modeled estimates, not actual dates. */}
+      <div style={{ marginTop: 14, background: "rgba(183,121,31,0.08)", border: `1px solid ${C.amber}`, borderRadius: 10, padding: "11px 14px", fontSize: 12, color: C.ivory, lineHeight: 1.55 }}>
+        <strong style={{ color: C.amber }}>⚠ Estimates, not actual dates.</strong> NYC has no public dataset of lease expiration dates. These windows are
+        modeled from the <em>latest recorded ACRIS lease</em> + your assumed term, so they’re a prospecting signal — verify each one
+        (open ▸ details → AI research, on-market links, deed/lease history). Spaces with no recorded lease may be owner-occupied or vacant.
+      </div>
+
+      {shown && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "18px 0 12px", flexWrap: "wrap", gap: 10 }}>
+            <div className="serif" style={{ fontSize: 17 }}>
+              {rows.length} propert{rows.length === 1 ? "y" : "ies"} scanned
+              {offCount > 0 && <span style={{ color: C.gold }}> · {offCount} off-market opportunit{offCount === 1 ? "y" : "ies"}</span>}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button onClick={() => setOffOnly((v) => !v)} className="mono"
+                style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${offOnly ? C.gold : C.line}`, background: offOnly ? C.goldSoft : "transparent", color: offOnly ? C.gold : C.muted }}>
+                {offOnly ? "✓ " : ""}OFF-MARKET ONLY
+              </button>
+              <button onClick={() => rows.length && downloadBlob(radarCSV(rows), csvName(), "text/csv")} className="lift mono"
+                style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>
+            </div>
+          </div>
+          {meta?.center && (
+            <div style={{ margin: "-4px 0 12px", fontSize: 12.5, color: C.muted }}>
+              Within <strong style={{ color: C.gold }}>{meta.center.radiusMiles} mi</strong> of {meta.center.label} ·
+              assumed {meta.termYears}yr term · “soon” = within {meta.horizonMonths} months. Ranked most-actionable first.
+            </div>
+          )}
+
+          {shown.length > 0 ? (
+            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr className="mono" style={{ color: C.muted, fontSize: 11, letterSpacing: "0.04em" }}>
+                    {["#", "Status", "Address", "Est. expiration", "Tenant", "Owner", "Radar score", ""].map((c, i) => (
+                      <th key={i} style={{ textAlign: i === 7 ? "right" : "left", padding: "11px 14px", borderBottom: `1px solid ${C.line}`, whiteSpace: "nowrap" }}>{c.toUpperCase()}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((r, i) => (
+                    <RadarRow key={`${r.borough}-${r.block}-${r.lot}-${i}`} r={r} rank={i + 1} pw={pw} last={i === shown.length - 1} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ color: C.muted, fontSize: 13 }}>
+              {rows.length === 0
+                ? "No properties matched in that radius. Try a wider radius or a different asset type."
+                : "No off-market opportunities in this set — every scanned lot reads as a long lease or has no recorded lease. Toggle off the filter to see them all."}
+            </div>
+          )}
+        </>
+      )}
+
+      {!shown && !loading && (
+        <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
+          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>What this does.</span> Anchor on an address, set a radius, and FRONTAGE
+          scans every property around it for recorded leases — then estimates which ones are coming available so you can reach the owner
+          before the space ever lists. This is the off-market wedge: CoStar shows you what’s already on the market; Lease Radar points you
+          at what’s <em>about to be</em>.
+        </div>
+      )}
     </div>
   );
 }

@@ -87,13 +87,10 @@ function gradeFrom(result, config) {
   return { overall, rec, scored };
 }
 
-// Editorial-luxury palette for trophy retail: warm paper neutrals, ink text, and a
-// refined brass/champagne accent (used sparingly). `gold`/`goldSoft` keys are kept so
-// every existing reference reskins at once. Fraunces serif + this palette = gallery feel.
 const C = {
-  ink: "#f7f5f0", panel: "#ffffff", panel2: "#f0ece2", line: "#e7e1d3",
-  ivory: "#1c1a15", muted: "#8a8273", gold: "#8a6e36", goldSoft: "rgba(138,110,54,0.10)",
-  green: "#3b7a4e", amber: "#a9772a", red: "#b5483b",
+  ink: "#f4f4fb", panel: "#ffffff", panel2: "#eceaf7", line: "#e5e3f1",
+  ivory: "#1b1930", muted: "#6c6982", gold: "#6a5cf6", goldSoft: "rgba(106,92,246,0.10)",
+  green: "#1f9d63", amber: "#b7791f", red: "#d14a3c",
 };
 
 function recColor(rec) {
@@ -1109,18 +1106,40 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
   );
 }
 
-// A street-level photo of the property. Uses Google's keyless Street View embed
-// (no API key, no billing — same no-key approach as the Maps links) keyed off the
-// PLUTO lat/lon. Falls back to an address search when there are no coordinates.
+// A street-level photo of the property, keyed off the PLUTO lat/lon.
+// Google blocked the old keyless Street View embed in 2026 (it now 301s and sends
+// X-Frame-Options: SAMEORIGIN, so browsers refuse to render it in our iframe). The
+// supported replacement is the Maps Embed API, which IS free (no usage charge, no
+// billing) but needs an API key. If `VITE_GMAPS_EMBED_KEY` is set we render the real
+// inline photo; otherwise we show a clickable card that opens Street View in a new tab.
+const GMAPS_EMBED_KEY = import.meta.env.VITE_GMAPS_EMBED_KEY || "";
 function PropertyPhoto({ r }) {
   if (r.lat == null || r.lon == null) return null;
-  const src = `https://maps.google.com/maps?q=&layer=c&cbll=${r.lat},${r.lon}&cbp=12,0,0,0,0&output=svembed`;
   const pano = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${r.lat},${r.lon}`;
+  const sat = `https://www.google.com/maps/search/?api=1&query=${r.lat},${r.lon}`;
+  if (GMAPS_EMBED_KEY) {
+    const src = `https://www.google.com/maps/embed/v1/streetview?key=${GMAPS_EMBED_KEY}&location=${r.lat},${r.lon}&fov=80`;
+    return (
+      <div style={{ marginBottom: 14 }}>
+        <iframe title="Street View" src={src} loading="lazy"
+          style={{ width: "100%", height: 190, border: `1px solid ${C.line}`, borderRadius: 10, display: "block" }} />
+        <a href={pano} target="_blank" rel="noreferrer" className="mono" style={{ display: "inline-block", marginTop: 5, fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ open full Street View</a>
+      </div>
+    );
+  }
+  // Keyless fallback: a tasteful photo card that links out (always works).
   return (
-    <div style={{ marginBottom: 14 }}>
-      <iframe title="Street View" src={src} loading="lazy" referrerPolicy="no-referrer-when-downgrade"
-        style={{ width: "100%", height: 190, border: `1px solid ${C.line}`, borderRadius: 10, display: "block" }} />
-      <a href={pano} target="_blank" rel="noreferrer" className="mono" style={{ display: "inline-block", marginTop: 5, fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ open full Street View</a>
+    <div style={{ marginBottom: 14, display: "flex", gap: 8 }}>
+      <a href={pano} target="_blank" rel="noreferrer" className="lift"
+        style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, height: 90, background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, color: C.gold, textDecoration: "none" }}>
+        <span style={{ fontSize: 22 }}>📷</span>
+        <span className="mono" style={{ fontSize: 10.5 }}>STREET VIEW ↗</span>
+      </a>
+      <a href={sat} target="_blank" rel="noreferrer" className="lift"
+        style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, height: 90, background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, color: C.gold, textDecoration: "none" }}>
+        <span style={{ fontSize: 22 }}>🛰️</span>
+        <span className="mono" style={{ fontSize: 10.5 }}>MAP / SATELLITE ↗</span>
+      </a>
     </div>
   );
 }

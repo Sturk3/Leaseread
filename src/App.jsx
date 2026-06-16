@@ -1554,19 +1554,22 @@ function PropertyPhoto({ r }) {
       </div>
     );
   }
-  // Keyless fallback: a tasteful photo card that links out (always works).
+  // Keyless default: an actual aerial image of the property from Esri World Imagery
+  // (free, no key) so you can see the building, plus Street View / Map links below.
+  // For a street-level storefront photo, set VITE_GMAPS_EMBED_KEY (free Google key).
+  const d = 0.0009; // ~100m half-span around the lot
+  const bbox = `${r.lon - d},${r.lat - d},${r.lon + d},${r.lat + d}`;
+  const aerial = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=620,300&format=jpg&f=image`;
   return (
-    <div style={{ marginBottom: 14, display: "flex", gap: 8 }}>
-      <a href={pano} target="_blank" rel="noreferrer" className="lift"
-        style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, height: 90, background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, color: C.gold, textDecoration: "none" }}>
-        <span style={{ fontSize: 22 }}>📷</span>
-        <span className="mono" style={{ fontSize: 10.5 }}>STREET VIEW ↗</span>
+    <div style={{ marginBottom: 14 }}>
+      <a href={sat} target="_blank" rel="noreferrer" style={{ display: "block" }}>
+        <img src={aerial} alt="Aerial view of the property" loading="lazy"
+          style={{ width: "100%", height: 190, objectFit: "cover", border: `1px solid ${C.line}`, borderRadius: 10, display: "block" }} />
       </a>
-      <a href={sat} target="_blank" rel="noreferrer" className="lift"
-        style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, height: 90, background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, color: C.gold, textDecoration: "none" }}>
-        <span style={{ fontSize: 22 }}>🛰️</span>
-        <span className="mono" style={{ fontSize: 10.5 }}>MAP / SATELLITE ↗</span>
-      </a>
+      <div style={{ display: "flex", gap: 12, marginTop: 5 }}>
+        <a href={pano} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ Street View</a>
+        <a href={sat} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ Map / Satellite</a>
+      </div>
     </div>
   );
 }

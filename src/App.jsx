@@ -1748,6 +1748,15 @@ function PropertyDetail({ r, pw }) {
               <span style={{ color: intel.ecb_violations ? C.red : C.muted }}>ECB {intel.ecb_violations || 0}{intel.ecb_balance_due ? ` ($${Number(intel.ecb_balance_due).toLocaleString()} due)` : ""}</span> ·{" "}
               <span style={{ color: intel.hpd_violations ? C.red : C.muted }}>HPD {intel.hpd_violations || 0} open</span>
             </div>
+            <div style={{ marginTop: 4 }}>
+              <span style={{ color: C.ivory }}>City records:</span>{" "}
+              <span style={{ color: C.muted }}>311: {intel.complaints_311 || 0} (2yr)</span> ·{" "}
+              <span style={{ color: C.muted }}>DOB permits: {intel.dob_permits || 0}</span> ·{" "}
+              <span style={{ color: intel.evictions && intel.evictions.count ? (intel.evictions.commercial ? C.amber : C.muted) : C.muted }}>
+                Evictions: {intel.evictions ? intel.evictions.count : 0}{intel.evictions && intel.evictions.commercial ? " (commercial)" : ""}{intel.evictions && intel.evictions.latest ? ` · last ${intel.evictions.latest}` : ""}
+              </span>
+              {intel.cofo && <> · <span style={{ color: C.muted }}>C of O: {intel.cofo.date}{intel.cofo.status ? ` (${intel.cofo.status.toLowerCase()})` : ""}</span></>}
+            </div>
           </div>
         )}
 

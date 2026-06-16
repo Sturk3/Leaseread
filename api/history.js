@@ -13,6 +13,7 @@ const PARTY_ROLE = { "1": "grantor/seller", "2": "grantee/buyer", "3": "party" }
 // Friendly labels for the common ACRIS document types.
 const DOC_LABEL = {
   DEED: "Deed", MTGE: "Mortgage", SAT: "Satisfaction", ASST: "Assignment", AGMT: "Agreement",
+  LEAS: "Lease", LSE: "Lease", MLSE: "Memo of Lease", SLEA: "Sublease",
   "AL&R": "Assign. Leases & Rents", "TL&R": "Term. Leases & Rents", RPTT: "Transfer Tax Return",
   LIS: "Lis Pendens", CORR: "Correction", PAT: "Power of Attorney", UCC1: "UCC Filing",
   UCC3: "UCC Amendment", MMTG: "Mortgage Modification", SPRD: "Spreader Agreement",

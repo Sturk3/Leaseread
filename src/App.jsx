@@ -742,6 +742,27 @@ function lookupLinks(r) {
   ];
 }
 
+// Deep links into NYC property-research sites + commercial listing/lease sources.
+const BORO_CODE = { Manhattan: "1", Bronx: "2", Brooklyn: "3", Queens: "4", "Staten Island": "5" };
+function researchLinks(r) {
+  const boro = BORO_CODE[r.borough];
+  const block = r.block ? Number(r.block) : null;
+  const lot = r.lot ? Number(r.lot) : null;
+  const addrQ = encodeURIComponent(`${r.address || ""} ${r.borough || ""} NY`);
+  const links = [];
+  if (boro && block && lot) {
+    links.push({ label: "ZoLa zoning", href: `https://zola.planning.nyc.gov/lot/${boro}/${block}/${lot}` });
+    links.push({ label: "DOB filings", href: `http://a810-bisweb.nyc.gov/bisweb/PropertyProfileOverviewServlet?boro=${boro}&block=${block}&lot=${lot}` });
+    links.push({ label: "ACRIS", href: `https://a836-acris.nyc.gov/DS/DocumentSearch/BBL` });
+  }
+  if (r.lat != null && r.lon != null) links.push({ label: "Street View", href: `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${r.lat},${r.lon}` });
+  links.push({ label: "PropertyShark", href: `https://www.google.com/search?q=${encodeURIComponent(`site:propertyshark.com ${r.address} ${r.borough}`)}` });
+  links.push({ label: "LoopNet", href: `https://www.google.com/search?q=${encodeURIComponent(`site:loopnet.com ${r.address} ${r.borough}`)}` });
+  links.push({ label: "Crexi", href: `https://www.google.com/search?q=${encodeURIComponent(`site:crexi.com ${r.address} ${r.borough}`)}` });
+  links.push({ label: "Tenants", href: `https://www.google.com/search?q=${addrQ}+store+OR+tenant` });
+  return links;
+}
+
 // Google-Maps-style address lookup using NYC GeoSearch autocomplete (free, no key,
 // CORS-open so the browser calls it directly). Pick a suggestion -> exact coords.
 function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
@@ -992,56 +1013,10 @@ function LeadTable({ rows, statusEditor, pw }) {
 
 function LeadRow({ r, last, statusEditor, pw, colSpan }) {
   const [open, setOpen] = useState(false);
-  const [hist, setHist] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
-  const [portOpen, setPortOpen] = useState(false);
-  const [port, setPort] = useState(null);
-  const [portLoading, setPortLoading] = useState(false);
-  const [portErr, setPortErr] = useState("");
-  // History needs a tax lot (borough + block + lot). PLUTO, ACRIS, and DOB rows
-  // all carry these, so the deed history is available on every located result.
-  const canHist = !!(r.borough && r.block && r.lot);
-
-  async function toggle() {
-    const next = !open;
-    setOpen(next);
-    if (next && hist == null && canHist) {
-      setLoading(true); setErr("");
-      try {
-        const res = await fetch("/api/history", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password: pw, borough: r.borough, block: r.block, lot: r.lot }),
-        });
-        const d = await res.json();
-        if (d.error) throw new Error(d.error);
-        setHist(d.history || []);
-      } catch (e) { setErr(e.message || "Could not load history."); setHist([]); }
-      finally { setLoading(false); }
-    }
-  }
-
-  async function togglePort() {
-    const next = !portOpen;
-    setPortOpen(next);
-    if (next && port == null) {
-      setPortLoading(true); setPortErr("");
-      try {
-        const res = await fetch("/api/owner", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password: pw, name: r.name }),
-        });
-        const d = await res.json();
-        if (d.error) throw new Error(d.error);
-        setPort(d);
-      } catch (e) { setPortErr(e.message || "Could not load portfolio."); setPort({ properties: [] }); }
-      finally { setPortLoading(false); }
-    }
-  }
 
   return (
     <>
-      <tr style={{ borderBottom: last && !open && !portOpen ? "none" : `1px solid ${C.line}` }}>
+      <tr style={{ borderBottom: last && !open ? "none" : `1px solid ${C.line}` }}>
         <td style={{ padding: "10px 14px", fontWeight: 600, minWidth: 200 }}>
           {r.name}
           {(r.tax_lien || r.portfolio_count > 1 || r.underbuilt) && (
@@ -1051,18 +1026,10 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
               {r.portfolio_count > 1 && <span className="mono" style={{ fontSize: 9.5, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.gold, whiteSpace: "nowrap" }}>OWNS {r.portfolio_count}</span>}
             </div>
           )}
-          <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            {canHist && (
-              <button onClick={toggle} className="mono lift" style={{ ...ACTION_PILL, background: open ? C.goldSoft : C.panel, border: `1px solid ${open ? C.gold : C.line}` }}>
-                {open ? "▾ hide history" : "▸ deed history"}
-              </button>
-            )}
-            <button onClick={togglePort} className="mono lift" style={{ ...ACTION_PILL, background: portOpen ? C.goldSoft : C.panel, border: `1px solid ${portOpen ? C.gold : C.line}` }}>
-              {portOpen ? "▾ hide portfolio" : "▸ portfolio"}
+          <div style={{ marginTop: 6 }}>
+            <button onClick={() => setOpen((o) => !o)} className="mono lift" style={{ ...ACTION_PILL, padding: "4px 11px", background: open ? C.goldSoft : C.panel, border: `1px solid ${open ? C.gold : C.line}` }}>
+              {open ? "▾ hide details" : "▸ details"}
             </button>
-            {lookupLinks(r).map((lk) => (
-              <a key={lk.label} href={lk.href} target="_blank" rel="noreferrer" className="mono lift" style={ACTION_PILL}>{lk.label}</a>
-            ))}
           </div>
         </td>
         <td style={{ padding: "10px 14px", color: C.muted }}>{r.entity_type}</td>
@@ -1090,24 +1057,81 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
       </tr>
       {open && (
         <tr style={{ borderBottom: last ? "none" : `1px solid ${C.line}` }}>
-          <td colSpan={colSpan} style={{ background: C.ink, padding: "4px 16px 14px" }}>
-            {loading ? <div style={{ color: C.muted, fontSize: 12, padding: "10px 0" }}>Loading history…</div>
-              : err ? <div style={{ color: C.red, fontSize: 12, padding: "10px 0" }}>{err}</div>
-              : hist && hist.length === 0 ? <div style={{ color: C.muted, fontSize: 12, padding: "10px 0" }}>No recorded ACRIS documents for this lot.</div>
-              : <HistoryList hist={hist || []} />}
-          </td>
-        </tr>
-      )}
-      {portOpen && (
-        <tr style={{ borderBottom: last ? "none" : `1px solid ${C.line}` }}>
-          <td colSpan={colSpan} style={{ background: C.ink, padding: "4px 16px 14px" }}>
-            {portLoading ? <div style={{ color: C.muted, fontSize: 12, padding: "10px 0" }}>Loading owner’s NYC portfolio…</div>
-              : portErr ? <div style={{ color: C.red, fontSize: 12, padding: "10px 0" }}>{portErr}</div>
-              : <PortfolioList data={port} ownerName={r.name} />}
+          <td colSpan={colSpan} style={{ background: C.ink, padding: "4px 18px 18px" }}>
+            <PropertyDetail r={r} pw={pw} />
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+function PropertyDetail({ r, pw }) {
+  const [hist, setHist] = useState(null);
+  const [histErr, setHistErr] = useState("");
+  const [port, setPort] = useState(null);
+  const canHist = !!(r.borough && r.block && r.lot);
+
+  useEffect(() => {
+    let live = true;
+    if (canHist) {
+      fetch("/api/history", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: pw, borough: r.borough, block: r.block, lot: r.lot }) })
+        .then((res) => res.json())
+        .then((d) => { if (live) { d.error ? setHistErr(d.error) : setHist(d.history || []); } })
+        .catch((e) => { if (live) setHistErr(e.message || "Could not load history."); });
+    }
+    fetch("/api/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: pw, name: r.name }) })
+      .then((res) => res.json())
+      .then((d) => { if (live) setPort(d.error ? { properties: [] } : d); })
+      .catch(() => { if (live) setPort({ properties: [] }); });
+    return () => { live = false; };
+    // eslint-disable-next-line
+  }, []);
+
+  const title = { fontSize: 10.5, color: C.muted, letterSpacing: "0.06em", margin: "16px 0 7px" };
+  const muted = { color: C.muted, fontSize: 12, padding: "8px 0" };
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 22, paddingTop: 8 }}>
+      <div>
+        <div className="mono" style={{ ...title, marginTop: 0 }}>HOW TO REACH</div>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{r.name} <span style={{ color: C.muted, fontWeight: 400, fontSize: 12 }}>· {r.entity_type}</span></div>
+        <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>
+          {mailing(r) || "mailing address not on record"}
+          {r.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9.5, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber }}>{r.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+          {lookupLinks(r).map((lk) => <a key={lk.label} href={lk.href} target="_blank" rel="noreferrer" className="mono lift" style={ACTION_PILL}>{lk.label}</a>)}
+        </div>
+
+        <div className="mono" style={title}>PROPERTY</div>
+        <div style={{ fontSize: 13 }}>
+          <a href={mapUrl(r)} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{r.address || "—"} ↗</a>
+          <div style={{ color: C.muted, marginTop: 2 }}>
+            {[r.borough, r.doc_type && `class ${r.doc_type}`, (fmtAmount(r.amount) ? `assessed ${fmtAmount(r.amount)}` : null),
+              (r.last_sale_date ? `last sale ${String(r.last_sale_date).slice(0, 4)}${r.last_sale_price ? " " + fmtMoneyShort(r.last_sale_price) : ""}` : null),
+              (r.years_owned != null ? `owned ${r.years_owned}y` : null)].filter(Boolean).join(" · ")}
+          </div>
+          {r.buildable_sqft > 0 && <div style={{ color: C.green, marginTop: 2 }}>▲ {Number(r.buildable_sqft).toLocaleString()} sf unused air rights (built {r.built_far} / max {r.max_far} FAR)</div>}
+        </div>
+
+        <div className="mono" style={title}>RESEARCH — more sources</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {researchLinks(r).map((lk) => <a key={lk.label} href={lk.href} target="_blank" rel="noreferrer" className="mono lift" style={ACTION_PILL}>{lk.label} ↗</a>)}
+        </div>
+      </div>
+
+      <div>
+        <div className="mono" style={{ ...title, marginTop: 0 }}>DEED &amp; LEASE HISTORY</div>
+        {!canHist ? <div style={muted}>No tax lot to look up.</div>
+          : histErr ? <div style={{ ...muted, color: C.red }}>{histErr}</div>
+          : hist == null ? <div style={muted}>Loading…</div>
+          : hist.length === 0 ? <div style={muted}>No recorded ACRIS documents.</div>
+          : <HistoryList hist={hist} />}
+
+        <div className="mono" style={title}>OWNER PORTFOLIO — citywide</div>
+        {port == null ? <div style={muted}>Loading…</div> : <PortfolioList data={port} ownerName={r.name} />}
+      </div>
+    </div>
   );
 }
 
@@ -1142,7 +1166,7 @@ function HistoryList({ hist }) {
       {hist.map((h, i) => (
         <div key={i} style={{ display: "flex", gap: 12, padding: "6px 0", borderTop: `1px solid ${C.line}`, fontSize: 12.5, alignItems: "baseline", flexWrap: "wrap" }}>
           <span className="mono" style={{ color: C.muted, width: 84 }}>{h.date || "—"}</span>
-          <span style={{ width: 150, color: h.doc_type === "DEED" ? C.green : C.ivory }}>{h.doc_label}</span>
+          <span style={{ width: 150, color: h.doc_type === "DEED" ? C.green : /lease/i.test(h.doc_label) ? "#3b82c4" : C.ivory }}>{h.doc_label}</span>
           <span className="mono" style={{ width: 110, color: C.muted, whiteSpace: "nowrap" }}>{h.amount ? "$" + Number(h.amount).toLocaleString() : "—"}</span>
           <span style={{ color: C.muted, flex: "1 1 220px" }}>{h.parties.map((p) => p.name).join(" · ") || "—"}</span>
         </div>

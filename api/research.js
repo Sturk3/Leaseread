@@ -4,14 +4,17 @@
 // recent news/distress signals, the asset, and whether it's worth pursuing).
 // Key stays server-side; password-gated like every other endpoint.
 
-// Model for the research brief. Opus 4.8 for best synthesis quality; switch to
-// "claude-sonnet-4-6" here to cut cost if the team runs this at high volume.
-const RESEARCH_MODEL = "claude-opus-4-8";
+// Model for the research brief. Sonnet 4.6 — fast + cheap enough to finish a
+// web-search run inside Vercel's 60s function limit (Opus 4.8 was timing out and
+// burning tokens without returning). Bump to "claude-opus-4-8" for max quality only
+// if you also raise the function timeout (needs a Vercel Pro plan).
+const RESEARCH_MODEL = "claude-sonnet-4-6";
+const MAX_SEARCHES = 3; // hard cap on web searches per run — bounds both time and cost.
 
 function buildSystem() {
   return `You are an off-market real estate acquisitions research analyst for a firm that buys trophy / high-street RETAIL property in New York City. You are given one property and its owner of record (often an LLC). Use the web_search tool to compile a tight intelligence brief that helps the deal team decide whether to pursue the owner and how to reach the decision-maker.
 
-Search efficiently (a few targeted queries), then write the brief. Do NOT narrate your searching — output ONLY the final brief.
+Be fast: run at most 3 short, targeted searches, then immediately write the brief. Do NOT narrate your searching — output ONLY the final brief.
 
 Format the brief in markdown with these sections (omit a section only if you truly found nothing for it):
 - **Who's behind it** — the real principals/decision-makers behind the entity, any parent company or management firm, and any contact clues (names, affiliated firms).
@@ -54,7 +57,7 @@ export default async function handler(req, res) {
     // The web_search server tool runs a search loop server-side; if it hits its
     // iteration cap the response comes back as stop_reason "pause_turn" and we
     // re-send to let it continue. Bounded so a runaway can't burn the budget.
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 2; i++) {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -64,9 +67,9 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: RESEARCH_MODEL,
-          max_tokens: 2048,
+          max_tokens: 1500,
           system: buildSystem(),
-          tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 6 }],
+          tools: [{ type: "web_search_20260209", name: "web_search", max_uses: MAX_SEARCHES }],
           messages,
         }),
       });

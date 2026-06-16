@@ -736,12 +736,21 @@ function isCompanyRow(r) {
 function lookupLinks(r) {
   const enc = encodeURIComponent;
   const slug = (s) => String(s || "").trim().replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  // Reverse-address phone lookup on the owner's MAILING address — for absentee owners
+  // this is their home, so TruePeopleSearch returns the resident's name + phone. This is
+  // the most effective free way to get an actual number.
+  const addr = r.contact_address || "";
+  const csz = [[r.city, r.state].filter(Boolean).join(", "), r.zip].filter(Boolean).join(" ");
+  const tpsAddr = addr ? { label: "📞 Phone at mailing addr", href: `https://www.truepeoplesearch.com/resultaddress?streetaddress=${enc(addr)}${csz ? `&citystatezip=${enc(csz)}` : ""}` } : null;
+
   if (isCompanyRow(r)) {
     const co = r.name || "";
     return [
-      { label: "🏢 NY registry", href: `https://opencorporates.com/companies?q=${enc(co)}&jurisdiction_code=us_ny` },
-      { label: "👤 LinkedIn", href: `https://www.linkedin.com/search/results/all/?keywords=${enc(co)}` },
-      { label: "✉️ RocketReach", href: `https://rocketreach.co/search?q=${enc(co)}` },
+      // OpenCorporates → the LLC's actual officers/principals (a real human to skip-trace).
+      { label: "🏢 NY officers (OpenCorporates)", href: `https://opencorporates.com/companies?q=${enc(co)}&jurisdiction_code=us_ny` },
+      ...(tpsAddr ? [tpsAddr] : []),
+      // LinkedIn PEOPLE search (not "all") so it surfaces humans tied to the firm, not the entity page.
+      { label: "👤 LinkedIn people", href: `https://www.linkedin.com/search/results/people/?keywords=${enc(co)}` },
     ];
   }
   const first = r.first_name || "";
@@ -752,8 +761,10 @@ function lookupLinks(r) {
   const wpLoc = (r.city && r.state) ? `${slug(r.city)}-${r.state}` : "";
   const wp = wpName ? `https://www.whitepages.com/name/${wpName}${wpLoc ? `/${wpLoc}` : ""}` : "https://www.whitepages.com/";
   return [
-    { label: "📞 Whitepages", href: wp },
+    ...(tpsAddr ? [tpsAddr] : []),
     { label: "📞 TruePeopleSearch", href: `https://www.truepeoplesearch.com/results?name=${enc(name)}${cityState ? `&citystatezip=${enc(cityState)}` : ""}` },
+    { label: "📞 Whitepages", href: wp },
+    { label: "👤 LinkedIn", href: `https://www.linkedin.com/search/results/people/?keywords=${enc(name)}` },
   ];
 }
 

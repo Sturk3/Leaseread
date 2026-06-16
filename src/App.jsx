@@ -1067,6 +1067,84 @@ function mteText(L) {
   if (m === 0) return "est. ending now";
   return `est. ~${m} mo out`;
 }
+// SELLER-PROPENSITY / TARGET-PRIORITY score (0–100). This is a DIFFERENT axis from the
+// lease-timing radar score: lease timing answers "is the space coming available?",
+// this answers "is this OWNER worth approaching?". Built entirely from public signals
+// already attached to each lead by /api/source — how long they've held, distress (tax
+// lien), absentee/out-of-state mailing, and unused air rights. It is NOT a literal
+// probability the owner will sell (no public data knows owner intent) — it's a
+// prospecting priority that points you in the right direction.
+function sellerScore(r) {
+  const signals = [];
+  let score = 0;
+
+  // 1) Long hold (max 40) — classic seller candidate (stepped-up basis, estate/
+  // retirement). A very recent purchase reads as unlikely to sell → ~0.
+  const yo = r.years_owned;
+  let pts = 0, note;
+  if (yo == null) note = "unknown — no deed on record";
+  else if (yo >= 20) { pts = 40; note = `held ${yo}+ yrs`; }
+  else if (yo >= 15) { pts = 32; note = `held ${yo} yrs`; }
+  else if (yo >= 10) { pts = 22; note = `held ${yo} yrs`; }
+  else if (yo >= 5)  { pts = 10; note = `held ${yo} yrs`; }
+  else { pts = 0; note = `bought ~${yo} yr${yo === 1 ? "" : "s"} ago — unlikely`; }
+  score += pts;
+  signals.push({ label: "Long hold", detail: note, points: pts, max: 40, hit: pts > 0 });
+
+  // 2) Distress — tax lien (max 25). Financial pressure → motivated/forced seller.
+  pts = r.tax_lien ? 25 : 0; score += pts;
+  signals.push({ label: "Distress", detail: r.tax_lien ? "on tax-lien sale list" : "no tax lien on record", points: pts, max: 25, hit: !!r.tax_lien });
+
+  // 3) Absentee / out-of-state owner (max 20). Less attached → easier to convert.
+  const ab = r.absentee;
+  pts = ab === "out-of-state" ? 20 : ab === "out-of-area" ? 12 : 0; score += pts;
+  signals.push({ label: "Absentee owner", detail: ab ? ab.replace(/-/g, " ") + " owner" : "mails within NYC", points: pts, max: 20, hit: !!ab });
+
+  // 4) Air rights / underbuilt (max 15). Unused buildable SF — owner may sell to a developer.
+  const bs = Number(r.buildable_sqft) || 0;
+  pts = bs >= 20000 ? 15 : bs >= 8000 ? 10 : bs >= 2500 ? 6 : 0; score += pts;
+  signals.push({ label: "Air rights", detail: bs >= 2500 ? `~${bs.toLocaleString()} SF unused buildable` : "fully built / no excess FAR", points: pts, max: 15, hit: bs >= 2500 });
+
+  return { score: Math.min(100, Math.round(score)), signals };
+}
+const sellerGrade = (s) => (s >= 70 ? "A" : s >= 50 ? "B" : s >= 30 ? "C" : s >= 15 ? "D" : "F");
+const sellerColor = (s) => (s >= 50 ? C.green : s >= 30 ? C.amber : C.muted);
+
+function SellerCell({ s }) {
+  const col = sellerColor(s.score);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: col, width: 12 }}>{sellerGrade(s.score)}</span>
+      <div style={{ width: 40, height: 6, background: C.panel2, borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ width: `${s.score}%`, height: "100%", background: col }} />
+      </div>
+      <span className="mono" style={{ fontSize: 11, color: col }}>{s.score}</span>
+    </div>
+  );
+}
+function SellerBreakdown({ s }) {
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+      <div className="mono" style={{ fontSize: 11, letterSpacing: "0.04em", color: C.muted, marginBottom: 9 }}>
+        SELLER PROPENSITY — <span style={{ color: sellerColor(s.score) }}>{s.score}/100 · GRADE {sellerGrade(s.score)}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10 }}>
+        {s.signals.map((sig, i) => (
+          <div key={i}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+              <span style={{ color: sig.hit ? C.ivory : C.muted }}>{sig.hit ? "✓ " : "· "}{sig.label}</span>
+              <span className="mono" style={{ color: sig.hit ? C.green : C.muted }}>+{sig.points}<span style={{ color: C.muted }}>/{sig.max}</span></span>
+            </div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{sig.detail}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: C.muted, marginTop: 9, lineHeight: 1.5 }}>
+        Prospecting priority from public signals — <em>not</em> a literal probability the owner will sell. Verify via ▸ details below.
+      </div>
+    </div>
+  );
+}
 function ScoreBar({ score }) {
   const col = score >= 60 ? C.green : score >= 35 ? C.amber : C.muted;
   return (
@@ -1083,7 +1161,10 @@ const RADAR_COLS = [
   ["Address", (r) => r.address], ["Borough", (r) => r.borough], ["Tenant", (r) => r.lease.tenant || ""],
   ["Owner", (r) => r.name || ""], ["Latest lease", (r) => r.lease.latest_lease_date || ""],
   ["Est. expiration", (r) => r.lease.estimated_expiration || ""], ["Months to expiry", (r) => r.lease.months_to_expiry ?? ""],
-  ["Term yrs", (r) => r.lease.term_years], ["Leases on file", (r) => r.lease.lease_count], ["Radar score", (r) => r.lease.score],
+  ["Term yrs", (r) => r.lease.term_years], ["Leases on file", (r) => r.lease.lease_count], ["Lease timing score", (r) => r.lease.score],
+  ["Seller score", (r) => r.seller?.score ?? ""], ["Seller grade", (r) => (r.seller ? sellerGrade(r.seller.score) : "")],
+  ["Years owned", (r) => r.years_owned ?? ""], ["Tax lien", (r) => (r.tax_lien ? "YES" : "")],
+  ["Absentee", (r) => r.absentee || ""], ["Unused buildable SF", (r) => r.buildable_sqft ?? ""],
 ];
 function radarCSV(rows) {
   const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
@@ -1125,6 +1206,7 @@ function RadarRow({ r, rank, pw, last }) {
         <td style={{ ...td, fontSize: 12.5 }}>{L.tenant || <span style={{ color: C.muted }}>—</span>}</td>
         <td style={{ ...td, fontSize: 12.5 }}>{r.name || <span style={{ color: C.muted }}>—</span>}</td>
         <td style={td}><ScoreBar score={L.score} /></td>
+        <td style={td}>{r.seller ? <SellerCell s={r.seller} /> : <span style={{ color: C.muted }}>—</span>}</td>
         <td style={{ ...td, textAlign: "right" }}>
           <button onClick={() => setOpen((o) => !o)} className="mono" style={{ ...ACTION_PILL, border: `1px solid ${open ? C.gold : C.line}` }}>
             {open ? "▾ close" : "▸ details"}
@@ -1133,7 +1215,8 @@ function RadarRow({ r, rank, pw, last }) {
       </tr>
       {open && (
         <tr>
-          <td colSpan={8} style={{ padding: "0 14px 18px", borderBottom: last ? "none" : `1px solid ${C.line}`, background: off ? C.goldSoft : "transparent" }}>
+          <td colSpan={9} style={{ padding: "0 14px 18px", borderBottom: last ? "none" : `1px solid ${C.line}`, background: off ? C.goldSoft : "transparent" }}>
+            {r.seller && <SellerBreakdown s={r.seller} />}
             <PropertyDetail r={r} pw={pw} />
           </td>
         </tr>
@@ -1150,6 +1233,7 @@ function LeaseRadar({ pw }) {
   const [term, setTerm] = useState(10);
   const [horizon, setHorizon] = useState(24);
   const [offOnly, setOffOnly] = useState(false);
+  const [sortBy, setSortBy] = useState("seller"); // "seller" (who to target) | "lease" (timing)
 
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState("");
@@ -1179,7 +1263,7 @@ function LeaseRadar({ pw }) {
       const merged = leads
         .map((r) => ({ ...r, lease: map[`${radarNorm(r.borough)}|${radarNorm(r.block)}|${radarNorm(r.lot)}`] || null }))
         .filter((r) => r.lease)
-        .sort((a, b) => b.lease.score - a.lease.score);
+        .map((r) => ({ ...r, seller: sellerScore(r) }));
       setRows(merged);
       setMeta({ center: src.center, termYears: scan.termYears, horizonMonths: scan.horizonMonths, scanned: merged.length });
     } catch (e) {
@@ -1189,7 +1273,8 @@ function LeaseRadar({ pw }) {
     }
   }
 
-  const shown = rows ? (offOnly ? rows.filter((r) => r.lease.off_market_opportunity) : rows) : null;
+  const sortedRows = rows ? [...rows].sort((a, b) => (sortBy === "lease" ? b.lease.score - a.lease.score : b.seller.score - a.seller.score)) : null;
+  const shown = sortedRows ? (offOnly ? sortedRows.filter((r) => r.lease.off_market_opportunity) : sortedRows) : null;
   const offCount = rows ? rows.filter((r) => r.lease.off_market_opportunity).length : 0;
 
   function csvName() {
@@ -1269,7 +1354,16 @@ function LeaseRadar({ pw }) {
               {rows.length} propert{rows.length === 1 ? "y" : "ies"} scanned
               {offCount > 0 && <span style={{ color: C.gold }}> · {offCount} off-market opportunit{offCount === 1 ? "y" : "ies"}</span>}
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="mono" style={{ fontSize: 11, color: C.muted, letterSpacing: "0.04em" }}>SORT BY</span>
+              <div style={{ display: "flex", border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden" }}>
+                {[["seller", "SELLER PROPENSITY"], ["lease", "LEASE TIMING"]].map(([v, lab]) => (
+                  <button key={v} onClick={() => setSortBy(v)} className="mono"
+                    style={{ cursor: "pointer", fontSize: 11, padding: "9px 12px", border: "none", background: sortBy === v ? C.gold : "transparent", color: sortBy === v ? "#ffffff" : C.muted }}>
+                    {lab}
+                  </button>
+                ))}
+              </div>
               <button onClick={() => setOffOnly((v) => !v)} className="mono"
                 style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${offOnly ? C.gold : C.line}`, background: offOnly ? C.goldSoft : "transparent", color: offOnly ? C.gold : C.muted }}>
                 {offOnly ? "✓ " : ""}OFF-MARKET ONLY
@@ -1281,7 +1375,7 @@ function LeaseRadar({ pw }) {
           {meta?.center && (
             <div style={{ margin: "-4px 0 12px", fontSize: 12.5, color: C.muted }}>
               Within <strong style={{ color: C.gold }}>{meta.center.radiusMiles} mi</strong> of {meta.center.label} ·
-              assumed {meta.termYears}yr term · “soon” = within {meta.horizonMonths} months. Ranked most-actionable first.
+              assumed {meta.termYears}yr term · “soon” = within {meta.horizonMonths} months. Ranked by {sortBy === "lease" ? "lease timing (space coming available)" : "seller propensity (owner worth approaching)"}.
             </div>
           )}
 
@@ -1290,8 +1384,8 @@ function LeaseRadar({ pw }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr className="mono" style={{ color: C.muted, fontSize: 11, letterSpacing: "0.04em" }}>
-                    {["#", "Status", "Address", "Est. expiration", "Tenant", "Owner", "Radar score", ""].map((c, i) => (
-                      <th key={i} style={{ textAlign: i === 7 ? "right" : "left", padding: "11px 14px", borderBottom: `1px solid ${C.line}`, whiteSpace: "nowrap" }}>{c.toUpperCase()}</th>
+                    {["#", "Status", "Address", "Est. expiration", "Tenant", "Owner", "Lease timing", "Seller score", ""].map((c, i) => (
+                      <th key={i} style={{ textAlign: i === 8 ? "right" : "left", padding: "11px 14px", borderBottom: `1px solid ${C.line}`, whiteSpace: "nowrap" }}>{c.toUpperCase()}</th>
                     ))}
                   </tr>
                 </thead>

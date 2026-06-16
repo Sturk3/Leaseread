@@ -31,7 +31,7 @@ export default async function handler(req, res) {
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
     }
-    const appToken = process.env.SOCRATA_APP_TOKEN;
+    const appToken = null; // NYC account/token disconnected — anonymous requests only
     const code = /^[1-5]$/.test(String(borough)) ? String(borough) : BORO_CODE[clean(borough).toLowerCase()];
     const b = Number(block);
     const l = Number(lot);

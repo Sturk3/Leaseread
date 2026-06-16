@@ -571,7 +571,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true, dbConfigured: !!process.env.DATABASE_URL });
 
-    const appToken = process.env.SOCRATA_APP_TOKEN;
+    const appToken = null; // NYC account/token disconnected — anonymous requests only
     const wanted = Array.isArray(sources) && sources.length ? sources : ["acris", "dob"];
     const lim = Math.max(1, Math.min(Number(limit) || 100, 250));
 

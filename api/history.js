@@ -55,7 +55,7 @@ export default async function handler(req, res) {
     if (!code || !Number.isFinite(b) || !Number.isFinite(l)) {
       return res.status(400).json({ error: "Need borough, block, and lot." });
     }
-    const appToken = process.env.SOCRATA_APP_TOKEN;
+    const appToken = null; // NYC account/token disconnected — anonymous requests only
 
     const legals = await fetchSocrata(ACRIS_LEGALS, {
       where: `borough='${code}' AND block=${b} AND lot=${l}`, select: "document_id", limit: 500, appToken,

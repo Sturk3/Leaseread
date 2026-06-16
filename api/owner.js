@@ -26,7 +26,7 @@ export default async function handler(req, res) {
     const nm = clean(name).toUpperCase();
     if (!nm) return res.status(400).json({ error: "Need an owner name." });
 
-    const appToken = process.env.SOCRATA_APP_TOKEN;
+    const appToken = null; // NYC account/token disconnected — anonymous requests only
     const params = new URLSearchParams({
       $limit: "500",
       $where: `upper(ownername)='${nm.replace(/'/g, "''")}'`,

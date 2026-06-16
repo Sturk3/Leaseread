@@ -1157,6 +1157,73 @@ function PropertyPhoto({ r }) {
   );
 }
 
+// Minimal markdown renderer for the research brief (bold, bullets, links).
+function renderBriefLine(str, keyBase) {
+  const out = [];
+  const re = /(\*\*[^*]+\*\*)|(\[[^\]]+\]\([^)]+\))/g;
+  let lastIndex = 0, m, k = 0;
+  while ((m = re.exec(str))) {
+    if (m.index > lastIndex) out.push(<span key={`${keyBase}-${k++}`}>{str.slice(lastIndex, m.index)}</span>);
+    if (m[1]) out.push(<strong key={`${keyBase}-${k++}`} style={{ color: C.ivory }}>{m[1].slice(2, -2)}</strong>);
+    else if (m[2]) { const lm = /\[([^\]]+)\]\(([^)]+)\)/.exec(m[2]); out.push(<a key={`${keyBase}-${k++}`} href={lm[2]} target="_blank" rel="noreferrer" style={{ color: C.gold }}>{lm[1]}</a>); }
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < str.length) out.push(<span key={`${keyBase}-${k++}`}>{str.slice(lastIndex)}</span>);
+  return out;
+}
+function ResearchBriefBody({ text }) {
+  const lines = text.split("\n");
+  return (
+    <div style={{ fontSize: 12.5, lineHeight: 1.65 }}>
+      {lines.map((line, i) => {
+        if (!line.trim()) return <div key={i} style={{ height: 6 }} />;
+        const bulleted = /^\s*[-•]\s+/.test(line);
+        const content = line.replace(/^\s*[-•]\s+/, "").replace(/^#+\s*/, "");
+        return (
+          <div key={i} style={{ display: "flex", gap: 6, marginBottom: 3, color: C.muted }}>
+            {bulleted && <span style={{ color: C.gold }}>•</span>}
+            <span>{renderBriefLine(content, i)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Engine 2: on-demand AI web research. Costs an Anthropic call (with web search) only
+// when the user clicks — never automatic.
+function ResearchBrief({ r, pw }) {
+  const [state, setState] = useState("idle"); // idle | loading | done | error
+  const [brief, setBrief] = useState("");
+  const [err, setErr] = useState("");
+  const run = () => {
+    setState("loading"); setErr("");
+    fetch("/api/research", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned }),
+    })
+      .then((res) => res.json())
+      .then((d) => { if (d.error) { setErr(d.error); setState("error"); } else { setBrief(d.brief || ""); setState("done"); } })
+      .catch((e) => { setErr(e.message || "Research failed."); setState("error"); });
+  };
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>✦ AI RESEARCH — scours the web for this owner & asset</div>
+        {state !== "loading" && (
+          <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>
+            {state === "done" || state === "error" ? "↻ re-run" : "▸ run research"}
+          </button>
+        )}
+      </div>
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Searching the web &amp; compiling the brief… this takes ~15–30s.</div>}
+      {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+      {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={brief} /></div>}
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Runs live web searches and writes an intelligence brief — principals behind the LLC, portfolio, news/distress signals, and whether it’s worth pursuing. On-demand only.</div>}
+    </div>
+  );
+}
+
 function PropertyDetail({ r, pw }) {
   const [hist, setHist] = useState(null);
   const [histErr, setHistErr] = useState("");
@@ -1187,7 +1254,9 @@ function PropertyDetail({ r, pw }) {
   const title = { fontSize: 10.5, color: C.muted, letterSpacing: "0.06em", margin: "16px 0 7px" };
   const muted = { color: C.muted, fontSize: 12, padding: "8px 0" };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 22, paddingTop: 8 }}>
+    <div style={{ paddingTop: 8 }}>
+      <ResearchBrief r={r} pw={pw} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 22 }}>
       <div>
         <PropertyPhoto r={r} />
         <div className="mono" style={{ ...title, marginTop: 0 }}>HOW TO REACH</div>
@@ -1268,6 +1337,7 @@ function PropertyDetail({ r, pw }) {
 
         <div className="mono" style={title}>OWNER PORTFOLIO — citywide</div>
         {port == null ? <div style={muted}>Loading…</div> : <PortfolioList data={port} ownerName={r.name} />}
+      </div>
       </div>
     </div>
   );

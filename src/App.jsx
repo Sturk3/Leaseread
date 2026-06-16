@@ -771,6 +771,19 @@ function lookupLinks(r) {
   ];
 }
 
+// Is the space currently on the market? No public feed exists, so these run targeted
+// searches of the major listing sites for THIS address (for-lease + for-sale).
+function onMarketLinks(r) {
+  const enc = encodeURIComponent;
+  const q = [r.address, r.borough, "NY"].filter(Boolean).join(" ");
+  return [
+    { label: "For lease", href: `https://www.google.com/search?q=${enc(`"${r.address}" ${r.borough || ""} for lease (site:loopnet.com OR site:crexi.com)`)}` },
+    { label: "For sale", href: `https://www.google.com/search?q=${enc(`"${r.address}" ${r.borough || ""} for sale (site:loopnet.com OR site:crexi.com)`)}` },
+    { label: "LoopNet ⌕", href: `https://www.loopnet.com/search/commercial-real-estate/${enc(q)}/for-lease/` },
+    { label: "Crexi ⌕", href: `https://www.crexi.com/properties?searchText=${enc(q)}` },
+  ];
+}
+
 // Deep links into NYC property-research sites + commercial listing/lease sources.
 const BORO_CODE = { Manhattan: "1", Bronx: "2", Brooklyn: "3", Queens: "4", "Staten Island": "5" };
 // Deep-links that land on THIS property where the site allows it (Property portal,
@@ -1210,6 +1223,12 @@ function PropertyDetail({ r, pw }) {
           {r.buildable_sqft > 0 && <div style={{ color: C.green, marginTop: 2 }}>▲ {Number(r.buildable_sqft).toLocaleString()} sf unused air rights (built {r.built_far} / max {r.max_far} FAR)</div>}
         </div>
 
+        <div className="mono" style={title}>ON-MARKET / AVAILABILITY</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {onMarketLinks(r).map((lk) => <a key={lk.label} href={lk.href} target="_blank" rel="noreferrer" className="mono lift" style={ACTION_PILL}>{lk.label} ↗</a>)}
+        </div>
+        <div style={{ color: C.muted, fontSize: 11, marginTop: 5 }}>No public feed of live availability — these check LoopNet/Crexi for any current listing.</div>
+
         <div className="mono" style={title}>PUBLIC RECORDS</div>
         {intel == null ? <div style={muted}>Loading…</div> : (
           <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>
@@ -1235,7 +1254,12 @@ function PropertyDetail({ r, pw }) {
       </div>
 
       <div>
-        <div className="mono" style={{ ...title, marginTop: 0 }}>DEED &amp; LEASE HISTORY</div>
+        <div className="mono" style={{ ...title, marginTop: 0 }}>TENANT / LEASES</div>
+        {!canHist ? <div style={muted}>No tax lot to look up.</div>
+          : hist == null ? <div style={muted}>Loading…</div>
+          : <TenantList hist={hist} />}
+
+        <div className="mono" style={title}>DEED &amp; LEASE HISTORY</div>
         {!canHist ? <div style={muted}>No tax lot to look up.</div>
           : histErr ? <div style={{ ...muted, color: C.red }}>{histErr}</div>
           : hist == null ? <div style={muted}>Loading…</div>
@@ -1267,6 +1291,38 @@ function PortfolioList({ data, ownerName }) {
           <span className="mono" style={{ color: C.muted, width: 120, whiteSpace: "nowrap" }}>{p.assessed ? "$" + Number(p.assessed).toLocaleString() : "—"}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+// Pull the lease documents out of the ACRIS history and surface the tenant (lessee)
+// up front. On a recorded lease, ACRIS party_type 2 ("grantee/buyer") is the tenant
+// and party_type 1 ("grantor/seller") is the landlord — relabel them in this context.
+// Caveat: not every ground-floor retail lease is recorded in ACRIS, so absence here
+// doesn't prove the space is vacant.
+function TenantList({ hist }) {
+  const leases = (hist || []).filter((h) => /lease/i.test(h.doc_label));
+  if (!leases.length) {
+    return <div style={{ color: C.muted, fontSize: 12, padding: "8px 0" }}>No recorded leases on this lot. (Many retail leases aren’t recorded in ACRIS — check the on-market links and Street View.)</div>;
+  }
+  const tenants = (p) => p.filter((x) => x.role === "grantee/buyer").map((x) => x.name);
+  const landlords = (p) => p.filter((x) => x.role === "grantor/seller").map((x) => x.name);
+  return (
+    <div style={{ padding: "6px 0" }}>
+      {leases.slice(0, 8).map((h, i) => {
+        const t = tenants(h.parties);
+        const ll = landlords(h.parties);
+        const names = t.length ? t : h.parties.map((p) => p.name);
+        return (
+          <div key={i} style={{ padding: "7px 0", borderTop: i ? `1px solid ${C.line}` : "none", fontSize: 12.5 }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 600, color: C.ivory, flex: "1 1 200px" }}>{names.join(" · ") || "—"}</span>
+              <span className="mono" style={{ color: C.muted, fontSize: 11 }}>{h.doc_label}{h.date ? ` · ${h.date}` : ""}</span>
+            </div>
+            {ll.length > 0 && <div style={{ color: C.muted, marginTop: 1 }}>landlord: {ll.join(" · ")}</div>}
+          </div>
+        );
+      })}
     </div>
   );
 }

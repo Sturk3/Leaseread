@@ -276,23 +276,22 @@ function devFields(row) {
   const builtFar = toNum(row.builtfar) || (lotarea ? (toNum(row.bldgarea) || 0) / lotarea : 0);
   const maxFar = Math.max(toNum(row.residfar) || 0, toNum(row.commfar) || 0, toNum(row.facilfar) || 0);
   const buildable = maxFar > builtFar && lotarea ? Math.round((maxFar - builtFar) * lotarea) : 0;
-  return { built_far: builtFar || null, max_far: maxFar || null, buildable_sqft: buildable, underbuilt: buildable >= 2500 };
+  return {
+    built_far: builtFar || null, max_far: maxFar || null, buildable_sqft: buildable, underbuilt: buildable >= 2500,
+    // Square footage — this is a retail tool, so surface retail SF (PLUTO `retailarea`)
+    // alongside total building area and lot area.
+    retail_sqft: toNum(row.retailarea) || null,
+    bldg_sqft: toNum(row.bldgarea) || null,
+    lot_sqft: lotarea || null,
+  };
 }
 
 // Fetch one exact PLUTO lot by BBL (the typed address), ignoring asset filters, so
 // it can be pinned as the first result. BBL = boro(1) + block(5) + lot(4).
 const DIGIT_BOROUGH = { 1: "MN", 2: "BX", 3: "BK", 4: "QN", 5: "SI" };
-async function fetchAnchorPluto(bbl, appToken) {
-  const m = /^(\d)(\d{5})(\d{4})$/.exec(String(bbl));
-  if (!m) return null;
-  const boro2 = DIGIT_BOROUGH[m[1]];
-  if (!boro2) return null;
-  const rows = await fetchSocrata(PLUTO, {
-    where: `borough='${boro2}' AND block=${Number(m[2])} AND lot=${Number(m[3])}`, limit: 1, appToken,
-  }).catch(() => []);
-  const row = rows[0];
-  if (!row) return null;
-  const id = clean(row.bbl) || String(bbl);
+// Build a pinned single-property deal+contact from one PLUTO row.
+function plutoAnchorFromRow(row, fallbackId) {
+  const id = clean(row.bbl) || String(fallbackId || "");
   const deal = {
     source: "pluto", deal_id: id, doc_type: clean(row.bldgclass),
     borough: PLUTO_BOROUGH_NAME[clean(row.borough)] || clean(row.borough),
@@ -304,9 +303,47 @@ async function fetchAnchorPluto(bbl, appToken) {
   const contact = owner ? { name: owner, role: "owner", address: clean(row.address), city: "", state: "", zip: "", source: "pluto", deal_id: id } : null;
   return { deal, contact };
 }
+async function fetchAnchorPluto(bbl, appToken) {
+  const m = /^(\d)(\d{5})(\d{4})$/.exec(String(bbl));
+  if (!m) return null;
+  const boro2 = DIGIT_BOROUGH[m[1]];
+  if (!boro2) return null;
+  const rows = await fetchSocrata(PLUTO, {
+    where: `borough='${boro2}' AND block=${Number(m[2])} AND lot=${Number(m[3])}`, limit: 1, appToken,
+  }).catch(() => []);
+  if (!rows[0]) return null;
+  return plutoAnchorFromRow(rows[0], bbl);
+}
+// No BBL (address was geocoded, not picked) — return the single PLUTO lot nearest the
+// coordinates, so "just this property" still works.
+async function fetchNearestPluto(lat, lon, appToken) {
+  const dlat = 0.05 / 69;
+  const dlon = 0.05 / ((69 * Math.cos((lat * Math.PI) / 180)) || 1);
+  const rows = await fetchSocrata(PLUTO, {
+    where: `latitude between ${lat - dlat} and ${lat + dlat} AND longitude between ${lon - dlon} and ${lon + dlon}`,
+    limit: 300, appToken,
+  }).catch(() => []);
+  let best = null, bestDist = Infinity;
+  for (const row of rows) {
+    const rlat = toNum(row.latitude), rlon = toNum(row.longitude);
+    if (rlat == null || rlon == null) continue;
+    const dist = haversineMiles(lat, lon, rlat, rlon);
+    if (dist < bestDist) { bestDist = dist; best = row; }
+  }
+  return best ? plutoAnchorFromRow(best) : null;
+}
 
 // PLUTO: find lots by asset type + street or radius, with the owner as the lead.
-async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, minSqft, minUnits, builtAfter, builtBefore, limit, appToken }) {
+async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, anchorOnly, minSqft, minUnits, builtAfter, builtBefore, limit, appToken }) {
+  // Single-property mode: an address was given with the radius "off" — return ONLY
+  // that one lot (ignoring asset/zoning filters), nothing nearby.
+  if (anchorOnly) {
+    let anchor = null;
+    if (anchorBbl) anchor = await fetchAnchorPluto(String(anchorBbl).split(".")[0], appToken);
+    if (!anchor && centerLat != null && centerLon != null) anchor = await fetchNearestPluto(centerLat, centerLon, appToken);
+    if (!anchor) return { deals: [], contacts: [] };
+    return { deals: [anchor.deal], contacts: anchor.contact ? [anchor.contact] : [] };
+  }
   const where = [];
   const code = PLUTO_BOROUGH[borough] || null;
   if (code) where.push(`borough='${code}'`);
@@ -423,6 +460,7 @@ function buildLeads(deals, contacts) {
       tax_lien: d.tax_lien || false,
       built_far: d.built_far ?? null, max_far: d.max_far ?? null,
       buildable_sqft: d.buildable_sqft ?? null, underbuilt: d.underbuilt || false,
+      retail_sqft: d.retail_sqft ?? null, bldg_sqft: d.bldg_sqft ?? null, lot_sqft: d.lot_sqft ?? null,
       lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null, pinned: d.pinned || false,
       name: c.name, role: c.role, entity_type: c.entity_type || "unknown",
       first_name: c.first_name || "", last_name: c.last_name || "",
@@ -579,7 +617,7 @@ export default async function handler(req, res) {
     // browser already picked an address from autocomplete it sends exact coords; else
     // geocode the typed text.
     let center = null;
-    if (nearAddress && radiusMiles) {
+    if (nearAddress) {
       const clat = Number(centerLat);
       const clon = Number(centerLon);
       if (Number.isFinite(clat) && Number.isFinite(clon)) {
@@ -591,12 +629,15 @@ export default async function handler(req, res) {
         }
       }
     }
+    // Address with radius "off" → return just that one property; with a radius → the area.
+    const radiusNum = center && radiusMiles ? Number(radiusMiles) : null;
+    const anchorOnly = !!center && !radiusNum;
 
     const filters = {
       borough: borough || undefined, docType: docType || undefined, since: since || undefined,
       assetType: assetType || "any", street: (street || "").trim() || undefined,
       centerLat: center ? center.lat : undefined, centerLon: center ? center.lon : undefined,
-      radiusMiles: center ? Number(radiusMiles) : undefined,
+      radiusMiles: radiusNum || undefined, anchorOnly,
       anchorBbl: center && pickedBbl ? pickedBbl : undefined,
       minSqft: minSqft || undefined, minUnits: minUnits || undefined,
       builtAfter: builtAfter || undefined, builtBefore: builtBefore || undefined,
@@ -657,7 +698,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       counts: { deals: deals.length, contacts: contacts.length },
       deals, leads, saved: savedInfo.saved, dbConfigured: savedInfo.dbConfigured,
-      center: center ? { lat: center.lat, lon: center.lon, label: center.label, radiusMiles: Number(radiusMiles) } : null,
+      center: center ? { lat: center.lat, lon: center.lon, label: center.label, radiusMiles: radiusNum || 0, single: anchorOnly } : null,
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "source" });

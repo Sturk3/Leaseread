@@ -674,11 +674,15 @@ function downloadBlob(content, name, type) {
 
 const LEAD_COLS = [
   { key: "name", label: "Name" }, { key: "entity_type", label: "Type" }, { key: "role", label: "Role" },
-  { key: "address", label: "Property" }, { key: "borough", label: "Borough" }, { key: "amount", label: "Amount" },
-  { key: "deal_date", label: "Date" }, { key: "doc_type", label: "Doc" }, { key: "source", label: "Source" },
+  { key: "pinned", label: "This property", get: (r) => (r.pinned ? "YES" : "") },
+  { key: "address", label: "Property" }, { key: "borough", label: "Borough" },
+  { key: "retail_sqft", label: "Retail SF" }, { key: "bldg_sqft", label: "Building SF" }, { key: "lot_sqft", label: "Lot SF" },
+  { key: "assessed_value", label: "Assessed value ($)", get: (r) => assessedValue(r) ?? "" },
+  { key: "purchase_price", label: "Purchase price ($)", get: (r) => purchasePrice(r) ?? "" },
+  { key: "purchase_year", label: "Purchase year", get: (r) => purchaseDate(r) },
+  { key: "doc_type", label: "Building class" }, { key: "source", label: "Source" },
   { key: "contact_address", label: "Contact address" }, { key: "city", label: "City" },
   { key: "state", label: "State" }, { key: "zip", label: "Zip" },
-  { key: "last_sale_date", label: "Last sale date" }, { key: "last_sale_price", label: "Last sale price" },
   { key: "years_owned", label: "Years owned" }, { key: "absentee", label: "Absentee" },
   { key: "tax_lien", label: "Tax lien" }, { key: "portfolio_count", label: "Owner #props in set" },
   { key: "built_far", label: "Built FAR" }, { key: "max_far", label: "Max FAR" }, { key: "buildable_sqft", label: "Unused buildable sf" },
@@ -688,10 +692,21 @@ const LEAD_COLS = [
 function leadsToCSV(rows) {
   const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
   const head = LEAD_COLS.map((c) => esc(c.label)).join(",");
-  const body = rows.map((r) => LEAD_COLS.map((c) => esc(r[c.key])).join(",")).join("\n");
+  const body = rows.map((r) => LEAD_COLS.map((c) => esc(c.get ? c.get(r) : r[c.key])).join(",")).join("\n");
   return head + "\n" + body;
 }
 const fmtAmount = (a) => (a == null || a === "" ? "" : "$" + Number(a).toLocaleString());
+// Two different dollar figures live on a row and must never be conflated:
+//  • ASSESSED VALUE — the City's tax assessment (PLUTO `assesstot`). Not a sale price.
+//  • PURCHASE PRICE — what the current owner actually paid (latest ACRIS deed).
+// For PLUTO rows `amount` is the assessment and `last_sale_price` is the purchase.
+// For ACRIS rows `amount` IS the deed/sale price (no assessment available).
+const assessedValue = (r) => (r.source === "pluto" ? r.amount : null);
+const purchasePrice = (r) => (r.source === "pluto" ? r.last_sale_price : r.amount);
+const purchaseDate = (r) => {
+  const d = r.source === "pluto" ? r.last_sale_date : r.deal_date;
+  return d ? String(d).slice(0, 4) : "";
+};
 const fmtMoneyShort = (n) => {
   if (n == null || n === "") return "";
   n = Number(n);
@@ -821,7 +836,6 @@ const labelStyle = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
 function Sourcing({ pw }) {
   const [sources, setSources] = useState({ acris: true, dob: true, pluto: true });
   const [borough, setBorough] = useState("");
-  const [docType, setDocType] = useState("");
   const [since, setSince] = useState("");
   const [assetType, setAssetType] = useState("any");
   const [street, setStreet] = useState("");
@@ -850,7 +864,7 @@ function Sourcing({ pw }) {
     try {
       const res = await fetch("/api/source", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, docType, since, assetType, street, nearAddress, radiusMiles: radiusMiles || (nearAddress.trim() ? "0.1" : ""), limit, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) }),
+        body: JSON.stringify({ password: pw, sources: picked, borough, since, assetType, street, nearAddress, radiusMiles, limit, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -902,7 +916,7 @@ function Sourcing({ pw }) {
                   <AddressAutocomplete
                     value={nearAddress}
                     onChange={(t) => { setNearAddress(t); setPickedCoords(null); }}
-                    onPick={(label, lat, lon, bbl) => { setNearAddress(label); setPickedCoords({ lat, lon, bbl }); if (!radiusMiles) setRadiusMiles("0.1"); }}
+                    onPick={(label, lat, lon, bbl) => { setNearAddress(label); setPickedCoords({ lat, lon, bbl }); }}
                     placeholder="Start typing an address, e.g. 200 5th Ave…"
                     style={{ ...fieldStyle, width: "100%" }}
                   />
@@ -911,24 +925,16 @@ function Sourcing({ pw }) {
               <label>
                 <div className="mono" style={labelStyle}>RADIUS</div>
                 <select value={radiusMiles} onChange={(e) => setRadiusMiles(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
-                  {[["", "off"], ["0.05", "0.05 mi · ~1 block"], ["0.1", "0.1 mi · ~2 blocks"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"], ["1", "1 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  {[["", "off · just this property"], ["0.05", "0.05 mi · ~1 block"], ["0.1", "0.1 mi · ~2 blocks"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"], ["1", "1 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
-              </label>
-              <label>
-                <div className="mono" style={labelStyle}>DOC TYPE (ACRIS)</div>
-                <input value={docType} onChange={(e) => setDocType(e.target.value)} placeholder="e.g. DEED" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
               </label>
               <label>
                 <div className="mono" style={labelStyle}>SINCE</div>
                 <input type="date" value={since} onChange={(e) => setSince(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
               </label>
-              <label>
-                <div className="mono" style={labelStyle}>MAX PER SOURCE</div>
-                <input type="number" min="1" max="250" value={limit} onChange={(e) => setLimit(Number(e.target.value))} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} />
-              </label>
             </div>
             <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
-              <strong style={{ color: C.ivory }}>Address</strong> — type and pick from the dropdown to search a tight area. A radius search returns the PLUTO properties in that circle (it ignores ACRIS/DOB, which can’t do radius). <strong style={{ color: C.ivory }}>Too many results? Use a smaller radius.</strong> Click an address for Google Maps, or “▸ deed history” for a property’s deeds &amp; mortgages.
+              <strong style={{ color: C.ivory }}>Address</strong> — type and pick from the dropdown. With <strong style={{ color: C.ivory }}>radius off</strong> you get just that one property; pick a radius to also pull the PLUTO properties around it (nearest first). Radius searches ignore ACRIS/DOB, which can’t do radius. Click an address for Google Maps, or “▸ details” for owner, deeds &amp; records.
             </div>
 
             <button onClick={() => setShowMore((s) => !s)} className="mono" style={{ marginTop: 12, cursor: "pointer", background: "none", border: "none", padding: 0, color: C.gold, fontSize: 12 }}>
@@ -966,7 +972,11 @@ function Sourcing({ pw }) {
               </div>
               {center && (
                 <div style={{ margin: "-4px 0 12px", fontSize: 12.5, color: C.muted }}>
-                  Within <strong style={{ color: C.gold }}>{center.radiusMiles} mi</strong> of {center.label} — nearest first.
+                  {center.single ? (
+                    <>Showing only the property you searched — <strong style={{ color: C.gold }}>{center.label}</strong>. Pick a radius to also see nearby properties.</>
+                  ) : (
+                    <>Within <strong style={{ color: C.gold }}>{center.radiusMiles} mi</strong> of {center.label} — nearest first. The address you searched is pinned at the top, marked <strong style={{ color: C.gold }}>★ THIS PROPERTY</strong>.</>
+                  )}
                 </div>
               )}
               <LeadTable rows={leads} pw={pw} />
@@ -987,7 +997,7 @@ function Sourcing({ pw }) {
 
 function LeadTable({ rows, statusEditor, pw }) {
   if (!rows.length) return null;
-  const cols = ["Name", "Type", "Role", "Property", "Mailing address", "Borough", "Class", "Last sale", "Amount", "Date", "Source"];
+  const cols = ["Name", "Type", "Role", "Property", "Mailing address", "Borough", "Retail SF", "Assessed value", "Purchase price", "Source"];
   const colSpan = cols.length + (statusEditor ? 1 : 0);
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "auto" }}>
@@ -1013,8 +1023,18 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
 
   return (
     <>
-      <tr style={{ borderBottom: last && !open ? "none" : `1px solid ${C.line}` }}>
+      <tr style={{
+        borderBottom: last && !open ? "none" : `1px solid ${C.line}`,
+        // The property the user actually searched for is pinned to the top — give it a
+        // clear highlight + left accent so it never blends in with the radius results.
+        background: r.pinned ? C.goldSoft : undefined,
+        boxShadow: r.pinned ? `inset 3px 0 0 ${C.gold}` : undefined,
+      }}>
         <td style={{ padding: "10px 14px", fontWeight: 600, minWidth: 200 }}>
+          {r.pinned && (
+            <div className="mono" style={{ display: "inline-block", marginBottom: 5, fontSize: 9.5, padding: "2px 7px", borderRadius: 5, background: C.gold, color: C.ink, fontWeight: 700, whiteSpace: "nowrap" }}>★ THIS PROPERTY</div>
+          )}
+          {r.pinned && <br />}
           {r.name}
           {(r.tax_lien || r.portfolio_count > 1 || r.underbuilt) && (
             <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -1042,13 +1062,22 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
           {r.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9.5, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber, whiteSpace: "nowrap" }}>{r.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}
         </td>
         <td style={{ padding: "10px 14px", color: C.muted }}>{r.borough || "—"}</td>
-        <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.doc_type || "—"}</td>
-        <td className="mono" style={{ padding: "10px 14px", color: C.muted, whiteSpace: "nowrap" }}>
-          {r.last_sale_date ? `${String(r.last_sale_date).slice(0, 4)}${r.last_sale_price ? " · " + fmtMoneyShort(r.last_sale_price) : ""}` : "—"}
-          {r.years_owned != null && <span style={{ color: r.years_owned >= 15 ? C.green : C.muted }}> · {r.years_owned}y</span>}
+        {/* Retail square footage (PLUTO retailarea); falls back to total building SF. */}
+        <td className="mono" style={{ padding: "10px 14px", whiteSpace: "nowrap" }} title="Retail floor area (PLUTO). Shows total building SF when no retail area is recorded.">
+          {r.retail_sqft ? <span>{Number(r.retail_sqft).toLocaleString()} SF</span>
+            : r.bldg_sqft ? <span style={{ color: C.muted }}>{Number(r.bldg_sqft).toLocaleString()} SF <span style={{ fontSize: 10 }}>bldg</span></span>
+            : <span style={{ color: C.muted }}>—</span>}
         </td>
-        <td className="mono" style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>{fmtAmount(r.amount) || "—"}</td>
-        <td className="mono" style={{ padding: "10px 14px", color: C.muted, whiteSpace: "nowrap" }}>{(r.deal_date || "").slice(0, 10) || "—"}</td>
+        {/* Assessed value — the City tax assessment (PLUTO only). Not a sale price. */}
+        <td className="mono" style={{ padding: "10px 14px", whiteSpace: "nowrap" }} title="City tax assessment (total assessed value)">
+          {assessedValue(r) != null ? fmtAmount(assessedValue(r)) : "—"}
+        </td>
+        {/* Purchase price — what the owner actually paid, from the latest deed. */}
+        <td className="mono" style={{ padding: "10px 14px", whiteSpace: "nowrap" }} title="Last recorded sale price (ACRIS deed)">
+          {purchasePrice(r) != null && purchasePrice(r) !== "" ? fmtAmount(purchasePrice(r)) : "—"}
+          {purchaseDate(r) && <span style={{ color: C.muted }}> · {purchaseDate(r)}</span>}
+          {r.years_owned != null && <span style={{ color: r.years_owned >= 15 ? C.green : C.muted }}> · {r.years_owned}y owned</span>}
+        </td>
         <td className="mono" style={{ padding: "10px 14px", color: C.muted }}>{r.source}</td>
         {statusEditor && <td style={{ padding: "10px 14px" }}>{statusEditor(r)}</td>}
       </tr>
@@ -1109,9 +1138,21 @@ function PropertyDetail({ r, pw }) {
         <div style={{ fontSize: 13 }}>
           <a href={mapUrl(r)} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{r.address || "—"} ↗</a>
           <div style={{ color: C.muted, marginTop: 2 }}>
-            {[r.borough, r.doc_type && `class ${r.doc_type}`, (fmtAmount(r.amount) ? `assessed ${fmtAmount(r.amount)}` : null),
-              (r.last_sale_date ? `last sale ${String(r.last_sale_date).slice(0, 4)}${r.last_sale_price ? " " + fmtMoneyShort(r.last_sale_price) : ""}` : null),
-              (r.years_owned != null ? `owned ${r.years_owned}y` : null)].filter(Boolean).join(" · ")}
+            {[r.borough, r.doc_type && `class ${r.doc_type}`].filter(Boolean).join(" · ")}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 12px", marginTop: 8, fontSize: 12.5 }}>
+            <div style={{ color: C.muted }}>Retail SF</div>
+            <div style={{ color: C.ivory }}>{r.retail_sqft ? `${Number(r.retail_sqft).toLocaleString()} SF` : <span style={{ color: C.muted }}>none recorded</span>}</div>
+            <div style={{ color: C.muted }}>Building SF</div>
+            <div style={{ color: C.ivory }}>{r.bldg_sqft ? `${Number(r.bldg_sqft).toLocaleString()} SF` : "—"}{r.lot_sqft ? <span style={{ color: C.muted }}> · lot {Number(r.lot_sqft).toLocaleString()} SF</span> : null}</div>
+            <div style={{ color: C.muted }}>Assessed value</div>
+            <div style={{ color: C.ivory }}>{assessedValue(r) != null ? fmtAmount(assessedValue(r)) : "—"} <span style={{ color: C.muted, fontSize: 11 }}>(City tax assessment)</span></div>
+            <div style={{ color: C.muted }}>Purchase price</div>
+            <div style={{ color: C.ivory }}>
+              {purchasePrice(r) != null && purchasePrice(r) !== "" ? fmtAmount(purchasePrice(r)) : "—"}
+              {purchaseDate(r) && <span style={{ color: C.muted }}> · bought {purchaseDate(r)}</span>}
+              {r.years_owned != null && <span style={{ color: r.years_owned >= 15 ? C.green : C.muted }}> · {r.years_owned}y owned</span>}
+            </div>
           </div>
           {r.buildable_sqft > 0 && <div style={{ color: C.green, marginTop: 2 }}>▲ {Number(r.buildable_sqft).toLocaleString()} sf unused air rights (built {r.built_far} / max {r.max_far} FAR)</div>}
         </div>

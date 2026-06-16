@@ -15,12 +15,13 @@ Search efficiently (a few targeted queries), then write the brief. Do NOT narrat
 
 Format the brief in markdown with these sections (omit a section only if you truly found nothing for it):
 - **Who's behind it** — the real principals/decision-makers behind the entity, any parent company or management firm, and any contact clues (names, affiliated firms).
+- **Contacts found** — any PUBLICLY-LISTED phone number, email, or website for the owner, its management company, or the principals that actually appeared in your search results. Put each on its own line with its source (e.g. "Leasing line 212-555-0100 — via the firm's website"). This is the most valuable section when present.
 - **Portfolio & track record** — other holdings, how active they are, buy/sell history.
 - **Signals** — recent news, financing/maturing debt, litigation, distress, redevelopment plans, or anything suggesting motivation to sell.
 - **The asset** — current tenant(s)/occupancy, any listing or availability, redevelopment or air-rights angle.
 - **Bottom line** — 1–2 sentences: is this plausibly a motivated seller and is it worth the team's time?
 
-Rules: Be concise (under ~400 words). Ground claims in what you found and name the source inline (publication or site). If information is thin or you cannot confirm something, say so plainly — never fabricate names, numbers, or contacts. This is for professional real-estate sourcing.`;
+Rules: Be concise (under ~400 words). Ground every claim in what you found and name the source inline (publication or site). For "Contacts found": include ONLY phone numbers, emails, or sites you literally saw in a search result, each with its source — NEVER guess or construct an email from a name/pattern (e.g. do not invent firstname@company.com), and never present an unconfirmed contact as real. If information is thin or you cannot confirm something, say so plainly — never fabricate names, numbers, or contacts. These will be business/office contacts; personal cell numbers are generally not on the open web. This is for professional real-estate sourcing.`;
 }
 
 export default async function handler(req, res) {

@@ -49,7 +49,7 @@ export default async function handler(req, res) {
     }
     // Zero-cost deploy/version probe (no Anthropic call).
     if (req.body && req.body.debug) {
-      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, build: "v4-knowledge-mode" });
+      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, build: "v5-lite-search" });
     }
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
@@ -89,7 +89,7 @@ export default async function handler(req, res) {
           model: RESEARCH_MODEL,
           max_tokens: 1500,
           system: useWeb ? buildSystem() : buildSystemKnowledge(),
-          ...(useWeb ? { tools: [{ type: "web_search_20260209", name: "web_search", max_uses: MAX_SEARCHES }] } : {}),
+          ...(useWeb ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_SEARCHES }] } : {}),
           messages,
         }),
       });

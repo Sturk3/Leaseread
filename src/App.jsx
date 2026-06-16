@@ -668,6 +668,28 @@ function Gauge({ score, color }) {
 
 // ───────────────────────── Sourcing page ─────────────────────────
 
+// POST + safely parse. If a serverless function times out or crashes, Vercel returns
+// a non-JSON error page ("An error occurred…") — calling res.json() on that throws a
+// cryptic "Unexpected token" error (and used to blank the screen). This reads the body
+// as text and turns any non-JSON / error response into a clear, actionable message.
+async function postJSON(url, body) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); }
+  catch {
+    const timedOut = res.status === 504 || res.status === 408 || /timeout|timed out/i.test(text);
+    throw new Error(
+      timedOut
+        ? "The request timed out on the server. Try a smaller radius, fewer sources, or a tighter filter."
+        : `The server returned an error (HTTP ${res.status}). Please try again in a moment.`
+    );
+  }
+  if (!res.ok) throw new Error(data.error || `Server error (HTTP ${res.status}).`);
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
 function downloadBlob(content, name, type) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -889,12 +911,7 @@ function Sourcing({ pw }) {
     if (!picked.length) { setError("Pick at least one source (ACRIS, DOB, or PLUTO)."); return; }
     setLoading(true);
     try {
-      const res = await fetch("/api/source", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw, sources: picked, borough, since, assetType, street, nearAddress, radiusMiles, limit, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      const data = await postJSON("/api/source", { password: pw, sources: picked, borough, since, assetType, street, nearAddress, radiusMiles, limit, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) });
       setLeads(data.leads || []);
       setCenter(data.center || null);
     } catch (e) { setError(e.message || "Sourcing failed."); }

@@ -283,6 +283,17 @@ function devFields(row) {
     retail_sqft: toNum(row.retailarea) || null,
     bldg_sqft: toNum(row.bldgarea) || null,
     lot_sqft: lotarea || null,
+    // Trophy-retail fundamentals (all from PLUTO, no extra call):
+    //  frontage = linear feet on the street (THE high-street value driver),
+    //  commercial overlay = whether retail is permitted, special district = signage/
+    //  use overlays (Times Sq, 5th Ave), landmark/historic = facade/alteration limits.
+    frontage_ft: toNum(row.bldgfront) || toNum(row.lotfront) || null,
+    num_floors: toNum(row.numfloors) || null,
+    zoning: clean(row.zonedist1) || null,
+    overlay: clean(row.overlay1) || null,
+    special_district: clean(row.spdist1) || null,
+    landmark: clean(row.landmark) || null,
+    hist_district: clean(row.histdist) || null,
   };
 }
 
@@ -471,6 +482,8 @@ function buildLeads(deals, contacts) {
       built_far: d.built_far ?? null, max_far: d.max_far ?? null,
       buildable_sqft: d.buildable_sqft ?? null, underbuilt: d.underbuilt || false,
       retail_sqft: d.retail_sqft ?? null, bldg_sqft: d.bldg_sqft ?? null, lot_sqft: d.lot_sqft ?? null,
+      frontage_ft: d.frontage_ft ?? null, num_floors: d.num_floors ?? null, zoning: d.zoning ?? null,
+      overlay: d.overlay ?? null, special_district: d.special_district ?? null, landmark: d.landmark ?? null, hist_district: d.hist_district ?? null,
       lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null, pinned: d.pinned || false,
       name: c.name, role: c.role, entity_type: c.entity_type || "unknown",
       first_name: c.first_name || "", last_name: c.last_name || "",

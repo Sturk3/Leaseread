@@ -1692,6 +1692,8 @@ function PropertyDetail({ r, pw }) {
             {[r.borough, r.doc_type && `class ${r.doc_type}`].filter(Boolean).join(" · ")}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 12px", marginTop: 8, fontSize: 12.5 }}>
+            <div style={{ color: C.muted }}>Frontage</div>
+            <div style={{ color: C.ivory }}>{r.frontage_ft ? <strong style={{ color: C.gold }}>{Number(r.frontage_ft).toLocaleString()} ft</strong> : <span style={{ color: C.muted }}>—</span>}{r.num_floors ? <span style={{ color: C.muted }}> · {Number(r.num_floors)} floor{Number(r.num_floors) === 1 ? "" : "s"}</span> : null}</div>
             <div style={{ color: C.muted }}>Retail SF</div>
             <div style={{ color: C.ivory }}>{r.retail_sqft ? `${Number(r.retail_sqft).toLocaleString()} SF` : <span style={{ color: C.muted }}>none recorded</span>}</div>
             <div style={{ color: C.muted }}>Building SF</div>
@@ -1707,6 +1709,21 @@ function PropertyDetail({ r, pw }) {
           </div>
           {r.buildable_sqft > 0 && <div style={{ color: C.green, marginTop: 2 }}>▲ {Number(r.buildable_sqft).toLocaleString()} sf unused air rights (built {r.built_far} / max {r.max_far} FAR)</div>}
         </div>
+
+        {(r.zoning || r.overlay || r.special_district || r.landmark || r.hist_district) && (
+          <>
+            <div className="mono" style={title}>RETAIL ZONING / DESIGNATION</div>
+            <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.7 }}>
+              {(r.zoning || r.overlay) && (
+                <div>Zoning: <span style={{ color: C.ivory }}>{r.zoning || "—"}</span>{r.overlay ? <> · retail overlay <span style={{ color: C.green }}>{r.overlay}</span></> : <span style={{ color: C.muted }}> · no commercial overlay</span>}</div>
+              )}
+              {r.special_district && <div>Special district: <span style={{ color: C.gold }}>{r.special_district}</span> <span style={{ fontSize: 11 }}>(signage/use overlay)</span></div>}
+              {(r.landmark || r.hist_district) && (
+                <div style={{ color: C.amber }}>⚑ {[r.landmark, r.hist_district && `${r.hist_district} historic district`].filter(Boolean).join(" · ")} — facade/alterations restricted</div>
+              )}
+            </div>
+          </>
+        )}
 
         <div className="mono" style={title}>ON-MARKET / AVAILABILITY</div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

@@ -1698,10 +1698,15 @@ function PropertyDetail({ r, pw }) {
           <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>
             {intel.ny_corp ? (
               <div>
-                <span style={{ color: C.ivory }}>NY State registry:</span> {String(intel.ny_corp.entity_type || "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase())}{intel.ny_corp.filed ? ` · filed ${intel.ny_corp.filed}` : ""}
-                <div style={{ color: C.muted }}>Process: {intel.ny_corp.process_name}{intel.ny_corp.process_address ? ` — ${intel.ny_corp.process_address}` : ""}</div>
+                <span style={{ color: C.ivory }}>NY State registry:</span> {intel.ny_corp.name}{intel.ny_corp.entity_type ? ` · ${String(intel.ny_corp.entity_type).toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase())}` : ""}{intel.ny_corp.filed ? ` · filed ${intel.ny_corp.filed}` : ""}
+                <div style={{ color: C.muted }}>Process (legal contact): {intel.ny_corp.process_name}{intel.ny_corp.process_address ? ` — ${intel.ny_corp.process_address}` : ""}</div>
+                {intel.ny_corp.dos_id && <a href={`https://opencorporates.com/companies/us_ny/${intel.ny_corp.dos_id}`} target="_blank" rel="noreferrer" className="mono" style={{ color: C.gold, textDecoration: "none", fontSize: 11 }}>↗ open NY State record</a>}
               </div>
-            ) : <div style={{ color: C.muted }}>NY State registry: no exact entity match (often a single-building LLC, or an individual owner).</div>}
+            ) : (
+              <div style={{ color: C.muted }}>
+                NY State registry: no match (often an individual owner, a dissolved entity, or a name spelled differently). <a href={`https://apps.dos.ny.gov/publicInquiry/`} target="_blank" rel="noreferrer" className="mono" style={{ color: C.gold, textDecoration: "none" }}>↗ search NY DOS</a>
+              </div>
+            )}
             <div style={{ marginTop: 4 }}>
               <span style={{ color: C.ivory }}>Violations:</span>{" "}
               <span style={{ color: intel.dob_violations ? C.red : C.muted }}>DOB {intel.dob_violations || 0}</span> ·{" "}

@@ -16,6 +16,25 @@ const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
 const toNum = (v) => { const n = Number(String(v ?? "").replace(/[$,]/g, "")); return Number.isFinite(n) ? n : 0; };
 const sodaQuote = (vals) => [...new Set(vals)].map((v) => `'${String(v).replace(/'/g, "''")}'`).join(",");
 
+// PLUTO owner names rarely match NY DOS entity names byte-for-byte (INC vs INC.,
+// LLC vs L.L.C., comma before the suffix, &/AND, optional THE). Generate the common
+// variants so the registry lookup actually hits instead of silently missing.
+function entityVariants(name) {
+  const base = clean(name).toUpperCase().replace(/\s+/g, " ").trim();
+  if (!base) return [];
+  const set = new Set([base]);
+  const add = (s) => { const v = clean(s).toUpperCase(); if (v) set.add(v); };
+  add(base.replace(/\b(INC|CORP|CO|LTD|LP|LLP)\b\.?/g, "$1."));     // add trailing period
+  add(base.replace(/\b(INC|CORP|CO|LTD|LP|LLP)\.\b/g, "$1"));        // remove trailing period
+  add(base.replace(/\bLLC\b/g, "L.L.C."));
+  add(base.replace(/\bL\.L\.C\.?\b/g, "LLC"));
+  add(base.replace(/&/g, "AND"));
+  add(base.replace(/\bAND\b/g, "&"));
+  add(base.replace(/\s+(INC|LLC|CORP|CO|LTD)\b\.?/g, ", $1."));      // comma before suffix
+  if (/^THE\s+/.test(base)) add(base.replace(/^THE\s+/, "")); else add("THE " + base);
+  return [...set].slice(0, 14);
+}
+
 async function getJson(base, dataset, params, appToken) {
   const qs = new URLSearchParams(params).toString();
   const headers = appToken ? { "X-App-Token": appToken } : {};
@@ -42,14 +61,14 @@ export default async function handler(req, res) {
     const lt = haveLot ? sodaQuote([String(l), String(l).padStart(4, "0"), String(l).padStart(5, "0")]) : "";
     const lotWhere = (boroField) => `${boroField}='${code}' AND block in (${blk}) AND lot in (${lt})`;
 
-    const nm = clean(name).toUpperCase().replace(/'/g, "''");
+    const variants = entityVariants(name);
 
     const [corp, dob, ecb, hpd] = await Promise.all([
-      // NY State business registry — exact entity name (only meaningful for LLCs/corps)
-      nm ? getJson(NYS, NY_CORP, {
+      // NY State business registry — match the owner entity across common name variants
+      variants.length ? getJson(NYS, NY_CORP, {
         $limit: "1",
-        $where: `upper(current_entity_name)='${nm}'`,
-        $select: "current_entity_name,entity_type,initial_dos_filing_date,dos_process_name,dos_process_address_1,dos_process_city,dos_process_state,dos_process_zip",
+        $where: `upper(current_entity_name) in (${sodaQuote(variants)})`,
+        $select: "dos_id,current_entity_name,entity_type,initial_dos_filing_date,dos_process_name,dos_process_address_1,dos_process_city,dos_process_state,dos_process_zip",
       }, appToken) : Promise.resolve([]),
       // DOB violations — active
       haveLot ? getJson(NYC, DOB_VIOL, { $select: "count(*)", $where: `${lotWhere("boro")} AND violation_category like '%ACTIVE%'` }, appToken) : Promise.resolve([]),
@@ -61,6 +80,7 @@ export default async function handler(req, res) {
 
     const c = corp[0];
     const ny_corp = c ? {
+      dos_id: clean(c.dos_id),
       name: clean(c.current_entity_name),
       entity_type: clean(c.entity_type),
       filed: clean(c.initial_dos_filing_date).slice(0, 10),

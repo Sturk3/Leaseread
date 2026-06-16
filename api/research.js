@@ -29,6 +29,16 @@ Format the brief in markdown with these sections (omit a section only if you tru
 Rules: Be concise (under ~400 words). Ground every claim in what you found and name the source inline (publication or site). For "Contacts found": include ONLY phone numbers, emails, or sites you literally saw in a search result, each with its source — NEVER guess or construct an email from a name/pattern (e.g. do not invent firstname@company.com), and never present an unconfirmed contact as real. If information is thin or you cannot confirm something, say so plainly — never fabricate names, numbers, or contacts. These will be business/office contacts; personal cell numbers are generally not on the open web. This is for professional real-estate sourcing.`;
 }
 
+// Knowledge-only brief (no web). Fast, but the model only knows public, well-known
+// entities — so it must refuse to invent anything for owners it doesn't recognize.
+function buildSystemKnowledge() {
+  return `You are a real estate acquisitions analyst at a firm buying trophy/high-street RETAIL in NYC. Using ONLY your own knowledge (you have no web access), write a short brief about this property's owner.
+
+CRITICAL HONESTY RULE: Only state facts you actually know about THIS specific entity. Most NYC owners are small, private single-asset LLCs you will NOT recognize — if so, say exactly that in one line ("I have no specific information on this owner; it appears to be a private single-asset entity — use the web research mode or skip tracing") and stop. Do NOT invent principals, phone numbers, portfolios, or history. Never fabricate a contact.
+
+If it IS a recognizable company / REIT / well-known developer, give: who they are, parent/principals, the kind of portfolio they hold, reputation, and whether they're plausibly a seller. Keep it under 250 words, markdown. Note that your knowledge has a cutoff and may be out of date.`;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
@@ -39,7 +49,7 @@ export default async function handler(req, res) {
     }
     // Zero-cost deploy/version probe (no Anthropic call).
     if (req.body && req.body.debug) {
-      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, build: "v3-single-search" });
+      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, build: "v4-knowledge-mode" });
     }
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
@@ -55,6 +65,10 @@ export default async function handler(req, res) {
     ].filter(Boolean).join("\n");
 
     const userText = `Research this NYC retail property and its owner, then write the brief.\n\n${facts}`;
+
+    // mode "web" (default) = live web search; "knowledge" = Sonnet's own knowledge only
+    // (instant, but only reliable for well-known owners — see buildSystemKnowledge).
+    const useWeb = (req.body.mode || "web") !== "knowledge";
 
     let messages = [{ role: "user", content: [{ type: "text", text: userText }] }];
     const parts = [];
@@ -74,8 +88,8 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           model: RESEARCH_MODEL,
           max_tokens: 1500,
-          system: buildSystem(),
-          tools: [{ type: "web_search_20260209", name: "web_search", max_uses: MAX_SEARCHES }],
+          system: useWeb ? buildSystem() : buildSystemKnowledge(),
+          ...(useWeb ? { tools: [{ type: "web_search_20260209", name: "web_search", max_uses: MAX_SEARCHES }] } : {}),
           messages,
         }),
       });

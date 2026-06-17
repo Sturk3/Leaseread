@@ -52,7 +52,7 @@ export default async function handler(req, res) {
     let master = [];
     for (const batch of chunk(docIds, 75)) {
       master = master.concat(await fetchSocrata(ACRIS_MASTER, {
-        where: `document_id in (${sodaQuote(batch)}) AND doc_type='DEED' AND document_amt > 100000`,
+        where: `document_id in (${sodaQuote(batch)}) AND doc_type='DEED'`,
         select: "document_id,document_date,recorded_datetime,document_amt", limit: 2000, appToken,
       }));
     }
@@ -64,7 +64,7 @@ export default async function handler(req, res) {
         const dt = clean(m.document_date || m.recorded_datetime);
         return { address: addrByDoc[id] || "", date: dt ? dt.slice(0, 10) : "", price: toNum(m.document_amt) };
       })
-      .filter((c) => { const k = c.address + "|" + c.date + "|" + c.price; if (!c.price || seen.has(k)) return false; seen.add(k); return true; })
+      .filter((c) => { const k = c.address + "|" + c.date + "|" + c.price; if (!c.price || c.price < 100000 || seen.has(k)) return false; seen.add(k); return true; })
       .sort((a, b2) => (b2.date || "").localeCompare(a.date || ""))
       .slice(0, 12);
 

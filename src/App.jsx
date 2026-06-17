@@ -1985,6 +1985,34 @@ function PropertyDetail({ r, pw }) {
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
           {lookupLinks(r).map((lk) => <a key={lk.label} href={lk.href} target="_blank" rel="noreferrer" className="mono lift" style={ACTION_PILL}>{lk.label}</a>)}
         </div>
+        {/* Free contacts we already have — business phone lines on file + NY registered
+            contact. (Phones are the TENANT's business line, not the owner's cell.) */}
+        {intel && (() => {
+          const phones = []; const seen = new Set();
+          (intel.businesses || []).forEach((b) => { const p = (b.phone || "").trim(); if (p && !seen.has(p)) { seen.add(p); phones.push({ phone: p, name: b.name }); } });
+          const nyc = intel.ny_corp;
+          if (!phones.length && !(nyc && nyc.process_name)) return null;
+          return (
+            <div style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>
+              {phones.length > 0 && (
+                <div>
+                  <span style={{ color: C.ivory }}>Phones on file (free):</span>
+                  {phones.slice(0, 4).map((p, i) => (
+                    <div key={i}>
+                      <a href={`tel:${p.phone.replace(/[^0-9+]/g, "")}`} style={{ color: C.green, textDecoration: "none" }}>📞 {p.phone}</a>
+                      <span style={{ color: C.muted }}> — {p.name} (tenant)</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {nyc && nyc.process_name && (
+                <div style={{ color: C.muted, marginTop: phones.length ? 4 : 0 }}>
+                  <span style={{ color: C.ivory }}>NY registered contact:</span> {nyc.process_name}{nyc.process_address ? ` — ${nyc.process_address}` : ""}
+                </div>
+              )}
+            </div>
+          );
+        })()}
         <ContactReveal r={r} pw={pw} />
 
         <div className="mono" style={title}>PROPERTY</div>

@@ -2018,7 +2018,18 @@ function latestDebt(hist) {
   const latest = m[0];
   const satisfied = hist.some((h) => h.doc_type === "SAT" && (h.date || "") > (latest.date || ""));
   const lender = ((latest.parties || []).find((p) => /grantee|buyer|party/i.test(p.role)) || (latest.parties || [])[0] || {}).name || "";
-  return { amount: latest.amount, date: latest.date, lender, satisfied, count: m.length };
+  const year = Number(String(latest.date || "").slice(0, 4)) || null;
+  const yearsAgo = year ? new Date().getFullYear() - year : null;
+  // Maturity estimate. ACRIS doesn't record a maturity date, but commercial mortgages
+  // are typically 5/7/10-year balloons — so an old, unsatisfied loan is likely at or
+  // past maturity (refinance/sale pressure = a motivation signal). Estimate from age.
+  let maturity = null;
+  if (!satisfied && yearsAgo != null) {
+    if (yearsAgo >= 10) maturity = { level: "high", text: `loan is ~${yearsAgo}y old — past a typical 10y term; likely matured (refinance or sale)` };
+    else if (yearsAgo >= 7) maturity = { level: "med", text: `loan ~${yearsAgo}y old — nearing a typical 7–10y maturity` };
+    else if (yearsAgo >= 5) maturity = { level: "low", text: `loan ~${yearsAgo}y old — a 5y balloon may be coming due` };
+  }
+  return { amount: latest.amount, date: latest.date, lender, satisfied, count: m.length, year, yearsAgo, maturity };
 }
 
 function PropertyDetail({ r, pw }) {
@@ -2136,14 +2147,22 @@ function PropertyDetail({ r, pw }) {
                 const debt = latestDebt(hist);
                 if (debt === undefined) return <span style={{ color: C.muted }}>…</span>;
                 if (debt === null) return <span style={{ color: C.muted }}>none on record</span>;
+                const matCol = debt.maturity && debt.maturity.level === "high" ? C.amber : C.gold;
                 return (
                   <>
-                    {debt.amount != null ? fmtAmount(debt.amount) : "—"}
-                    {debt.date && <span style={{ color: C.muted }}> · {String(debt.date).slice(0, 4)}</span>}
-                    {debt.lender && <span style={{ color: C.muted }}> · {debt.lender}</span>}
-                    {debt.satisfied
-                      ? <span className="mono" style={{ marginLeft: 6, fontSize: 9.5, color: C.green, border: `1px solid ${C.green}`, borderRadius: 4, padding: "0 5px" }}>LIKELY SATISFIED</span>
-                      : <span style={{ color: C.muted, fontSize: 11 }}> (orig. amount)</span>}
+                    <div>
+                      {debt.amount != null ? fmtAmount(debt.amount) : "—"}
+                      {debt.date && <span style={{ color: C.muted }}> · {String(debt.date).slice(0, 4)}</span>}
+                      {debt.lender && <span style={{ color: C.muted }}> · {debt.lender}</span>}
+                      {debt.satisfied
+                        ? <span className="mono" style={{ marginLeft: 6, fontSize: 9.5, color: C.green, border: `1px solid ${C.green}`, borderRadius: 4, padding: "0 5px" }}>LIKELY SATISFIED</span>
+                        : debt.maturity
+                          ? <span className="mono" style={{ marginLeft: 6, fontSize: 9.5, color: matCol, border: `1px solid ${matCol}`, borderRadius: 4, padding: "0 5px" }}>⏰ LIKELY MATURING</span>
+                          : <span style={{ color: C.muted, fontSize: 11 }}> (orig. amount)</span>}
+                    </div>
+                    {!debt.satisfied && debt.maturity && (
+                      <div style={{ color: C.muted, fontSize: 11, marginTop: 1 }}>{debt.maturity.text}</div>
+                    )}
                   </>
                 );
               })()}

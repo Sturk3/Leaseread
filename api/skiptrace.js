@@ -93,23 +93,30 @@ const PROVIDERS = {
   tracerfy: {
     label: "Tracerfy",
     keyEnv: "TRACERFY_API_KEY",
-    estCost: (business) => (business ? 0.15 : 0.1), // ~5 credits/hit; Enhanced/business a bit more
+    estCost: () => 0.1, // 5 credits/hit × ~$0.02; 0 on miss
     async lookup(key, input, business) {
-      // CONFIRM base host + endpoint paths against the Tracerfy dashboard API docs.
-      const base = process.env.TRACERFY_BASE || "https://api.tracerfy.com";
-      const path = business ? "/business-skip-tracing/" : "/trace/lookup/";
-      const { first, last } = splitName(input.name);
-      // CONFIRM exact request field names. Tracerfy is address-centric; send a common set.
-      const body = business
-        ? { business_name: input.name, address: input.street, city: input.city, state: input.state, zip: input.zip }
-        : { first_name: first, last_name: last, name: input.name, address: input.street, city: input.city, state: input.state, zip: input.zip };
-      const r = await fetch(base + path, {
+      // Verified contract (tracerfy.com/skip-tracing-api-documentation):
+      //   POST {base}/trace/lookup/  ·  Authorization: Bearer <key>
+      //   required: address, city, state  (+ zip recommended)
+      //   find_owner=true → resolve the owner at that address (use for LLCs);
+      //   for a known person pass first_name/last_name + find_owner=false.
+      //   resp: { hit, persons:[{ phones:[{number,type,dnc}], emails:[{email}] }] }
+      // We pass the owner's MAILING address, so the owner resolves there.
+      const base = process.env.TRACERFY_BASE || "https://tracerfy.com/v1/api";
+      const body = { address: input.street, city: input.city, state: input.state, zip: input.zip };
+      if (business) {
+        body.find_owner = true;
+      } else {
+        const { first, last } = splitName(input.name);
+        body.first_name = first; body.last_name = last; body.find_owner = false;
+      }
+      const r = await fetch(base + "/trace/lookup/", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
         body: JSON.stringify(body),
       });
       const text = await r.text();
-      if (!r.ok) throw new Error(`Tracerfy ${r.status}: ${text.slice(0, 180)}`);
+      if (!r.ok) throw new Error(`Tracerfy ${r.status}: ${text.slice(0, 200)}`);
       return JSON.parse(text);
     },
   },
@@ -151,10 +158,10 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
 
-    // Default lane is BatchData (chosen for CRE/LLC entity unmasking). Override with
-    // SKIPTRACE_PROVIDER=tracerfy to switch lanes (e.g. for a bake-off).
-    const providerId = (process.env.SKIPTRACE_PROVIDER || "batchdata").toLowerCase();
-    const provider = PROVIDERS[providerId] || PROVIDERS.batchdata;
+    // Default lane is Tracerfy (self-serve pay-on-hit; user's choice to start). Override
+    // with SKIPTRACE_PROVIDER=batchdata to switch lanes (e.g. for a bake-off).
+    const providerId = (process.env.SKIPTRACE_PROVIDER || "tracerfy").toLowerCase();
+    const provider = PROVIDERS[providerId] || PROVIDERS.tracerfy;
     const key = process.env[provider.keyEnv];
 
     // Zero-cost deploy/config probe — confirms which lane is live and whether the key

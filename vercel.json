@@ -32,6 +32,9 @@
     },
     "api/findcontact.js": {
       "maxDuration": 30
+    },
+    "api/comps.js": {
+      "maxDuration": 30
     }
   }
 }

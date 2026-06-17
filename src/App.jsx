@@ -1946,6 +1946,7 @@ function PropertyDetail({ r, pw }) {
   const [histErr, setHistErr] = useState("");
   const [port, setPort] = useState(null);
   const [intel, setIntel] = useState(null);
+  const [comps, setComps] = useState(null);
   const canHist = !!(r.borough && r.block && r.lot);
 
   useEffect(() => {
@@ -1964,6 +1965,12 @@ function PropertyDetail({ r, pw }) {
       .then((res) => res.json())
       .then((d) => { if (live) setIntel(d.error ? {} : d); })
       .catch(() => { if (live) setIntel({}); });
+    if (r.borough && r.block) {
+      fetch("/api/comps", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: pw, borough: r.borough, block: r.block }) })
+        .then((res) => res.json())
+        .then((d) => { if (live) setComps(d.error ? [] : (d.comps || [])); })
+        .catch(() => { if (live) setComps([]); });
+    }
     return () => { live = false; };
     // eslint-disable-next-line
   }, []);
@@ -2144,6 +2151,24 @@ function PropertyDetail({ r, pw }) {
 
         <div className="mono" style={title}>OWNER PORTFOLIO — citywide</div>
         {port == null ? <div style={muted}>Loading…</div> : <PortfolioList data={port} ownerName={r.name} />}
+
+        <div className="mono" style={title}>BLOCK SALE COMPS</div>
+        {comps == null ? <div style={muted}>Loading…</div>
+          : comps.length === 0 ? <div style={muted}>No recent recorded deed sales on this block.</div>
+          : (
+          <div style={{ padding: "6px 0" }}>
+            <div className="mono" style={{ fontSize: 10.5, color: C.muted, letterSpacing: "0.05em", padding: "4px 0" }}>
+              {comps.length} recorded sale{comps.length === 1 ? "" : "s"} on this block (ACRIS deeds, newest first)
+            </div>
+            {comps.map((c, i) => (
+              <div key={i} style={{ display: "flex", gap: 12, padding: "6px 0", borderTop: `1px solid ${C.line}`, fontSize: 12.5, alignItems: "baseline", flexWrap: "wrap" }}>
+                <span className="mono" style={{ color: C.muted, width: 84 }}>{c.date || "—"}</span>
+                <span style={{ flex: "1 1 160px", color: C.ivory }}>{c.address || "—"}</span>
+                <span className="mono" style={{ color: C.green, whiteSpace: "nowrap" }}>{c.price ? "$" + Number(c.price).toLocaleString() : "—"}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       </div>
     </div>

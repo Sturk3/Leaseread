@@ -699,6 +699,15 @@ async function postJSON(url, body) {
   return data;
 }
 
+// Saved properties + per-property notes, persisted in the browser (localStorage).
+// Lets the team flag targets and jot notes without a DB — the first step toward a
+// real pipeline (and the foundation for the future shared hub).
+const SAVED_KEY = "fr_saved_v1", NOTES_KEY = "fr_notes_v1";
+function loadSaved() { try { return JSON.parse(localStorage.getItem(SAVED_KEY)) || []; } catch { return []; } }
+function persistSaved(arr) { try { localStorage.setItem(SAVED_KEY, JSON.stringify(arr)); } catch { /* quota */ } }
+function loadNotes() { try { return JSON.parse(localStorage.getItem(NOTES_KEY)) || {}; } catch { return {}; } }
+function saveNote(id, text) { try { const o = loadNotes(); if (text) o[id] = text; else delete o[id]; localStorage.setItem(NOTES_KEY, JSON.stringify(o)); } catch { /* quota */ } }
+
 function downloadBlob(content, name, type) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -962,6 +971,9 @@ function Sourcing({ pw }) {
   const [error, setError] = useState("");
   const [leads, setLeads] = useState(null);
   const [center, setCenter] = useState(null);
+  const [saved, setSaved] = useState(() => new Set(loadSaved()));
+  const [savedOnly, setSavedOnly] = useState(false);
+  const toggleSave = (id) => setSaved((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); persistSaved([...n]); return n; });
 
   async function run() {
     setError(""); setLeads(null); setCenter(null);
@@ -1066,6 +1078,9 @@ function Sourcing({ pw }) {
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "22px 0 12px", flexWrap: "wrap", gap: 10 }}>
                 <div className="serif" style={{ fontSize: 17 }}>{leads.length} contact{leads.length === 1 ? "" : "s"} sourced</div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button onClick={() => setSavedOnly((v) => !v)} className="lift mono"
+                    title="Show only the properties you've starred"
+                    style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${savedOnly ? C.gold : C.line}`, background: savedOnly ? C.goldSoft : "transparent", color: savedOnly ? C.gold : C.ivory }}>★ SAVED ({saved.size})</button>
                   <button onClick={() => leads.length && downloadBlob(leadsToCSV(leads), csvName(), "text/csv")} className="lift mono"
                     style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>
                   <button onClick={() => leads.length && downloadBlob(skiptraceCSV(leads), csvName().replace(/\.csv$/, "_skiptrace.csv"), "text/csv")} className="lift mono"
@@ -1082,7 +1097,8 @@ function Sourcing({ pw }) {
                   )}
                 </div>
               )}
-              <LeadTable rows={leads} pw={pw} />
+              <LeadTable rows={savedOnly ? leads.filter((l) => saved.has(l.deal_id)) : leads} pw={pw} saved={saved} onToggleSave={toggleSave} />
+              {savedOnly && saved.size === 0 && <div style={{ color: C.muted, fontSize: 13 }}>Nothing saved yet — click the ☆ on a row to add it to your list.</div>}
               {leads.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No records matched those filters. Try widening the date or borough.</div>}
             </>
           )}
@@ -1609,7 +1625,7 @@ function LeaseRadar({ pw }) {
   );
 }
 
-function LeadTable({ rows, statusEditor, pw }) {
+function LeadTable({ rows, statusEditor, pw, saved, onToggleSave }) {
   if (!rows.length) return null;
   const cols = ["Name", "Type", "Role", "Property", "Mailing address", "Borough", "Retail SF", "Assessed value", "Purchase price", "Source"];
   const colSpan = cols.length + (statusEditor ? 1 : 0);
@@ -1624,7 +1640,7 @@ function LeadTable({ rows, statusEditor, pw }) {
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <LeadRow key={r.id ?? `${r.source}-${r.deal_id}-${i}`} r={r} last={i === rows.length - 1} statusEditor={statusEditor} pw={pw} colSpan={colSpan} />
+            <LeadRow key={r.id ?? `${r.source}-${r.deal_id}-${i}`} r={r} last={i === rows.length - 1} statusEditor={statusEditor} pw={pw} colSpan={colSpan} saved={saved} onToggleSave={onToggleSave} />
           ))}
         </tbody>
       </table>
@@ -1632,8 +1648,9 @@ function LeadTable({ rows, statusEditor, pw }) {
   );
 }
 
-function LeadRow({ r, last, statusEditor, pw, colSpan }) {
+function LeadRow({ r, last, statusEditor, pw, colSpan, saved, onToggleSave }) {
   const [open, setOpen] = useState(false);
+  const isSaved = saved && saved.has(r.deal_id);
 
   return (
     <>
@@ -1649,6 +1666,10 @@ function LeadRow({ r, last, statusEditor, pw, colSpan }) {
             <div className="mono" style={{ display: "inline-block", marginBottom: 5, fontSize: 9.5, padding: "2px 7px", borderRadius: 5, background: C.gold, color: C.ink, fontWeight: 700, whiteSpace: "nowrap" }}>★ THIS PROPERTY</div>
           )}
           {r.pinned && <br />}
+          {onToggleSave && (
+            <span onClick={() => onToggleSave(r.deal_id)} title={isSaved ? "Saved — click to remove" : "Save to your list"}
+              style={{ cursor: "pointer", marginRight: 6, color: isSaved ? C.gold : C.muted, fontSize: 15, userSelect: "none" }}>{isSaved ? "★" : "☆"}</span>
+          )}
           {r.name}
           {(r.tax_lien || r.portfolio_count > 1 || r.underbuilt) && (
             <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -1979,6 +2000,7 @@ function PropertyDetail({ r, pw }) {
   const [port, setPort] = useState(null);
   const [intel, setIntel] = useState(null);
   const [comps, setComps] = useState(null);
+  const [note, setNote] = useState(() => loadNotes()[r.deal_id] || "");
   const canHist = !!(r.borough && r.block && r.lot);
 
   useEffect(() => {
@@ -2012,6 +2034,12 @@ function PropertyDetail({ r, pw }) {
   return (
     <div style={{ paddingTop: 8 }}>
       <ResearchBrief r={r} pw={pw} />
+      <div style={{ marginBottom: 14 }}>
+        <div className="mono" style={{ fontSize: 10.5, color: C.muted, letterSpacing: "0.06em", marginBottom: 6 }}>NOTES</div>
+        <textarea value={note} onChange={(e) => { setNote(e.target.value); saveNote(r.deal_id, e.target.value); }}
+          placeholder="Your notes on this property — saved automatically (this browser only)."
+          style={{ width: "100%", minHeight: 56, background: C.panel, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, fontFamily: "Archivo, sans-serif", resize: "vertical", boxSizing: "border-box" }} />
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 22 }}>
       <div>
         <PropertyPhoto r={r} />

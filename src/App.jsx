@@ -1756,9 +1756,19 @@ function PropertyPhoto({ r }) {
   const streetmap = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=620,300&format=png&f=image`;
   return (
     <div style={{ marginBottom: 14 }}>
-      <a href={sat} target="_blank" rel="noreferrer" style={{ display: "block" }}>
+      <a href={sat} target="_blank" rel="noreferrer" style={{ display: "block", position: "relative" }}>
         <img src={streetmap} alt="Street map of the property location" loading="lazy"
           style={{ width: "100%", height: 190, objectFit: "cover", border: `1px solid ${C.line}`, borderRadius: 10, display: "block" }} />
+        {/* The map bbox is centered on the lot's lat/lon, so the subject is dead-center.
+            Drop a pin (tip at center) + an address label so it's unmistakable which one it is. */}
+        <svg width="28" height="36" viewBox="0 0 28 36" aria-hidden="true"
+          style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-100%)", pointerEvents: "none", filter: "drop-shadow(0 1px 2px rgba(0,0,0,.5))" }}>
+          <path d="M14 0C6.8 0 1 5.8 1 13c0 9.5 13 23 13 23s13-13.5 13-23C27 5.8 21.2 0 14 0z" fill={C.gold} stroke="#fff" strokeWidth="2" />
+          <circle cx="14" cy="13" r="4.5" fill="#fff" />
+        </svg>
+        <div className="mono" style={{ position: "absolute", left: 8, top: 8, background: "rgba(27,25,48,0.82)", color: "#fff", fontSize: 9.5, letterSpacing: "0.04em", padding: "3px 7px", borderRadius: 5, pointerEvents: "none", maxWidth: "85%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          ★ SUBJECT{r.address ? ` · ${r.address}` : ""}
+        </div>
       </a>
       <div style={{ display: "flex", gap: 12, marginTop: 5 }}>
         <a href={pano} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ Street View</a>

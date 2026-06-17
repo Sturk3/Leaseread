@@ -960,6 +960,7 @@ function Sourcing({ pw }) {
   const [radiusMiles, setRadiusMiles] = useState("");
   const [limit, setLimit] = useState(100);
   const [minSqft, setMinSqft] = useState("");
+  const [minRetailSqft, setMinRetailSqft] = useState("");
   const [minUnits, setMinUnits] = useState("");
   const [builtAfter, setBuiltAfter] = useState("");
   const [builtBefore, setBuiltBefore] = useState("");
@@ -981,7 +982,7 @@ function Sourcing({ pw }) {
     if (!picked.length) { setError("Pick at least one source (ACRIS, DOB, or PLUTO)."); return; }
     setLoading(true);
     try {
-      const data = await postJSON("/api/source", { password: pw, sources: picked, borough, assetType, street, nearAddress, radiusMiles, limit, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) });
+      const data = await postJSON("/api/source", { password: pw, sources: picked, borough, assetType, street, nearAddress, radiusMiles, limit, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) });
       setLeads(data.leads || []);
       setCenter(data.center || null);
     } catch (e) { setError(e.message || "Sourcing failed."); }
@@ -1054,6 +1055,7 @@ function Sourcing({ pw }) {
               <>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginTop: 10 }}>
                   <label><div className="mono" style={labelStyle}>MIN BLDG SQFT</div><input type="number" value={minSqft} onChange={(e) => setMinSqft(e.target.value)} placeholder="e.g. 5000" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+                  <label><div className="mono" style={labelStyle}>MIN RETAIL SQFT</div><input type="number" value={minRetailSqft} onChange={(e) => setMinRetailSqft(e.target.value)} placeholder="e.g. 2000" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
                   <label><div className="mono" style={labelStyle}>MIN UNITS</div><input type="number" value={minUnits} onChange={(e) => setMinUnits(e.target.value)} placeholder="e.g. 10" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
                   <label><div className="mono" style={labelStyle}>BUILT AFTER</div><input type="number" value={builtAfter} onChange={(e) => setBuiltAfter(e.target.value)} placeholder="e.g. 1900" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
                   <label><div className="mono" style={labelStyle}>BUILT BEFORE</div><input type="number" value={builtBefore} onChange={(e) => setBuiltBefore(e.target.value)} placeholder="e.g. 1940" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>

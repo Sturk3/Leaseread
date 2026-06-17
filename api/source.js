@@ -345,7 +345,7 @@ async function fetchNearestPluto(lat, lon, appToken) {
 }
 
 // PLUTO: find lots by asset type + street or radius, with the owner as the lead.
-async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, anchorOnly, minSqft, minUnits, builtAfter, builtBefore, limit, appToken }) {
+async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, anchorOnly, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, limit, appToken }) {
   // Single-property mode: an address was given with the radius "off" — return ONLY
   // that one lot (ignoring asset/zoning filters), nothing nearby.
   if (anchorOnly) {
@@ -362,6 +362,7 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
   if (prefixes) where.push("(" + prefixes.map((p) => `starts_with(bldgclass,'${p}')`).join(" OR ") + ")");
   if (street) where.push(streetClause("address", street));
   if (minSqft) where.push(`bldgarea>=${Number(minSqft)}`);
+  if (minRetailSqft) where.push(`retailarea>=${Number(minRetailSqft)}`);
   if (minUnits) where.push(`unitstotal>=${Number(minUnits)}`);
   if (builtAfter) where.push(`yearbuilt>=${Number(builtAfter)}`);
   if (builtBefore) where.push(`(yearbuilt<=${Number(builtBefore)} AND yearbuilt>0)`);
@@ -625,7 +626,7 @@ async function saveLeads(leads) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable } = req.body || {};
+    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable } = req.body || {};
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
@@ -662,7 +663,7 @@ export default async function handler(req, res) {
       centerLat: center ? center.lat : undefined, centerLon: center ? center.lon : undefined,
       radiusMiles: radiusNum || undefined, anchorOnly,
       anchorBbl: center && pickedBbl ? pickedBbl : undefined,
-      minSqft: minSqft || undefined, minUnits: minUnits || undefined,
+      minSqft: minSqft || undefined, minRetailSqft: minRetailSqft || undefined, minUnits: minUnits || undefined,
       builtAfter: builtAfter || undefined, builtBefore: builtBefore || undefined,
       limit: lim, appToken,
     };

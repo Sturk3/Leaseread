@@ -16,6 +16,7 @@ const EVICT = "6z8x-wfk4";      // marshal evictions (bbl)
 const RESTAURANT = "43nn-pn8j"; // restaurant inspections — food tenants (bbl, has phone)
 const COFO = "bs8b-p36w";       // certificate of occupancy (bbl)
 const DOB_PERMIT = "ipu4-2q9a"; // DOB permit issuance (bbl)
+const STOREFRONT = process.env.STOREFRONT_DATASET || "92iy-9c3n"; // LL157 storefront registry (bbl) — vacancy + business activity + lease expiry
 
 const BORO_CODE = { manhattan: "1", bronx: "2", brooklyn: "3", queens: "4", "staten island": "5" };
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
@@ -72,7 +73,7 @@ export default async function handler(req, res) {
 
     const variants = entityVariants(name);
 
-    const [corp, dob, ecb, hpd, biz, c311, evict, rest, cofo, permits] = await Promise.all([
+    const [corp, dob, ecb, hpd, biz, c311, evict, rest, cofo, permits, store] = await Promise.all([
       // NY State business registry — match the owner entity across common name variants
       variants.length ? getJson(NYS, NY_CORP, {
         $limit: "1",
@@ -101,6 +102,13 @@ export default async function handler(req, res) {
       bbl10 ? getJson(NYC, COFO, { $select: "c_o_issue_date,application_status_raw,job_type", $where: `bbl='${bbl10}' AND c_o_issue_date IS NOT NULL`, $order: "c_o_issue_date DESC", $limit: "1" }, appToken) : Promise.resolve([]),
       // DOB permit activity (count)
       bbl10 ? getJson(NYC, DOB_PERMIT, { $select: "count(*)", $where: `bbl='${bbl10}'` }, appToken) : Promise.resolve([]),
+      // Storefront registry (LL157) — ground/2nd-floor commercial premises: vacancy on
+      // Dec 31, the business activity, and the owner-reported most-recent lease expiry.
+      bbl10 ? getJson(NYC, STOREFRONT, {
+        $where: `bbl='${bbl10}'`,
+        $select: "reporting_year,vacant_on_12_31,primary_business_activity,expir_dt_of_most_recent_lease",
+        $order: "reporting_year DESC", $limit: "30",
+      }, appToken) : Promise.resolve([]),
     ]);
 
     const c = corp[0];
@@ -148,9 +156,30 @@ export default async function handler(req, res) {
     };
     const co = cofo && cofo[0] ? { date: clean(cofo[0].c_o_issue_date).slice(0, 10), status: clean(cofo[0].application_status_raw) } : null;
 
+    // Storefront registry — keep the most recent reporting year's filings for this lot
+    // (a lot can have several ground-floor units). Surface vacancy + activity + lease end.
+    let storefront = null;
+    if (store && store.length) {
+      const latestYear = store.reduce((y, r) => Math.max(y, toNum(r.reporting_year)), 0);
+      const latest = store.filter((r) => toNum(r.reporting_year) === latestYear);
+      const isVacant = (r) => /^y/i.test(clean(r.vacant_on_12_31));
+      const units = latest.map((r) => ({
+        vacant: isVacant(r),
+        activity: clean(r.primary_business_activity),
+        lease_expiry: clean(r.expir_dt_of_most_recent_lease).slice(0, 10),
+      }));
+      storefront = {
+        reporting_year: String(latestYear),
+        count: units.length,
+        any_vacant: units.some((u) => u.vacant),
+        units,
+      };
+    }
+
     return res.status(200).json({
       ny_corp,
       businesses,
+      storefront,
       dob_violations: toNum(dob[0] && dob[0].count),
       ecb_violations: ecb.length,
       ecb_balance_due: Math.round(ecb_balance),

@@ -1989,6 +1989,22 @@ function PropertyDetail({ r, pw }) {
           <div style={muted}>No licensed business on record at this lot. (Many retail tenants — clothing, banks, offices — don’t need a city license, so absence here doesn’t mean it’s vacant; check Street View / Google.)</div>
         )}
 
+        {intel && intel.storefront && (
+          <div style={{ marginTop: 10, background: intel.storefront.any_vacant ? "rgba(183,121,31,0.10)" : C.panel2, border: `1px solid ${intel.storefront.any_vacant ? C.amber : C.line}`, borderRadius: 8, padding: "9px 12px" }}>
+            <div className="mono" style={{ fontSize: 9.5, color: C.muted, letterSpacing: "0.05em", marginBottom: 5 }}>
+              STOREFRONT REGISTRY (LL157) · {intel.storefront.reporting_year}
+              {intel.storefront.any_vacant && <span style={{ marginLeft: 6, color: C.amber, border: `1px solid ${C.amber}`, borderRadius: 4, padding: "0 5px" }}>VACANT</span>}
+            </div>
+            {intel.storefront.units.map((u, i) => (
+              <div key={i} style={{ fontSize: 12, padding: "2px 0", color: C.ivory }}>
+                {u.vacant ? <span style={{ color: C.amber, fontWeight: 600 }}>Vacant on Dec 31</span> : <span>{u.activity || "Occupied"}</span>}
+                {u.lease_expiry && <span style={{ color: C.muted }}> · lease ends {u.lease_expiry}</span>}
+              </div>
+            ))}
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Owner-reported under Local Law 157 — ground/2nd-floor commercial premises.</div>
+          </div>
+        )}
+
         <div className="mono" style={title}>PUBLIC RECORDS</div>
         {intel == null ? <div style={muted}>Loading…</div> : (
           <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>

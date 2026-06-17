@@ -1994,6 +1994,21 @@ function ContactReveal({ r, pw }) {
   );
 }
 
+// Derive the property's recorded debt from its ACRIS history. Returns undefined while
+// history is still loading, null when no mortgage is on record, else the latest one.
+// NOTE: ACRIS records the ORIGINAL mortgage amount, not the current balance, and a
+// later Satisfaction (SAT) means it was likely paid off — both flagged honestly.
+function latestDebt(hist) {
+  if (hist == null) return undefined;
+  const m = hist.filter((h) => h.doc_type === "MTGE" || h.doc_type === "MMTG")
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  if (!m.length) return null;
+  const latest = m[0];
+  const satisfied = hist.some((h) => h.doc_type === "SAT" && (h.date || "") > (latest.date || ""));
+  const lender = ((latest.parties || []).find((p) => /grantee|buyer|party/i.test(p.role)) || (latest.parties || [])[0] || {}).name || "";
+  return { amount: latest.amount, date: latest.date, lender, satisfied, count: m.length };
+}
+
 function PropertyDetail({ r, pw }) {
   const [hist, setHist] = useState(null);
   const [histErr, setHistErr] = useState("");
@@ -2102,6 +2117,24 @@ function PropertyDetail({ r, pw }) {
               {purchasePrice(r) != null && purchasePrice(r) !== "" ? fmtAmount(purchasePrice(r)) : "—"}
               {purchaseDate(r) && <span style={{ color: C.muted }}> · bought {purchaseDate(r)}</span>}
               {r.years_owned != null && <span style={{ color: r.years_owned >= 15 ? C.green : C.muted }}> · {r.years_owned}y owned</span>}
+            </div>
+            <div style={{ color: C.muted }}>Recorded debt</div>
+            <div style={{ color: C.ivory }}>
+              {(() => {
+                const debt = latestDebt(hist);
+                if (debt === undefined) return <span style={{ color: C.muted }}>…</span>;
+                if (debt === null) return <span style={{ color: C.muted }}>none on record</span>;
+                return (
+                  <>
+                    {debt.amount != null ? fmtAmount(debt.amount) : "—"}
+                    {debt.date && <span style={{ color: C.muted }}> · {String(debt.date).slice(0, 4)}</span>}
+                    {debt.lender && <span style={{ color: C.muted }}> · {debt.lender}</span>}
+                    {debt.satisfied
+                      ? <span className="mono" style={{ marginLeft: 6, fontSize: 9.5, color: C.green, border: `1px solid ${C.green}`, borderRadius: 4, padding: "0 5px" }}>LIKELY SATISFIED</span>
+                      : <span style={{ color: C.muted, fontSize: 11 }}> (orig. amount)</span>}
+                  </>
+                );
+              })()}
             </div>
           </div>
           {r.buildable_sqft > 0 && <div style={{ color: C.green, marginTop: 2 }}>▲ {Number(r.buildable_sqft).toLocaleString()} sf unused air rights (built {r.built_far} / max {r.max_far} FAR)</div>}

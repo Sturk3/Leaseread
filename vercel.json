@@ -29,6 +29,9 @@
     },
     "api/skiptrace.js": {
       "maxDuration": 30
+    },
+    "api/findcontact.js": {
+      "maxDuration": 30
     }
   }
 }

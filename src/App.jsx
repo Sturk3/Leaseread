@@ -323,7 +323,8 @@ export default function App() {
                 : "Source owners & deals from NYC public records — ACRIS · DOB · PLUTO."}
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              {[["screener", "SCREENER"], ["sourcing", "SOURCING"], ["radar", "LEASE RADAR"], ["nda", "NDA REVIEW"]].map(([v, lab]) => (
+              {/* Lease Radar deactivated 2026-06-17 (not needed right now) — re-add ["radar", "LEASE RADAR"] to restore. Component + api/leasescan.js left intact. */}
+              {[["screener", "SCREENER"], ["sourcing", "SOURCING"], ["nda", "NDA REVIEW"]].map(([v, lab]) => (
                 <button key={v} onClick={() => setView(v)} className="mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "6px 13px", borderRadius: 7, border: `1px solid ${view === v ? C.gold : C.line}`, background: view === v ? C.goldSoft : "transparent", color: view === v ? C.gold : C.muted }}>
                   {lab}

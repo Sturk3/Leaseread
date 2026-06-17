@@ -26,6 +26,9 @@
     },
     "api/nda.js": {
       "maxDuration": 60
+    },
+    "api/skiptrace.js": {
+      "maxDuration": 30
     }
   }
 }

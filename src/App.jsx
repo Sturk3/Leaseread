@@ -1781,6 +1781,107 @@ function ResearchBrief({ r, pw }) {
   );
 }
 
+// Session cache so a given owner's contact is paid for at most once (owner-dedupe).
+// Key = owner name + mailing zip/state; survives re-opening rows for the session.
+const _skipCache = new Map();
+const skipKey = (r) => `${(r.name || "").toUpperCase().trim()}|${(r.zip || r.state || "").toString().trim()}`;
+function readSkipSpend() { try { return JSON.parse(localStorage.getItem("fr_skiptrace_spend_v1") || "{}"); } catch { return {}; } }
+function bumpSkipSpend(est) {
+  const cur = readSkipSpend();
+  const next = { hits: (cur.hits || 0) + 1, est: Math.round(((cur.est || 0) + (est || 0)) * 100) / 100 };
+  try { localStorage.setItem("fr_skiptrace_spend_v1", JSON.stringify(next)); } catch {}
+  return next;
+}
+
+// On-demand verified-contact reveal. One click = one paid lookup (only on a match);
+// results cache by owner so re-reveals are free. The owner's number, in-house.
+function ContactReveal({ r, pw }) {
+  const cached = _skipCache.get(skipKey(r)) || null;
+  const [state, setState] = useState(cached ? "done" : "idle"); // idle|loading|done|error|nokey
+  const [data, setData] = useState(cached);
+  const [err, setErr] = useState("");
+  const [spend, setSpend] = useState(readSkipSpend());
+
+  const reveal = async () => {
+    setState("loading"); setErr("");
+    try {
+      const d = await postJSON("/api/skiptrace", {
+        password: pw, name: r.name, entity_type: r.entity_type,
+        contact_address: r.contact_address, city: r.city, state: r.state, zip: r.zip,
+        address: r.address, borough: r.borough,
+      });
+      if (d.noKey) { setState("nokey"); setData(d); return; }
+      const result = { phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched };
+      _skipCache.set(skipKey(r), result);
+      setData(result);
+      if (result.matched) setSpend(bumpSkipSpend(d.cost));
+      setState("done");
+    } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
+  };
+
+  const box = { background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", marginTop: 10 };
+  if (state === "idle") {
+    return (
+      <div style={box}>
+        <button onClick={reveal} className="mono lift" style={{ ...ACTION_PILL, padding: "7px 13px", background: C.panel, border: `1px solid ${C.gold}`, color: C.gold }}>
+          📞 Reveal owner contact
+        </button>
+        <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>~$0.10 · charged only on a match · cached after</span>
+      </div>
+    );
+  }
+  if (state === "loading") return <div style={{ ...box, color: C.muted, fontSize: 12.5 }}>Tracing owner…</div>;
+  if (state === "error") return (
+    <div style={box}>
+      <div style={{ color: C.red, fontSize: 12.5 }}>{err}</div>
+      <button onClick={reveal} className="mono lift" style={{ ...ACTION_PILL, marginTop: 8 }}>↻ retry</button>
+    </div>
+  );
+  if (state === "nokey") return (
+    <div style={box}>
+      <div style={{ fontSize: 12.5, color: C.amber }}>Skip tracing isn’t configured yet.</div>
+      <div style={{ fontSize: 11.5, color: C.muted, marginTop: 4 }}>
+        Set <span className="mono">{data?.keyEnv || "TRACERFY_API_KEY"}</span> in Vercel env (Production) and redeploy. Provider: {data?.provider || "Tracerfy"}.
+      </div>
+    </div>
+  );
+  // done
+  const phones = data.phones || [], emails = data.emails || [];
+  return (
+    <div style={box}>
+      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.06em", marginBottom: 6 }}>
+        VERIFIED CONTACT — via {data.provider}{data.business ? " · business trace" : ""}
+      </div>
+      {phones.length === 0 && emails.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: C.muted }}>No match found (no charge). Try the AI quick take or the lookup links above.</div>
+      ) : (
+        <>
+          {phones.map((p, i) => (
+            <div key={i} style={{ fontSize: 13.5, marginBottom: 3 }}>
+              <a href={`tel:${p.number.replace(/[^\d+]/g, "")}`} style={{ color: C.ivory, textDecoration: "none", fontWeight: 600 }}>{p.number}</a>
+              {p.type && <span className="mono" style={{ fontSize: 10, color: C.muted, marginLeft: 6 }}>{p.type.toUpperCase()}</span>}
+              {p.dnc && <span className="mono" style={{ fontSize: 9.5, color: C.red, marginLeft: 6, border: `1px solid ${C.red}`, borderRadius: 4, padding: "0 5px" }}>DNC</span>}
+            </div>
+          ))}
+          {emails.map((e, i) => (
+            <div key={i} style={{ fontSize: 13, marginBottom: 2 }}>
+              <a href={`mailto:${e}`} style={{ color: C.gold, textDecoration: "none" }}>{e}</a>
+            </div>
+          ))}
+        </>
+      )}
+      {data.business && (phones.length > 0 || emails.length > 0) && (
+        <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6, lineHeight: 1.45 }}>
+          ⚠ LLC trace — this may be the entity’s registered agent or manager, not the principal. Verify before calling.
+        </div>
+      )}
+      {spend?.hits ? (
+        <div style={{ fontSize: 10, color: C.muted, marginTop: 7 }}>est. spend: ${Number(spend.est || 0).toFixed(2)} over {spend.hits} reveal{spend.hits === 1 ? "" : "s"}</div>
+      ) : null}
+    </div>
+  );
+}
+
 function PropertyDetail({ r, pw }) {
   const [hist, setHist] = useState(null);
   const [histErr, setHistErr] = useState("");
@@ -1825,6 +1926,7 @@ function PropertyDetail({ r, pw }) {
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
           {lookupLinks(r).map((lk) => <a key={lk.label} href={lk.href} target="_blank" rel="noreferrer" className="mono lift" style={ACTION_PILL}>{lk.label}</a>)}
         </div>
+        <ContactReveal r={r} pw={pw} />
 
         <div className="mono" style={title}>PROPERTY</div>
         <div style={{ fontSize: 13 }}>

@@ -729,6 +729,33 @@ function leadsToCSV(rows) {
   const body = rows.map((r) => LEAD_COLS.map((c) => esc(c.get ? c.get(r) : r[c.key])).join(",")).join("\n");
   return head + "\n" + body;
 }
+
+// A lean CSV shaped for skip-trace providers (BatchData/Enformion/TLO/Terrakotta):
+// owner name + mailing address split out, with the property + BBL as reference.
+// This is what they ingest to return phone/email — one clean upload.
+const SKIPTRACE_COLS = [
+  ["Owner Name", (r) => r.name],
+  ["Mailing Street", (r) => r.contact_address],
+  ["Mailing City", (r) => r.city],
+  ["Mailing State", (r) => r.state],
+  ["Mailing Zip", (r) => r.zip],
+  ["Property Address", (r) => r.address],
+  ["Borough", (r) => r.borough],
+  ["BBL", (r) => r.deal_id],
+];
+function skiptraceCSV(rows) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const head = SKIPTRACE_COLS.map((c) => esc(c[0])).join(",");
+  // Only rows with a usable mailing address are worth skip-tracing; dedupe by owner.
+  const seen = new Set();
+  const usable = rows.filter((r) => {
+    if (!r.contact_address) return false;
+    const k = `${(r.name || "").toUpperCase()}|${(r.contact_address || "").toUpperCase()}`;
+    if (seen.has(k)) return false; seen.add(k); return true;
+  });
+  const body = usable.map((r) => SKIPTRACE_COLS.map((c) => esc(c[1](r))).join(",")).join("\n");
+  return head + "\n" + body;
+}
 const fmtAmount = (a) => (a == null || a === "" ? "" : "$" + Number(a).toLocaleString());
 // Two different dollar figures live on a row and must never be conflated:
 //  • ASSESSED VALUE — the City's tax assessment (PLUTO `assesstot`). Not a sale price.
@@ -1038,8 +1065,13 @@ function Sourcing({ pw }) {
             <>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "22px 0 12px", flexWrap: "wrap", gap: 10 }}>
                 <div className="serif" style={{ fontSize: 17 }}>{leads.length} contact{leads.length === 1 ? "" : "s"} sourced</div>
-                <button onClick={() => leads.length && downloadBlob(leadsToCSV(leads), csvName(), "text/csv")} className="lift mono"
-                  style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button onClick={() => leads.length && downloadBlob(leadsToCSV(leads), csvName(), "text/csv")} className="lift mono"
+                    style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>
+                  <button onClick={() => leads.length && downloadBlob(skiptraceCSV(leads), csvName().replace(/\.csv$/, "_skiptrace.csv"), "text/csv")} className="lift mono"
+                    title="Owner + mailing address, deduped — ready to upload to a skip-trace provider"
+                    style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>↓ SKIP-TRACE CSV</button>
+                </div>
               </div>
               {center && (
                 <div style={{ margin: "-4px 0 12px", fontSize: 12.5, color: C.muted }}>

@@ -1085,80 +1085,183 @@ function mteText(L) {
   if (m === 0) return "est. ending now";
   return `est. ~${m} mo out`;
 }
-// SELLER-PROPENSITY / TARGET-PRIORITY score (0–100). This is a DIFFERENT axis from the
-// lease-timing radar score: lease timing answers "is the space coming available?",
-// this answers "is this OWNER worth approaching?". Built entirely from public signals
-// already attached to each lead by /api/source — how long they've held, distress (tax
-// lien), absentee/out-of-state mailing, and unused air rights. It is NOT a literal
-// probability the owner will sell (no public data knows owner intent) — it's a
-// prospecting priority that points you in the right direction.
-function sellerScore(r) {
-  const signals = [];
-  let score = 0;
+// ── LEASE RADAR grading workflow ─────────────────────────────────────────────
+// Mirrors the Screener's mandate grader: editable signal WEIGHTS + Target/Watch/
+// Pass THRESHOLDS, saved as named mandates in localStorage. Every scanned property
+// is scored on public signals already attached to the lead by /api/source (no extra
+// API calls) — lease timing, how long the owner has held, tax-lien distress,
+// absentee/out-of-state mailing, unused air rights — then blended into one 0–100
+// TARGET score with a recommendation. Tuning weights re-grades results instantly.
+const RADAR_PRESETS_KEY = "fr_radar_presets_v1";
+const RADAR_ACTIVE_KEY = "fr_radar_active_v1";
+const RADAR_DEFAULT_CONFIG = {
+  name: "Off-Market Targets",
+  weights: { lease_timing: 30, long_hold: 25, distress: 20, absentee: 15, air_rights: 10 },
+  thresholds: { target: 65, watch: 40 },
+};
 
-  // 1) Long hold (max 40) — classic seller candidate (stepped-up basis, estate/
-  // retirement). A very recent purchase reads as unlikely to sell → ~0.
-  const yo = r.years_owned;
-  let pts = 0, note;
-  if (yo == null) note = "unknown — no deed on record";
-  else if (yo >= 20) { pts = 40; note = `held ${yo}+ yrs`; }
-  else if (yo >= 15) { pts = 32; note = `held ${yo} yrs`; }
-  else if (yo >= 10) { pts = 22; note = `held ${yo} yrs`; }
-  else if (yo >= 5)  { pts = 10; note = `held ${yo} yrs`; }
-  else { pts = 0; note = `bought ~${yo} yr${yo === 1 ? "" : "s"} ago — unlikely`; }
-  score += pts;
-  signals.push({ label: "Long hold", detail: note, points: pts, max: 40, hit: pts > 0 });
+// Each signal → a 0–100 sub-score derived from the public data on the lead.
+const holdSub = (yo) => (yo == null ? 0 : yo >= 20 ? 100 : yo >= 15 ? 82 : yo >= 10 ? 60 : yo >= 5 ? 35 : Math.round(yo * 4));
+const airSub = (sf) => { const n = Number(sf) || 0; return n >= 20000 ? 100 : n >= 8000 ? 66 : n >= 2500 ? 40 : 0; };
+const absSub = (a) => (a === "out-of-state" ? 100 : a === "out-of-area" ? 60 : 0);
+const RADAR_SIGNALS = [
+  { id: "lease_timing", label: "Lease timing", desc: "Lease estimated to be coming available soon",
+    sub: (r) => (r.lease ? r.lease.score : 0), note: (r) => (r.lease ? (mteText(r.lease) || r.lease.status) : "—") },
+  { id: "long_hold", label: "Long hold", desc: "Owner has held a long time — classic seller candidate",
+    sub: (r) => holdSub(r.years_owned), note: (r) => (r.years_owned == null ? "no deed on record" : `held ${r.years_owned} yr${r.years_owned === 1 ? "" : "s"}`) },
+  { id: "distress", label: "Distress", desc: "On the tax-lien sale list — financial pressure",
+    sub: (r) => (r.tax_lien ? 100 : 0), note: (r) => (r.tax_lien ? "tax lien on record" : "no tax lien") },
+  { id: "absentee", label: "Absentee owner", desc: "Mails out of NYC / out of state — less attached",
+    sub: (r) => absSub(r.absentee), note: (r) => (r.absentee ? r.absentee.replace(/-/g, " ") + " owner" : "mails within NYC") },
+  { id: "air_rights", label: "Air rights", desc: "Unused buildable SF — sell-to-developer angle",
+    sub: (r) => airSub(r.buildable_sqft), note: (r) => { const n = Number(r.buildable_sqft) || 0; return n >= 2500 ? `~${n.toLocaleString()} SF unused` : "fully built"; } },
+];
 
-  // 2) Distress — tax lien (max 25). Financial pressure → motivated/forced seller.
-  pts = r.tax_lien ? 25 : 0; score += pts;
-  signals.push({ label: "Distress", detail: r.tax_lien ? "on tax-lien sale list" : "no tax lien on record", points: pts, max: 25, hit: !!r.tax_lien });
-
-  // 3) Absentee / out-of-state owner (max 20). Less attached → easier to convert.
-  const ab = r.absentee;
-  pts = ab === "out-of-state" ? 20 : ab === "out-of-area" ? 12 : 0; score += pts;
-  signals.push({ label: "Absentee owner", detail: ab ? ab.replace(/-/g, " ") + " owner" : "mails within NYC", points: pts, max: 20, hit: !!ab });
-
-  // 4) Air rights / underbuilt (max 15). Unused buildable SF — owner may sell to a developer.
-  const bs = Number(r.buildable_sqft) || 0;
-  pts = bs >= 20000 ? 15 : bs >= 8000 ? 10 : bs >= 2500 ? 6 : 0; score += pts;
-  signals.push({ label: "Air rights", detail: bs >= 2500 ? `~${bs.toLocaleString()} SF unused buildable` : "fully built / no excess FAR", points: pts, max: 15, hit: bs >= 2500 });
-
-  return { score: Math.min(100, Math.round(score)), signals };
+function radarGrade(r, cfg) {
+  const w = (cfg && cfg.weights) || {};
+  let num = 0, wsum = 0;
+  const parts = RADAR_SIGNALS.map((s) => {
+    const sub = Math.max(0, Math.min(100, Math.round(s.sub(r))));
+    const weight = Number(w[s.id]) || 0;
+    if (weight > 0) { num += sub * weight; wsum += weight; }
+    return { id: s.id, label: s.label, desc: s.desc, note: s.note(r), sub, weight };
+  });
+  const overall = wsum > 0 ? Math.round(num / wsum) : 0;
+  const t = (cfg && cfg.thresholds) || { target: 65, watch: 40 };
+  const rec = overall >= t.target ? "Target" : overall >= t.watch ? "Watch" : "Pass";
+  return { overall, rec, parts };
 }
-const sellerGrade = (s) => (s >= 70 ? "A" : s >= 50 ? "B" : s >= 30 ? "C" : s >= 15 ? "D" : "F");
-const sellerColor = (s) => (s >= 50 ? C.green : s >= 30 ? C.amber : C.muted);
+const radarRecColor = (rec) => (rec === "Target" ? C.green : rec === "Watch" ? C.amber : C.muted);
 
-function SellerCell({ s }) {
-  const col = sellerColor(s.score);
+function loadRadarPresets() {
+  try { const p = JSON.parse(localStorage.getItem(RADAR_PRESETS_KEY)); if (p && typeof p === "object" && Object.keys(p).length) return p; } catch {}
+  return { [RADAR_DEFAULT_CONFIG.name]: clone(RADAR_DEFAULT_CONFIG) };
+}
+function loadRadarActive() {
+  try { const a = JSON.parse(localStorage.getItem(RADAR_ACTIVE_KEY)); if (a && a.weights) return a; } catch {}
+  return clone(RADAR_DEFAULT_CONFIG);
+}
+
+function GradeCell({ g }) {
+  const col = radarRecColor(g.rec);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: col, width: 12 }}>{sellerGrade(s.score)}</span>
-      <div style={{ width: 40, height: 6, background: C.panel2, borderRadius: 3, overflow: "hidden" }}>
-        <div style={{ width: `${s.score}%`, height: "100%", background: col }} />
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span className="mono" style={{ fontSize: 10, padding: "3px 7px", borderRadius: 5, border: `1px solid ${col}`, color: col, whiteSpace: "nowrap", letterSpacing: "0.04em" }}>{g.rec.toUpperCase()}</span>
+      <div style={{ width: 38, height: 6, background: C.panel2, borderRadius: 3, overflow: "hidden" }}>
+        <div className="bar" style={{ width: `${g.overall}%`, height: "100%", background: col }} />
       </div>
-      <span className="mono" style={{ fontSize: 11, color: col }}>{s.score}</span>
+      <span className="mono" style={{ fontSize: 11, color: col }}>{g.overall}</span>
     </div>
   );
 }
-function SellerBreakdown({ s }) {
+function GradeBreakdown({ g, cfg }) {
+  const col = radarRecColor(g.rec);
+  const totalW = g.parts.reduce((a, p) => a + p.weight, 0) || 1;
   return (
     <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
-      <div className="mono" style={{ fontSize: 11, letterSpacing: "0.04em", color: C.muted, marginBottom: 9 }}>
-        SELLER PROPENSITY — <span style={{ color: sellerColor(s.score) }}>{s.score}/100 · GRADE {sellerGrade(s.score)}</span>
+      <div className="mono" style={{ fontSize: 11, letterSpacing: "0.04em", color: C.muted, marginBottom: 10 }}>
+        TARGET GRADE — <span style={{ color: col }}>{g.rec.toUpperCase()} · {g.overall}/100</span>
+        <span> · mandate “{cfg.name}”</span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10 }}>
-        {s.signals.map((sig, i) => (
-          <div key={i}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
-              <span style={{ color: sig.hit ? C.ivory : C.muted }}>{sig.hit ? "✓ " : "· "}{sig.label}</span>
-              <span className="mono" style={{ color: sig.hit ? C.green : C.muted }}>+{sig.points}<span style={{ color: C.muted }}>/{sig.max}</span></span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        {g.parts.map((p) => {
+          const wpct = Math.round((p.weight / totalW) * 100);
+          const on = p.weight > 0;
+          return (
+            <div key={p.id} style={{ opacity: on ? 1 : 0.4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, alignItems: "baseline", gap: 8 }}>
+                <span style={{ color: C.ivory }}>{p.label} <span style={{ color: C.muted }}>· {p.note}</span></span>
+                <span className="mono" style={{ color: C.muted, whiteSpace: "nowrap" }}>{p.sub}<span style={{ color: C.line }}>/100</span> × {wpct}%</span>
+              </div>
+              <div style={{ width: "100%", height: 5, background: C.ink, borderRadius: 3, overflow: "hidden", marginTop: 3 }}>
+                <div className="bar" style={{ width: `${p.sub}%`, height: "100%", background: on ? C.gold : C.line }} />
+              </div>
             </div>
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{sig.detail}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div style={{ fontSize: 11, color: C.muted, marginTop: 9, lineHeight: 1.5 }}>
-        Prospecting priority from public signals — <em>not</em> a literal probability the owner will sell. Verify via ▸ details below.
+        Weighted blend of public signals — a prospecting priority, <em>not</em> a literal probability the owner will sell. Tune the mix in ⚙ Target criteria; verify via ▸ details below.
+      </div>
+    </div>
+  );
+}
+
+// The Lease Radar mandate editor — the workflow analog of the Screener's "Grading
+// criteria" panel: weight each signal, set Target/Watch thresholds, save named mandates.
+function RadarSettings({ cfg, setCfg, presets, setPresets, onClose }) {
+  const totalW = RADAR_SIGNALS.reduce((a, s) => a + (Number(cfg.weights[s.id]) || 0), 0) || 1;
+  const setWeight = (id, v) => setCfg((p) => ({ ...p, weights: { ...p.weights, [id]: v } }));
+  const setThreshold = (k, v) => setCfg((p) => ({ ...p, thresholds: { ...p.thresholds, [k]: v } }));
+  const loadPreset = (name) => { if (presets[name]) setCfg(clone(presets[name])); };
+  const savePreset = () => { const name = (cfg.name || "Untitled").trim() || "Untitled"; setPresets({ ...presets, [name]: clone({ ...cfg, name }) }); };
+  const deletePreset = () => {
+    const name = cfg.name; if (!presets[name]) return;
+    const next = { ...presets }; delete next[name];
+    if (!Object.keys(next).length) next[RADAR_DEFAULT_CONFIG.name] = clone(RADAR_DEFAULT_CONFIG);
+    setPresets(next); loadPreset(Object.keys(next)[0]);
+  };
+  const label = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
+  const field = { background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "Archivo, sans-serif" };
+  return (
+    <div className="fade" style={{ marginTop: 18, background: C.panel, border: `1px solid ${C.gold}55`, borderRadius: 12, padding: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div className="serif" style={{ fontSize: 18 }}>Target criteria</div>
+        <button onClick={onClose} className="mono" style={{ cursor: "pointer", fontSize: 12, color: C.muted, background: "transparent", border: "none" }}>✕ CLOSE</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 16 }}>
+        <div>
+          <div className="mono" style={label}>SAVED MANDATE</div>
+          <select value={presets[cfg.name] ? cfg.name : ""} onChange={(e) => loadPreset(e.target.value)} style={{ ...field, marginTop: 4, minWidth: 160 }}>
+            {!presets[cfg.name] && <option value="">{cfg.name} (unsaved)</option>}
+            {Object.keys(presets).map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+        <div>
+          <div className="mono" style={label}>NAME</div>
+          <input value={cfg.name} onChange={(e) => setCfg((p) => ({ ...p, name: e.target.value }))} style={{ ...field, marginTop: 4, width: 160 }} />
+        </div>
+        <button onClick={savePreset} className="mono lift" style={{ cursor: "pointer", fontSize: 12, padding: "8px 14px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>↓ SAVE</button>
+        <button onClick={deletePreset} className="mono lift" style={{ cursor: "pointer", fontSize: 12, padding: "8px 14px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.muted }}>DELETE</button>
+      </div>
+
+      <div className="mono" style={{ ...label, marginBottom: 8 }}>SIGNAL WEIGHTS — WHAT MAKES A TARGET</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {RADAR_SIGNALS.map((s) => {
+          const w = Number(cfg.weights[s.id]) || 0;
+          const pct = Math.round((w / totalW) * 100);
+          return (
+            <div key={s.id} style={{ background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontWeight: 600, fontSize: 13.5 }}>{s.label}</span>
+                <span className="mono" style={{ fontSize: 12, color: C.gold }}>{pct}%</span>
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{s.desc}</div>
+              <input type="range" min="0" max="40" step="1" value={w} onChange={(e) => setWeight(s.id, Number(e.target.value))} style={{ width: "100%", marginTop: 9 }} />
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mono" style={{ ...label, margin: "20px 0 8px" }}>RECOMMENDATION THRESHOLDS</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
+        <div style={{ background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <span>Target at or above</span><span className="mono" style={{ color: C.green }}>{cfg.thresholds.target}</span>
+          </div>
+          <input type="range" min="0" max="100" step="1" value={cfg.thresholds.target} onChange={(e) => setThreshold("target", Number(e.target.value))} style={{ width: "100%", marginTop: 8 }} />
+        </div>
+        <div style={{ background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <span>Watch at or above</span><span className="mono" style={{ color: C.amber }}>{cfg.thresholds.watch}</span>
+          </div>
+          <input type="range" min="0" max="100" step="1" value={cfg.thresholds.watch} onChange={(e) => setThreshold("watch", Number(e.target.value))} style={{ width: "100%", marginTop: 8 }} />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 12, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+        Weights and thresholds re-grade the current results instantly. Save a mandate to reuse it across scans.
       </div>
     </div>
   );
@@ -1180,7 +1283,7 @@ const RADAR_COLS = [
   ["Owner", (r) => r.name || ""], ["Latest lease", (r) => r.lease.latest_lease_date || ""],
   ["Est. expiration", (r) => r.lease.estimated_expiration || ""], ["Months to expiry", (r) => r.lease.months_to_expiry ?? ""],
   ["Term yrs", (r) => r.lease.term_years], ["Leases on file", (r) => r.lease.lease_count], ["Lease timing score", (r) => r.lease.score],
-  ["Seller score", (r) => r.seller?.score ?? ""], ["Seller grade", (r) => (r.seller ? sellerGrade(r.seller.score) : "")],
+  ["Target score", (r) => r.grade?.overall ?? ""], ["Recommendation", (r) => r.grade?.rec ?? ""],
   ["Years owned", (r) => r.years_owned ?? ""], ["Tax lien", (r) => (r.tax_lien ? "YES" : "")],
   ["Absentee", (r) => r.absentee || ""], ["Unused buildable SF", (r) => r.buildable_sqft ?? ""],
 ];
@@ -1191,7 +1294,7 @@ function radarCSV(rows) {
   return head + "\n" + body;
 }
 
-function RadarRow({ r, rank, pw, last }) {
+function RadarRow({ r, rank, pw, cfg, last }) {
   const [open, setOpen] = useState(false);
   const L = r.lease;
   const badge = radarBadge(L);
@@ -1201,6 +1304,7 @@ function RadarRow({ r, rank, pw, last }) {
     <>
       <tr style={{ background: off ? C.goldSoft : "transparent" }}>
         <td className="mono" style={{ ...td, color: C.muted }}>{rank}</td>
+        <td style={td}>{r.grade ? <GradeCell g={r.grade} /> : <span style={{ color: C.muted }}>—</span>}</td>
         <td style={td}>
           {badge && (
             <span className="mono" style={{ fontSize: 10, padding: "3px 7px", borderRadius: 5, border: `1px solid ${badge.border}`, background: badge.bg, color: badge.fg, whiteSpace: "nowrap" }}>
@@ -1224,7 +1328,6 @@ function RadarRow({ r, rank, pw, last }) {
         <td style={{ ...td, fontSize: 12.5 }}>{L.tenant || <span style={{ color: C.muted }}>—</span>}</td>
         <td style={{ ...td, fontSize: 12.5 }}>{r.name || <span style={{ color: C.muted }}>—</span>}</td>
         <td style={td}><ScoreBar score={L.score} /></td>
-        <td style={td}>{r.seller ? <SellerCell s={r.seller} /> : <span style={{ color: C.muted }}>—</span>}</td>
         <td style={{ ...td, textAlign: "right" }}>
           <button onClick={() => setOpen((o) => !o)} className="mono" style={{ ...ACTION_PILL, border: `1px solid ${open ? C.gold : C.line}` }}>
             {open ? "▾ close" : "▸ details"}
@@ -1234,7 +1337,7 @@ function RadarRow({ r, rank, pw, last }) {
       {open && (
         <tr>
           <td colSpan={9} style={{ padding: "0 14px 18px", borderBottom: last ? "none" : `1px solid ${C.line}`, background: off ? C.goldSoft : "transparent" }}>
-            {r.seller && <SellerBreakdown s={r.seller} />}
+            {r.grade && <GradeBreakdown g={r.grade} cfg={cfg} />}
             <PropertyDetail r={r} pw={pw} />
           </td>
         </tr>
@@ -1251,7 +1354,23 @@ function LeaseRadar({ pw }) {
   const [term, setTerm] = useState(10);
   const [horizon, setHorizon] = useState(24);
   const [offOnly, setOffOnly] = useState(false);
-  const [sortBy, setSortBy] = useState("seller"); // "seller" (who to target) | "lease" (timing)
+  const [sortBy, setSortBy] = useState("grade"); // "grade" (target priority) | "lease" (timing)
+
+  // Mandate (signal weights + thresholds), saved like the Screener's grading config.
+  const [cfg, setCfgState] = useState(loadRadarActive);
+  const [presets, setPresetsState] = useState(loadRadarPresets);
+  const [showCriteria, setShowCriteria] = useState(false);
+  function setCfg(updater) {
+    setCfgState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      try { localStorage.setItem(RADAR_ACTIVE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+  function setPresets(next) {
+    setPresetsState(next);
+    try { localStorage.setItem(RADAR_PRESETS_KEY, JSON.stringify(next)); } catch {}
+  }
 
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState("");
@@ -1280,8 +1399,7 @@ function LeaseRadar({ pw }) {
       for (const x of scan.results || []) map[x.key] = x;
       const merged = leads
         .map((r) => ({ ...r, lease: map[`${radarNorm(r.borough)}|${radarNorm(r.block)}|${radarNorm(r.lot)}`] || null }))
-        .filter((r) => r.lease)
-        .map((r) => ({ ...r, seller: sellerScore(r) }));
+        .filter((r) => r.lease);
       setRows(merged);
       setMeta({ center: src.center, termYears: scan.termYears, horizonMonths: scan.horizonMonths, scanned: merged.length });
     } catch (e) {
@@ -1291,9 +1409,13 @@ function LeaseRadar({ pw }) {
     }
   }
 
-  const sortedRows = rows ? [...rows].sort((a, b) => (sortBy === "lease" ? b.lease.score - a.lease.score : b.seller.score - a.seller.score)) : null;
+  // Grade against the current mandate. Recomputed whenever weights/thresholds change,
+  // so tuning the criteria re-grades the results instantly (no re-scan) — like the Screener.
+  const graded = useMemo(() => (rows ? rows.map((r) => ({ ...r, grade: radarGrade(r, cfg) })) : null), [rows, cfg]);
+  const sortedRows = graded ? [...graded].sort((a, b) => (sortBy === "lease" ? b.lease.score - a.lease.score : b.grade.overall - a.grade.overall)) : null;
   const shown = sortedRows ? (offOnly ? sortedRows.filter((r) => r.lease.off_market_opportunity) : sortedRows) : null;
-  const offCount = rows ? rows.filter((r) => r.lease.off_market_opportunity).length : 0;
+  const offCount = graded ? graded.filter((r) => r.lease.off_market_opportunity).length : 0;
+  const targetCount = graded ? graded.filter((r) => r.grade.rec === "Target").length : 0;
 
   function csvName() {
     const parts = ["frontage_lease_radar"];
@@ -1304,7 +1426,17 @@ function LeaseRadar({ pw }) {
 
   return (
     <div style={{ marginTop: 22 }}>
-      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+      {showCriteria && (
+        <RadarSettings cfg={cfg} setCfg={setCfg} presets={presets} setPresets={setPresets} onClose={() => setShowCriteria(false)} />
+      )}
+      <div style={{ marginTop: showCriteria ? 14 : 0, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10, flexWrap: "wrap" }}>
+          <div className="mono" style={{ fontSize: 11, color: C.muted, letterSpacing: "0.05em" }}>STEP 1 · WHERE TO SCAN</div>
+          <button onClick={() => setShowCriteria((s) => !s)} className="mono lift"
+            style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${showCriteria ? C.gold : C.line}`, background: showCriteria ? C.goldSoft : "transparent", color: showCriteria ? C.gold : C.ivory }}>
+            ⚙ TARGET CRITERIA · {cfg.name}
+          </button>
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
           <label style={{ gridColumn: "span 2" }}>
             <div className="mono" style={labelStyle}>ANCHOR ADDRESS — type &amp; pick</div>
@@ -1346,14 +1478,15 @@ function LeaseRadar({ pw }) {
 
         <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
           Pick an address to anchor the scan, then a radius. FRONTAGE pulls every property in the circle (nearest 60),
-          reads each one’s recorded leases from ACRIS, and ranks by an <strong style={{ color: C.ivory }}>estimated</strong> expiration —
-          latest recorded lease + your assumed term. The <strong style={{ color: C.gold }}>off-market opportunities</strong> (leases
-          estimated to be ending soon, not yet listed) float to the top.
+          reads each one’s recorded leases from ACRIS, then <strong style={{ color: C.ivory }}>grades</strong> each against your
+          <strong style={{ color: C.gold }}> “{cfg.name}”</strong> mandate — blending lease timing with owner-motivation signals
+          (long hold, distress, absentee, air rights). <strong style={{ color: C.green }}>Target</strong>-rated prospects float to the top.
+          Tune the mix in <strong style={{ color: C.ivory }}>⚙ Target criteria</strong> above.
         </div>
 
         <button onClick={run} disabled={loading}
           style={{ marginTop: 14, width: "100%", cursor: loading ? "default" : "pointer", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: loading ? C.panel2 : C.gold, color: loading ? C.muted : "#ffffff" }}>
-          {loading ? (progress || "Scanning…") : "Scan for expiring leases →"}
+          {loading ? (progress || "Scanning…") : `Scan & grade against “${cfg.name}” →`}
         </button>
         {error && <div style={{ marginTop: 12, color: C.red, fontSize: 13 }}>{error}</div>}
       </div>
@@ -1370,12 +1503,13 @@ function LeaseRadar({ pw }) {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "18px 0 12px", flexWrap: "wrap", gap: 10 }}>
             <div className="serif" style={{ fontSize: 17 }}>
               {rows.length} propert{rows.length === 1 ? "y" : "ies"} scanned
-              {offCount > 0 && <span style={{ color: C.gold }}> · {offCount} off-market opportunit{offCount === 1 ? "y" : "ies"}</span>}
+              {targetCount > 0 && <span style={{ color: C.green }}> · {targetCount} target{targetCount === 1 ? "" : "s"}</span>}
+              {offCount > 0 && <span style={{ color: C.gold }}> · {offCount} off-market</span>}
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <span className="mono" style={{ fontSize: 11, color: C.muted, letterSpacing: "0.04em" }}>SORT BY</span>
               <div style={{ display: "flex", border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden" }}>
-                {[["seller", "SELLER PROPENSITY"], ["lease", "LEASE TIMING"]].map(([v, lab]) => (
+                {[["grade", "TARGET GRADE"], ["lease", "LEASE TIMING"]].map(([v, lab]) => (
                   <button key={v} onClick={() => setSortBy(v)} className="mono"
                     style={{ cursor: "pointer", fontSize: 11, padding: "9px 12px", border: "none", background: sortBy === v ? C.gold : "transparent", color: sortBy === v ? "#ffffff" : C.muted }}>
                     {lab}
@@ -1386,14 +1520,14 @@ function LeaseRadar({ pw }) {
                 style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${offOnly ? C.gold : C.line}`, background: offOnly ? C.goldSoft : "transparent", color: offOnly ? C.gold : C.muted }}>
                 {offOnly ? "✓ " : ""}OFF-MARKET ONLY
               </button>
-              <button onClick={() => rows.length && downloadBlob(radarCSV(rows), csvName(), "text/csv")} className="lift mono"
+              <button onClick={() => graded?.length && downloadBlob(radarCSV(graded), csvName(), "text/csv")} className="lift mono"
                 style={{ cursor: "pointer", fontSize: 12, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>
             </div>
           </div>
           {meta?.center && (
             <div style={{ margin: "-4px 0 12px", fontSize: 12.5, color: C.muted }}>
               Within <strong style={{ color: C.gold }}>{meta.center.radiusMiles} mi</strong> of {meta.center.label} ·
-              assumed {meta.termYears}yr term · “soon” = within {meta.horizonMonths} months. Ranked by {sortBy === "lease" ? "lease timing (space coming available)" : "seller propensity (owner worth approaching)"}.
+              assumed {meta.termYears}yr term · “soon” = within {meta.horizonMonths} months. Graded against “{cfg.name}”, ranked by {sortBy === "lease" ? "lease timing (space coming available)" : "target grade (best prospects first)"}.
             </div>
           )}
 
@@ -1402,14 +1536,14 @@ function LeaseRadar({ pw }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr className="mono" style={{ color: C.muted, fontSize: 11, letterSpacing: "0.04em" }}>
-                    {["#", "Status", "Address", "Est. expiration", "Tenant", "Owner", "Lease timing", "Seller score", ""].map((c, i) => (
+                    {["#", "Grade", "Status", "Address", "Est. expiration", "Tenant", "Owner", "Lease timing", ""].map((c, i) => (
                       <th key={i} style={{ textAlign: i === 8 ? "right" : "left", padding: "11px 14px", borderBottom: `1px solid ${C.line}`, whiteSpace: "nowrap" }}>{c.toUpperCase()}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {shown.map((r, i) => (
-                    <RadarRow key={`${r.borough}-${r.block}-${r.lot}-${i}`} r={r} rank={i + 1} pw={pw} last={i === shown.length - 1} />
+                    <RadarRow key={`${r.borough}-${r.block}-${r.lot}-${i}`} r={r} rank={i + 1} pw={pw} cfg={cfg} last={i === shown.length - 1} />
                   ))}
                 </tbody>
               </table>
@@ -1426,10 +1560,12 @@ function LeaseRadar({ pw }) {
 
       {!shown && !loading && (
         <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
-          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>What this does.</span> Anchor on an address, set a radius, and FRONTAGE
-          scans every property around it for recorded leases — then estimates which ones are coming available so you can reach the owner
-          before the space ever lists. This is the off-market wedge: CoStar shows you what’s already on the market; Lease Radar points you
-          at what’s <em>about to be</em>.
+          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>How it works.</span> A three-step workflow, like the deal screener —
+          but for off-market sourcing. <strong style={{ color: C.ivory }}>①</strong> Set your mandate in ⚙ Target criteria (weight the
+          signals that make a prospect, set Target/Watch/Pass cutoffs — saved like a screener mandate). <strong style={{ color: C.ivory }}>②</strong> Anchor
+          an address + radius and scan. <strong style={{ color: C.ivory }}>③</strong> FRONTAGE reads each property’s recorded leases, blends
+          them with owner-motivation signals, and grades every lot <strong style={{ color: C.green }}>Target / Watch / Pass</strong> against your
+          mandate. This is the wedge CoStar lacks: it shows what’s already listed; Lease Radar points you at who to call <em>before</em> it is.
         </div>
       )}
     </div>

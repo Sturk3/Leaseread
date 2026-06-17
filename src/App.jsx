@@ -1748,16 +1748,16 @@ function PropertyPhoto({ r }) {
       </div>
     );
   }
-  // Keyless default: an actual aerial image of the property from Esri World Imagery
-  // (free, no key) so you can see the building, plus Street View / Map links below.
-  // For a street-level storefront photo, set VITE_GMAPS_EMBED_KEY (free Google key).
+  // Keyless default: a street MAP of the block from Esri (free, no key). For the actual
+  // building FRONT, Google's Street View now needs a key — set VITE_GMAPS_EMBED_KEY (free)
+  // and the inline photo above replaces this map. Links below open Street View + satellite.
   const d = 0.0009; // ~100m half-span around the lot
   const bbox = `${r.lon - d},${r.lat - d},${r.lon + d},${r.lat + d}`;
-  const aerial = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=620,300&format=jpg&f=image`;
+  const streetmap = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=620,300&format=png&f=image`;
   return (
     <div style={{ marginBottom: 14 }}>
       <a href={sat} target="_blank" rel="noreferrer" style={{ display: "block" }}>
-        <img src={aerial} alt="Aerial view of the property" loading="lazy"
+        <img src={streetmap} alt="Street map of the property location" loading="lazy"
           style={{ width: "100%", height: 190, objectFit: "cover", border: `1px solid ${C.line}`, borderRadius: 10, display: "block" }} />
       </a>
       <div style={{ display: "flex", gap: 12, marginTop: 5 }}>

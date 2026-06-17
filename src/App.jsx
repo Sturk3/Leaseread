@@ -1826,7 +1826,7 @@ function ContactReveal({ r, pw }) {
         <button onClick={reveal} className="mono lift" style={{ ...ACTION_PILL, padding: "7px 13px", background: C.panel, border: `1px solid ${C.gold}`, color: C.gold }}>
           📞 Reveal owner contact
         </button>
-        <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>~$0.10 · charged only on a match · cached after</span>
+        <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>~$0.12 · charged only on a match · cached after</span>
       </div>
     );
   }

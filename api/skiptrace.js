@@ -116,16 +116,18 @@ const PROVIDERS = {
   batchdata: {
     label: "BatchData",
     keyEnv: "BATCHDATA_API_KEY",
-    estCost: () => 0.12,
+    estCost: () => 0.12, // pay-as-you-go ~$0.07–0.18 per match
     async lookup(key, input) {
-      // BatchData documented endpoint. CONFIRM the request envelope on first call.
-      const base = process.env.BATCHDATA_BASE || "https://api.batchdata.com/api/v1";
-      const { first, last } = splitName(input.name);
+      // Verified contract (developer.batchdata.com + a public example notebook):
+      //   POST {base}/property/skip-trace  ·  Authorization: Bearer <key>
+      //   body  { requests: [ { propertyAddress: { street, city, state, zip } } ] }
+      //   resp  results.persons[].phoneNumbers[].number  /  results.persons[].emails[].email
+      // We trace the owner's MAILING address (input.street already prefers it), so for an
+      // absentee owner this resolves the person where they actually live, not a tenant.
+      const base = process.env.BATCHDATA_BASE || "https://api.batchdata.io/api/v1";
       const body = {
         requests: [{
-          name: { first, last, full: input.name },
           propertyAddress: { street: input.street, city: input.city, state: input.state, zip: input.zip },
-          mailingAddress: { street: input.street, city: input.city, state: input.state, zip: input.zip },
         }],
       };
       const r = await fetch(base + "/property/skip-trace", {
@@ -134,7 +136,7 @@ const PROVIDERS = {
         body: JSON.stringify(body),
       });
       const text = await r.text();
-      if (!r.ok) throw new Error(`BatchData ${r.status}: ${text.slice(0, 180)}`);
+      if (!r.ok) throw new Error(`BatchData ${r.status}: ${text.slice(0, 200)}`);
       return JSON.parse(text);
     },
   },
@@ -149,8 +151,10 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
 
-    const providerId = (process.env.SKIPTRACE_PROVIDER || "tracerfy").toLowerCase();
-    const provider = PROVIDERS[providerId] || PROVIDERS.tracerfy;
+    // Default lane is BatchData (chosen for CRE/LLC entity unmasking). Override with
+    // SKIPTRACE_PROVIDER=tracerfy to switch lanes (e.g. for a bake-off).
+    const providerId = (process.env.SKIPTRACE_PROVIDER || "batchdata").toLowerCase();
+    const provider = PROVIDERS[providerId] || PROVIDERS.batchdata;
     const key = process.env[provider.keyEnv];
 
     // Zero-cost deploy/config probe — confirms which lane is live and whether the key

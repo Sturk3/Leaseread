@@ -23,6 +23,9 @@
     },
     "api/leasescan.js": {
       "maxDuration": 60
+    },
+    "api/nda.js": {
+      "maxDuration": 60
     }
   }
 }

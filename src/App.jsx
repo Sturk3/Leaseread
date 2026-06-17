@@ -318,10 +318,12 @@ export default function App() {
                 ? "Underwrite high-street flagship assets against your mandate."
                 : view === "radar"
                 ? "Scan a corridor for leases estimated to be coming available — off-market, before they list."
+                : view === "nda"
+                ? "Redline an NDA against your playbook — what to leave in, narrow, or strike."
                 : "Source owners & deals from NYC public records — ACRIS · DOB · PLUTO."}
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              {[["screener", "SCREENER"], ["sourcing", "SOURCING"], ["radar", "LEASE RADAR"]].map(([v, lab]) => (
+              {[["screener", "SCREENER"], ["sourcing", "SOURCING"], ["radar", "LEASE RADAR"], ["nda", "NDA REVIEW"]].map(([v, lab]) => (
                 <button key={v} onClick={() => setView(v)} className="mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "6px 13px", borderRadius: 7, border: `1px solid ${view === v ? C.gold : C.line}`, background: view === v ? C.goldSoft : "transparent", color: view === v ? C.gold : C.muted }}>
                   {lab}
@@ -337,7 +339,7 @@ export default function App() {
               </button>
             )}
             <div className="mono" style={{ fontSize: 11, color: C.gold, textAlign: "right", lineHeight: 1.5 }}>
-              POWERED BY CLAUDE<br /><span style={{ color: C.muted }}>{view === "screener" ? `mandate · ${config.name}` : "ACRIS · DOB"}</span>
+              POWERED BY CLAUDE<br /><span style={{ color: C.muted }}>{view === "screener" ? `mandate · ${config.name}` : view === "nda" ? "NDA playbook" : "ACRIS · DOB"}</span>
             </div>
           </div>
         </div>
@@ -345,6 +347,8 @@ export default function App() {
         {view === "sourcing" && <Sourcing pw={pw} />}
 
         {view === "radar" && <LeaseRadar pw={pw} />}
+
+        {view === "nda" && <NDAReview pw={pw} />}
 
         {view === "screener" && (<>
         {showSettings && (
@@ -2102,6 +2106,406 @@ function SharedLeads({ pw }) {
       {loading && <div style={{ color: C.muted, fontSize: 13 }}>Loading…</div>}
       {rows && !loading && rows.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No saved leads yet. Source some on the “Source live” tab and check “Save to the shared list”.</div>}
       {rows && rows.length > 0 && <LeadTable rows={rows} statusEditor={statusEditor} pw={pw} />}
+    </div>
+  );
+}
+
+/* ============================== NDA REVIEW ==============================
+   Fourth workflow. Reads an NDA (paste or PDF) and redlines it clause-by-clause
+   against the firm's editable playbook of negotiating positions, flagging each
+   clause Keep / Revise / Cut / Flag plus a list of missing protections.
+   Backed by api/nda.js (Anthropic call, key server-side). Mirrors the screener:
+   editable criteria + free-text rules + saved named playbooks in localStorage. */
+
+const NDA_PRESETS_KEY = "fr_nda_presets_v1";
+const NDA_ACTIVE_KEY = "fr_nda_active_v1";
+
+// Mirrors api/nda.js DEFAULT_POSITIONS so the editor and the prompt agree.
+const DEFAULT_NDA_CONFIG = {
+  name: "Acquisitions NDA",
+  perspective: "Receiving Party (we are receiving the counterparty's confidential information and reviewing their draft)",
+  positions: [
+    { id: "mutual", label: "Mutuality", desc: "Obligations should run both ways (mutual NDA), not bind only us.", want: "include" },
+    { id: "term", label: "Confidentiality term", desc: "Finite, capped term — prefer 2 years from disclosure, 3 max.", want: "limit" },
+    { id: "carveouts", label: "Standard carve-outs", desc: "Exclude info that is public, already known, independently developed, or rightfully received from a third party.", want: "include" },
+    { id: "reps", label: "Permitted disclosures", desc: "Allow sharing with affiliates, employees, lenders, advisors on a need-to-know basis.", want: "include" },
+    { id: "compelled", label: "Compelled disclosure", desc: "Permit disclosure required by law/subpoena/regulator with notice, without breach.", want: "include" },
+    { id: "noncompete", label: "Non-compete / no-investment", desc: "Strike clauses barring us from pursuing the asset, the market, or competing deals.", want: "remove" },
+    { id: "noncircumvent", label: "Non-circumvention / exclusivity", desc: "Strike broad non-circumvention, exclusivity, or no-contact terms.", want: "remove" },
+    { id: "nonsolicit", label: "Non-solicitation", desc: "No-hire acceptable only if narrow and short (≤1yr, no general ads).", want: "limit" },
+    { id: "standstill", label: "Standstill", desc: "Strike standstill provisions restricting our ability to transact, bid, or acquire.", want: "remove" },
+    { id: "defn", label: "Definition scope", desc: "Confidential Information should be bounded (marked/identified), not everything exchanged.", want: "limit" },
+    { id: "return", label: "Return / destruction", desc: "Return-or-destroy is fine, but preserve a retention carve-out for legal/archival/auto-backup copies.", want: "limit" },
+    { id: "remedies", label: "Remedies & liability", desc: "Strike indemnification, liquidated damages, fee-shifting; injunctive relief OK.", want: "remove" },
+    { id: "residuals", label: "Residuals", desc: "Acceptable to keep a residuals clause protecting unaided memory / general knowledge.", want: "include" },
+    { id: "law", label: "Governing law / venue", desc: "Prefer New York law and NY venue; flag anything else.", want: "limit" },
+    { id: "term_assign", label: "Assignment & survival", desc: "Flag broad assignment rights and perpetual survival of obligations.", want: "limit" },
+  ],
+  commands: "",
+};
+
+function loadNdaPresets() {
+  try { const p = JSON.parse(localStorage.getItem(NDA_PRESETS_KEY)); if (p && typeof p === "object" && Object.keys(p).length) return p; } catch {}
+  return { [DEFAULT_NDA_CONFIG.name]: clone(DEFAULT_NDA_CONFIG) };
+}
+function loadNdaActive() {
+  try { const a = JSON.parse(localStorage.getItem(NDA_ACTIVE_KEY)); if (a && Array.isArray(a.positions)) return a; } catch {}
+  return clone(DEFAULT_NDA_CONFIG);
+}
+
+const NDA_VERDICT = {
+  Keep: { color: C.green, soft: "rgba(31,157,99,0.10)", label: "KEEP" },
+  Revise: { color: C.amber, soft: "rgba(183,121,31,0.12)", label: "REVISE" },
+  Cut: { color: C.red, soft: "rgba(209,74,60,0.10)", label: "CUT" },
+  Flag: { color: C.gold, soft: C.goldSoft, label: "FLAG" },
+};
+const ndaVerdict = (v) => NDA_VERDICT[v] || NDA_VERDICT.Flag;
+const NDA_WANT = { include: "Leave in", limit: "Narrow / limit", remove: "Take out" };
+
+const SAMPLE_NDA = `MUTUAL NON-DISCLOSURE AGREEMENT
+
+This Agreement is entered into between Meridian Capital Partners LLC ("Disclosing Party") and the recipient ("Receiving Party").
+
+1. CONFIDENTIAL INFORMATION. "Confidential Information" means all information disclosed by either party, in any form, whether or not marked confidential, including all information the Receiving Party learns or observes.
+
+2. TERM. The Receiving Party's obligations under this Agreement shall survive in perpetuity.
+
+3. NON-DISCLOSURE. The Receiving Party shall not disclose Confidential Information to any third party for any purpose without prior written consent.
+
+4. NON-CIRCUMVENTION. For a period of three (3) years, the Receiving Party shall not, directly or indirectly, contact, negotiate with, or transact with any property owner, broker, or counterparty introduced through the Confidential Information, nor pursue any acquisition in the subject market.
+
+5. NON-COMPETE. The Receiving Party agrees not to acquire, invest in, or pursue any competing property within one mile of the subject asset for two (2) years.
+
+6. RETURN OF MATERIALS. Upon request, the Receiving Party shall immediately return or destroy all Confidential Information and all copies, with no exceptions.
+
+7. REMEDIES. The Receiving Party agrees that any breach causes irreparable harm, shall indemnify the Disclosing Party for all losses, and shall pay liquidated damages of $250,000 per breach plus the Disclosing Party's attorneys' fees.
+
+8. GOVERNING LAW. This Agreement is governed by the laws of the State of Delaware, and the parties consent to exclusive jurisdiction in Wilmington, Delaware.
+
+9. NO LICENSE. Nothing herein grants any license or rights beyond the limited review purpose stated.`;
+
+function NDAReview({ pw }) {
+  const [config, setConfigState] = useState(loadNdaActive);
+  const [presets, setPresetsState] = useState(loadNdaPresets);
+  const [showPlaybook, setShowPlaybook] = useState(false);
+
+  const [mode, setMode] = useState("text");
+  const [ndaText, setNdaText] = useState("");
+  const [pdfData, setPdfData] = useState(null);
+  const [fileName, setFileName] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+  const [filter, setFilter] = useState("all");
+  const fileRef = useRef(null);
+
+  function setConfig(updater) {
+    setConfigState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      try { localStorage.setItem(NDA_ACTIVE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+  function setPresets(next) {
+    setPresetsState(next);
+    try { localStorage.setItem(NDA_PRESETS_KEY, JSON.stringify(next)); } catch {}
+  }
+
+  function onFile(f) {
+    if (!f) return;
+    setFileName(f.name);
+    const reader = new FileReader();
+    reader.onload = () => setPdfData(reader.result.split(",")[1]);
+    reader.readAsDataURL(f);
+  }
+
+  async function review() {
+    setError(""); setResult(null); setLoading(true);
+    setProgress("Reading the agreement…");
+    try {
+      if (mode === "pdf") {
+        if (!pdfData) { setError("Upload an NDA PDF first."); setLoading(false); return; }
+      } else if (!ndaText.trim()) {
+        setError("Paste the NDA text or load the sample."); setLoading(false); return;
+      }
+      setProgress("Redlining each clause against your playbook…");
+      const res = await fetch("/api/nda", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, pdfData, ndaText, password: pw, config }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+      const start = text.indexOf("{"); const end = text.lastIndexOf("}");
+      if (start === -1 || end === -1) throw new Error("Could not read a structured result. Try again or check the document.");
+      setResult(JSON.parse(text.slice(start, end + 1)));
+    } catch (e) {
+      setError(e.message || "Something went wrong. Try again.");
+    } finally {
+      setLoading(false); setProgress("");
+    }
+  }
+
+  function exportCSV() {
+    if (!result) return;
+    const rows = [["Title", "Verdict", "Risk", "Playbook", "Excerpt", "Rationale", "Suggested language"]];
+    (result.clauses || []).forEach((c) =>
+      rows.push([c.title || "", c.verdict || "", c.risk || "", c.playbook_ref || "", c.excerpt || "", c.rationale || "", c.suggested_language || ""]));
+    (result.missing || []).forEach((m) =>
+      rows.push([m.title || "", "Missing", "", "", "", m.why || "", m.suggested_language || ""]));
+    const csv = rows.map((r) => r.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(",")).join("\n");
+    downloadBlob(csv, "frontage_nda_review.csv", "text/csv");
+  }
+
+  const clauses = (result && result.clauses) || [];
+  const shown = filter === "all" ? clauses : clauses.filter((c) => c.verdict === filter);
+  const counts = useMemo(() => {
+    const c = { Keep: 0, Revise: 0, Cut: 0, Flag: 0 };
+    clauses.forEach((x) => { if (c[x.verdict] != null) c[x.verdict]++; });
+    return c;
+  }, [clauses]);
+
+  const label = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
+
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+        <button onClick={() => setShowPlaybook((s) => !s)} className="mono lift"
+          style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${showPlaybook ? C.gold : C.line}`, background: showPlaybook ? C.goldSoft : C.panel, color: showPlaybook ? C.gold : C.ivory }}>
+          ⚙ NDA PLAYBOOK
+        </button>
+      </div>
+
+      {showPlaybook && (
+        <NDAPlaybook config={config} setConfig={setConfig} presets={presets} setPresets={setPresets} onClose={() => setShowPlaybook(false)} />
+      )}
+
+      {/* Input */}
+      <div style={{ marginTop: 16, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          {["text", "pdf"].map((m) => (
+            <button key={m} onClick={() => setMode(m)} className="mono"
+              style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${mode === m ? C.gold : C.line}`, background: mode === m ? C.goldSoft : "transparent", color: mode === m ? C.gold : C.muted }}>
+              {m === "text" ? "PASTE TEXT" : "UPLOAD PDF"}
+            </button>
+          ))}
+          <button onClick={() => { setMode("text"); setNdaText(SAMPLE_NDA); }} className="mono"
+            style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, marginLeft: "auto", border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>
+            ✦ TRY SAMPLE NDA
+          </button>
+        </div>
+
+        {mode === "text" ? (
+          <textarea value={ndaText} onChange={(e) => setNdaText(e.target.value)} rows={8}
+            placeholder="Paste the NDA / confidentiality agreement text here, or load the sample…"
+            style={{ width: "100%", background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 9, padding: 14, fontSize: 13.5, lineHeight: 1.5, resize: "vertical", fontFamily: "Archivo, sans-serif" }} />
+        ) : (
+          <div onClick={() => fileRef.current?.click()} className="lift"
+            style={{ cursor: "pointer", border: `1px dashed ${C.line}`, borderRadius: 9, padding: "30px 16px", textAlign: "center", background: C.ink }}>
+            <div style={{ color: C.gold, fontSize: 22 }} className="serif">↑</div>
+            <div style={{ marginTop: 6, fontSize: 14 }}>{fileName || "Drop an NDA PDF, or click to browse"}</div>
+            <input ref={fileRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => onFile(e.target.files[0])} />
+          </div>
+        )}
+
+        <button onClick={review} disabled={loading}
+          style={{ marginTop: 14, width: "100%", cursor: loading ? "default" : "pointer", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: loading ? C.panel2 : C.gold, color: loading ? C.muted : "#ffffff" }}>
+          {loading ? progress || "Working…" : `Review against “${config.name}” →`}
+        </button>
+        {error && <div style={{ marginTop: 12, color: C.red, fontSize: 13 }}>{error}</div>}
+      </div>
+
+      {result && (
+        <div className="fade" style={{ marginTop: 18 }}>
+          {/* Summary */}
+          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <div className="serif" style={{ fontSize: 20 }}>{result.doc_type || "NDA review"}</div>
+                <div className="mono" style={{ fontSize: 11, color: C.muted, marginTop: 6, lineHeight: 1.6 }}>
+                  {result.parties ? <>PARTIES · {result.parties}<br /></> : null}
+                  {result.mutual != null ? <>{result.mutual ? "MUTUAL" : "ONE-WAY"} · </> : null}
+                  {result.term ? <>TERM {result.term} · </> : null}
+                  {result.governing_law ? <>LAW {result.governing_law}</> : null}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div className="mono" style={label}>OVERALL RISK</div>
+                <div className="serif" style={{ fontSize: 26, color: result.risk_level === "High" ? C.red : result.risk_level === "Medium" ? C.amber : C.green }}>
+                  {result.risk_level || "—"}
+                </div>
+              </div>
+            </div>
+            {result.overall_assessment && (
+              <div style={{ marginTop: 12, fontSize: 13.5, lineHeight: 1.6, color: C.ivory }}>{result.overall_assessment}</div>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
+              {["all", "Keep", "Revise", "Cut", "Flag"].map((v) => {
+                const active = filter === v;
+                const meta = v === "all" ? null : ndaVerdict(v);
+                const n = v === "all" ? clauses.length : counts[v];
+                return (
+                  <button key={v} onClick={() => setFilter(v)} className="mono"
+                    style={{ cursor: "pointer", fontSize: 11.5, padding: "6px 11px", borderRadius: 7, border: `1px solid ${active ? (meta ? meta.color : C.gold) : C.line}`, background: active ? (meta ? meta.soft : C.goldSoft) : "transparent", color: active ? (meta ? meta.color : C.gold) : C.muted }}>
+                    {v === "all" ? "ALL" : ndaVerdict(v).label} · {n}
+                  </button>
+                );
+              })}
+              <button onClick={exportCSV} className="mono lift" style={{ cursor: "pointer", fontSize: 11.5, padding: "6px 11px", borderRadius: 7, marginLeft: "auto", border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>
+            </div>
+          </div>
+
+          {/* Clauses */}
+          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+            {shown.map((c, i) => {
+              const v = ndaVerdict(c.verdict);
+              return (
+                <div key={i} style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `4px solid ${v.color}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                    <div className="serif" style={{ fontSize: 16 }}>{c.title}</div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {c.risk && <span className="mono" style={{ fontSize: 10.5, color: c.risk === "High" ? C.red : c.risk === "Medium" ? C.amber : C.muted }}>{String(c.risk).toUpperCase()} RISK</span>}
+                      <span className="mono" style={{ fontSize: 11, fontWeight: 600, padding: "3px 9px", borderRadius: 6, background: v.soft, color: v.color }}>{v.label}</span>
+                    </div>
+                  </div>
+                  {c.excerpt && (
+                    <div style={{ marginTop: 8, fontSize: 12.5, color: C.muted, fontStyle: "italic", borderLeft: `2px solid ${C.line}`, paddingLeft: 10, lineHeight: 1.5 }}>“{c.excerpt}”</div>
+                  )}
+                  <div style={{ marginTop: 10, fontSize: 13.5, lineHeight: 1.6 }}>{c.rationale}</div>
+                  {c.playbook_ref && <div className="mono" style={{ marginTop: 8, fontSize: 10.5, color: C.muted }}>PLAYBOOK · {c.playbook_ref}</div>}
+                  {c.suggested_language && (
+                    <div style={{ marginTop: 10, background: v.soft, border: `1px solid ${v.color}33`, borderRadius: 8, padding: "10px 12px" }}>
+                      <div className="mono" style={{ fontSize: 10, color: v.color, letterSpacing: "0.06em", marginBottom: 5 }}>SUGGESTED REDLINE</div>
+                      <div style={{ fontSize: 13, lineHeight: 1.55, fontFamily: "IBM Plex Mono, monospace", color: C.ivory }}>{c.suggested_language}</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {shown.length === 0 && <div style={{ color: C.muted, fontSize: 13 }}>No clauses in this category.</div>}
+          </div>
+
+          {/* Missing protections */}
+          {Array.isArray(result.missing) && result.missing.length > 0 && (
+            <div style={{ marginTop: 18 }}>
+              <div className="mono" style={{ fontSize: 12, color: C.gold, letterSpacing: "0.1em", marginBottom: 10 }}>MISSING PROTECTIONS — CONSIDER ADDING</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {result.missing.map((m, i) => (
+                  <div key={i} style={{ background: C.panel, border: `1px dashed ${C.gold}66`, borderRadius: 10, padding: 16 }}>
+                    <div className="serif" style={{ fontSize: 15 }}>{m.title}</div>
+                    <div style={{ marginTop: 8, fontSize: 13.5, lineHeight: 1.6 }}>{m.why}</div>
+                    {m.suggested_language && (
+                      <div style={{ marginTop: 10, background: C.goldSoft, border: `1px solid ${C.gold}33`, borderRadius: 8, padding: "10px 12px" }}>
+                        <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.06em", marginBottom: 5 }}>SUGGESTED CLAUSE</div>
+                        <div style={{ fontSize: 13, lineHeight: 1.55, fontFamily: "IBM Plex Mono, monospace", color: C.ivory }}>{m.suggested_language}</div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mono" style={{ marginTop: 18, fontSize: 11, color: C.muted, lineHeight: 1.6 }}>
+            ⚠ AI-assisted review against your playbook — a drafting aid, not legal advice. Have counsel confirm before signing.
+          </div>
+        </div>
+      )}
+
+      {!result && !loading && (
+        <div style={{ marginTop: 18, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
+          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>What this does.</span> Reads an NDA, walks it clause by clause, and
+          flags each one <strong style={{ color: C.green }}>Keep</strong> / <strong style={{ color: C.amber }}>Revise</strong> /{" "}
+          <strong style={{ color: C.red }}>Cut</strong> / <strong style={{ color: C.gold }}>Flag</strong> against your firm's playbook —
+          with suggested redline language and a list of protections the draft is missing. Tune what you'll leave in vs. take out in{" "}
+          <strong>NDA Playbook</strong> above.
+        </div>
+      )}
+    </>
+  );
+}
+
+function NDAPlaybook({ config, setConfig, presets, setPresets, onClose }) {
+  function updatePos(id, patch) {
+    setConfig((prev) => ({ ...prev, positions: prev.positions.map((p) => (p.id === id ? { ...p, ...patch } : p)) }));
+  }
+  function addPos() {
+    setConfig((prev) => ({ ...prev, positions: [...prev.positions, { id: genId(), label: "New position", desc: "", want: "limit" }] }));
+  }
+  function removePos(id) {
+    setConfig((prev) => ({ ...prev, positions: prev.positions.filter((p) => p.id !== id) }));
+  }
+  function loadPreset(name) { if (presets[name]) setConfig(clone(presets[name])); }
+  function savePreset() {
+    const name = (config.name || "Untitled").trim() || "Untitled";
+    setPresets({ ...presets, [name]: clone({ ...config, name }) });
+  }
+  function deletePreset() {
+    const name = config.name;
+    if (!presets[name]) return;
+    const next = { ...presets }; delete next[name];
+    if (!Object.keys(next).length) next[DEFAULT_NDA_CONFIG.name] = clone(DEFAULT_NDA_CONFIG);
+    setPresets(next);
+    loadPreset(Object.keys(next)[0]);
+  }
+
+  const label = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
+  const field = { background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "Archivo, sans-serif" };
+
+  return (
+    <div className="fade" style={{ marginTop: 14, background: C.panel, border: `1px solid ${C.gold}55`, borderRadius: 12, padding: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div className="serif" style={{ fontSize: 18 }}>NDA playbook</div>
+        <button onClick={onClose} className="mono" style={{ cursor: "pointer", fontSize: 12, color: C.muted, background: "transparent", border: "none" }}>✕ CLOSE</button>
+      </div>
+
+      {/* Preset + name + perspective */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 16 }}>
+        <div>
+          <div className="mono" style={label}>SAVED PLAYBOOK</div>
+          <select value={presets[config.name] ? config.name : ""} onChange={(e) => loadPreset(e.target.value)} style={{ ...field, marginTop: 4, minWidth: 150 }}>
+            {!presets[config.name] && <option value="">{config.name} (unsaved)</option>}
+            {Object.keys(presets).map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+        <div>
+          <div className="mono" style={label}>NAME</div>
+          <input value={config.name} onChange={(e) => setConfig((p) => ({ ...p, name: e.target.value }))} style={{ ...field, marginTop: 4, width: 150 }} />
+        </div>
+        <button onClick={savePreset} className="mono lift" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 7, border: `1px solid ${C.line}`, background: C.gold, color: "#fff" }}>SAVE</button>
+        <button onClick={deletePreset} className="mono lift" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.muted }}>DELETE</button>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div className="mono" style={label}>OUR ROLE / PERSPECTIVE</div>
+        <input value={config.perspective} onChange={(e) => setConfig((p) => ({ ...p, perspective: e.target.value }))} style={{ ...field, marginTop: 4, width: "100%" }} />
+      </div>
+
+      {/* Positions */}
+      <div className="mono" style={{ ...label, marginBottom: 8 }}>POSITIONS — WHAT TO LEAVE IN, NARROW, OR TAKE OUT</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {config.positions.map((p) => (
+          <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: C.ink, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
+            <select value={p.want} onChange={(e) => updatePos(p.id, { want: e.target.value })} style={{ ...field, width: 130, flexShrink: 0 }}>
+              {Object.entries(NDA_WANT).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+              <input value={p.label} onChange={(e) => updatePos(p.id, { label: e.target.value })} style={{ ...field, fontWeight: 600 }} placeholder="Position" />
+              <input value={p.desc} onChange={(e) => updatePos(p.id, { desc: e.target.value })} style={field} placeholder="What this means / the bound" />
+            </div>
+            <button onClick={() => removePos(p.id)} className="mono" style={{ cursor: "pointer", fontSize: 14, color: C.muted, background: "transparent", border: "none", padding: "4px 6px" }}>✕</button>
+          </div>
+        ))}
+      </div>
+      <button onClick={addPos} className="mono lift" style={{ cursor: "pointer", fontSize: 12, marginTop: 10, padding: "8px 14px", borderRadius: 7, border: `1px dashed ${C.line}`, background: "transparent", color: C.gold }}>+ ADD POSITION</button>
+
+      <div style={{ marginTop: 16 }}>
+        <div className="mono" style={label}>ADDITIONAL RULES (free text — applied strictly)</div>
+        <textarea value={config.commands} onChange={(e) => setConfig((p) => ({ ...p, commands: e.target.value }))} rows={3}
+          placeholder="e.g. Term must not exceed 18 months. Reject any exclusivity. We will not sign a standstill under any circumstances."
+          style={{ ...field, marginTop: 4, width: "100%", resize: "vertical", lineHeight: 1.5 }} />
+      </div>
     </div>
   );
 }

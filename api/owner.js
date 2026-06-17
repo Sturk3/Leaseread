@@ -16,6 +16,26 @@ const toNum = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
+// PLUTO spells the same owner inconsistently across lots (LLC vs L.L.C. vs ", LLC",
+// &/AND, optional THE, trailing period). An exact match splits a developer's portfolio
+// and drops buildings. Generate the common formatting variants and match any of them —
+// catches the same entity without the false positives a loose substring match would add.
+function entityVariants(name) {
+  const base = clean(name).toUpperCase().replace(/\s+/g, " ").trim();
+  if (!base) return [];
+  const set = new Set([base]);
+  const add = (s) => { const v = clean(s).toUpperCase(); if (v) set.add(v); };
+  add(base.replace(/\b(INC|CORP|CO|LTD|LP|LLP)\b\.?/g, "$1."));   // add trailing period
+  add(base.replace(/\b(INC|CORP|CO|LTD|LP|LLP)\.\b/g, "$1"));      // remove trailing period
+  add(base.replace(/\bLLC\b/g, "L.L.C."));
+  add(base.replace(/\bL\.L\.C\.?\b/g, "LLC"));
+  add(base.replace(/&/g, "AND"));
+  add(base.replace(/\bAND\b/g, "&"));
+  add(base.replace(/\s+(INC|LLC|CORP|CO|LTD)\b\.?/g, ", $1."));    // comma before suffix
+  if (/^THE\s+/.test(base)) add(base.replace(/^THE\s+/, "")); else add("THE " + base);
+  return [...set].slice(0, 14);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
@@ -23,13 +43,14 @@ export default async function handler(req, res) {
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
     }
-    const nm = clean(name).toUpperCase();
-    if (!nm) return res.status(400).json({ error: "Need an owner name." });
+    const variants = entityVariants(name);
+    if (!variants.length) return res.status(400).json({ error: "Need an owner name." });
 
     const appToken = null; // NYC account/token disconnected — anonymous requests only
+    const inList = variants.map((v) => `'${v.replace(/'/g, "''")}'`).join(",");
     const params = new URLSearchParams({
       $limit: "500",
-      $where: `upper(ownername)='${nm.replace(/'/g, "''")}'`,
+      $where: `upper(ownername) in (${inList})`,
       $select: "address,borough,bldgclass,assesstot,block,lot,latitude,longitude",
       $order: "assesstot DESC",
     });

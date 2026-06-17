@@ -2281,7 +2281,7 @@ function PropertyDetail({ r, pw }) {
 function PortfolioList({ data, ownerName }) {
   const props = (data && data.properties) || [];
   if (!props.length) {
-    return <div style={{ color: C.muted, fontSize: 12, padding: "10px 0" }}>No other NYC properties under this exact owner name. (Owners often use a separate LLC per building.)</div>;
+    return <div style={{ color: C.muted, fontSize: 12, padding: "10px 0" }}>No other NYC properties under this owner name (common name variants matched). Developers often use a separate LLC per building, which public data can’t link — use the AI research / skip trace to connect the principal.</div>;
   }
   return (
     <div style={{ padding: "6px 0" }}>

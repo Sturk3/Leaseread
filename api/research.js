@@ -4,14 +4,15 @@
 // recent news/distress signals, the asset, and whether it's worth pursuing).
 // Key stays server-side; password-gated like every other endpoint.
 
-// Model for the research brief. Sonnet 4.6 — fast + cheap enough to finish a
-// web-search run inside Vercel's 60s function limit (Opus 4.8 was timing out and
-// burning tokens without returning). Bump to "claude-opus-4-8" for max quality only
-// if you also raise the function timeout (needs a Vercel Pro plan).
-const RESEARCH_MODEL = "claude-sonnet-4-6";
-// Each web_search round is a slow round-trip; >1 was blowing past Vercel's hard 60s
-// function limit. One focused search reliably fits and still grounds the brief.
-const MAX_SEARCHES = 1;
+// Model for the research brief. Defaults to Sonnet 4.6 (fast; finishes web search well
+// within Vercel Pro's 300s budget). Override RESEARCH_MODEL=claude-opus-4-8 for maximum
+// research depth/quality once on Pro. (Env-configurable so no code change is needed.)
+const RESEARCH_MODEL = process.env.RESEARCH_MODEL || "claude-sonnet-4-6";
+// How many web_search rounds the agent may run. Vercel Hobby (60s) only fits ~1; Vercel
+// Pro (300s) can go deeper for a richer brief — default 5, override RESEARCH_MAX_SEARCHES.
+// Only used in WEB mode (knowledge mode runs no searches), so this is inert until the
+// frontend is flipped to mode:"web" (which only makes sense on Pro's higher timeout).
+const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 5;
 
 function buildSystem() {
   return `You are an off-market real estate acquisitions research analyst for a firm that buys trophy / high-street RETAIL property in New York City. You are given one property and its owner of record (often an LLC). Use the web_search tool to compile a tight intelligence brief that helps the deal team decide whether to pursue the owner and how to reach the decision-maker.
@@ -54,7 +55,7 @@ export default async function handler(req, res) {
     }
     // Zero-cost deploy/version probe (no Anthropic call).
     if (req.body && req.body.debug) {
-      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, build: "v5-lite-search" });
+      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, build: "v6-web-ready" });
     }
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
@@ -81,8 +82,9 @@ export default async function handler(req, res) {
 
     // The web_search server tool runs a search loop server-side; if it hits its
     // iteration cap the response comes back as stop_reason "pause_turn" and we
-    // re-send to let it continue. Bounded so a runaway can't burn the budget.
-    for (let i = 0; i < 2; i++) {
+    // re-send to let it continue. Bounded so a runaway can't burn the budget — raised
+    // to 6 so a deeper multi-search run (on Pro) can finish its continuation legs.
+    for (let i = 0; i < 6; i++) {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {

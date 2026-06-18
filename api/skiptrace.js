@@ -189,7 +189,9 @@ export default async function handler(req, res) {
       street,
       // Borough → a postal city the providers accept (Manhattan's USPS city is "New York").
       city: onProperty ? (NYC_CITY[clean(borough).toLowerCase()] || clean(borough) || clean(city)) : (clean(city) || clean(borough)),
-      state: clean(state) || "NY",
+      // On the property anchor the state is NY (all boroughs) — NOT the owner's mailing
+      // state, which for an absentee owner is elsewhere (e.g. NJ) and breaks the match.
+      state: onProperty ? "NY" : (clean(state) || "NY"),
       // The mailing ZIP belongs to a different address than the property — only send a ZIP
       // when we're actually tracing the mailing address.
       zip: onProperty ? "" : clean(zip),

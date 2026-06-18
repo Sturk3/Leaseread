@@ -119,7 +119,10 @@ function phoneGrade(p, provScore) {
   if (provScore != null) s = Math.round((s + provScore) / 2); // blend a provider's own score
   if (p.dnc) s -= 38; // legally riskier to cold-call
   s = Math.max(0, Math.min(100, Math.round(s)));
-  return { score: s, tier: s >= 72 ? "BEST" : s >= 50 ? "GOOD" : "LOW" };
+  // DNC numbers are capped at LOW — high reachability doesn't make a number you
+  // shouldn't cold-call a good call. (The DNC badge says why; prefer email there.)
+  const tier = p.dnc ? "LOW" : s >= 72 ? "BEST" : s >= 50 ? "GOOD" : "LOW";
+  return { score: s, tier };
 }
 function personPhones(p) {
   const arr = Array.isArray(p.phones) ? p.phones : Array.isArray(p.phoneNumbers) ? p.phoneNumbers : [];

@@ -204,9 +204,11 @@ export default async function handler(req, res) {
           const key = `${name}|${role}`.toUpperCase();
           if (seen.has(key)) continue;
           seen.add(key);
-          const addr = clean(`${clean(x.businesshousenumber)} ${clean(x.businessstreetname)}`);
-          const tail = [clean(x.businesscity), clean(x.businessstate), clean(x.businesszip)].filter(Boolean).join(" ");
-          officers.push({ role, name, isPerson: !!person, address: [addr, tail].filter(Boolean).join(", ") });
+          const street = clean(`${clean(x.businesshousenumber)} ${clean(x.businessstreetname)}`);
+          const oCity = clean(x.businesscity), oState = clean(x.businessstate), oZip = clean(x.businesszip);
+          const tail = [oCity, oState, oZip].filter(Boolean).join(" ");
+          // Structured address fields so the dossier can one-click skip-trace this person.
+          officers.push({ role, name, isPerson: !!person, street, city: oCity, state: oState, zip: oZip, address: [street, tail].filter(Boolean).join(", ") });
         }
         const rank = (o) => (/head/i.test(o.role) ? 0 : /owner/i.test(o.role) ? 1 : o.role === "Officer" ? 2 : /agent/i.test(o.role) ? 3 : o.isPerson ? 4 : 6);
         officers.sort((a, b) => rank(a) - rank(b));

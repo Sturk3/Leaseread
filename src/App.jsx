@@ -2113,6 +2113,33 @@ function latestDebt(hist) {
   return { amount: latest.amount, date: latest.date, lender, satisfied, count: m.length, year, yearsAgo, maturity };
 }
 
+// One HPD officer/owner with a one-click "trace this person" button → runs the skip
+// trace on that human (name + their business address), instead of the building.
+function OfficerRow({ o, pw }) {
+  const [open, setOpen] = useState(false);
+  const target = {
+    name: o.name, entity_type: o.isPerson ? "person" : "",
+    contact_address: o.street, city: o.city, state: o.state || "NY", zip: o.zip,
+    address: o.street, borough: "",
+    deal_id: `officer-${o.name}-${o.zip || ""}`,
+  };
+  const canTrace = o.isPerson && o.street;
+  return (
+    <div style={{ marginTop: 2 }}>
+      <div style={{ color: C.muted }}>
+        <span className="mono" style={{ fontSize: 10, color: C.gold }}>{o.role}</span>{" "}
+        <span style={{ color: C.ivory }}>{o.name}</span>{o.address ? <span style={{ fontSize: 11 }}> — {o.address}</span> : null}
+        {canTrace && (
+          <button onClick={() => setOpen((v) => !v)} className="mono lift" style={{ ...ACTION_PILL, marginLeft: 8, fontSize: 10, padding: "1px 7px" }}>
+            {open ? "▾ close" : "🔎 trace"}
+          </button>
+        )}
+      </div>
+      {open && <ContactReveal key={target.deal_id} r={target} pw={pw} autoRun />}
+    </div>
+  );
+}
+
 function PropertyDetail({ r, pw }) {
   const [hist, setHist] = useState(null);
   const [histErr, setHistErr] = useState("");
@@ -2313,12 +2340,7 @@ function PropertyDetail({ r, pw }) {
             {intel.officers && intel.officers.length > 0 && (
               <div style={{ marginTop: 6 }}>
                 <span style={{ color: C.ivory }}>Officers / owners</span> <span style={{ color: C.muted, fontSize: 11 }}>(HPD registration)</span>
-                {intel.officers.map((o, i) => (
-                  <div key={i} style={{ color: C.muted, marginTop: 2 }}>
-                    <span className="mono" style={{ fontSize: 10, color: C.gold }}>{o.role}</span>{" "}
-                    <span style={{ color: C.ivory }}>{o.name}</span>{o.address ? <span style={{ fontSize: 11 }}> — {o.address}</span> : null}
-                  </div>
-                ))}
+                {intel.officers.map((o, i) => <OfficerRow key={i} o={o} pw={pw} />)}
               </div>
             )}
             <div style={{ marginTop: 4 }}>

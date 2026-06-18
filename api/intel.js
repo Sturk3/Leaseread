@@ -17,6 +17,8 @@ const RESTAURANT = "43nn-pn8j"; // restaurant inspections — food tenants (bbl,
 const COFO = "bs8b-p36w";       // certificate of occupancy (bbl)
 const DOB_PERMIT = "ipu4-2q9a"; // DOB permit issuance (bbl)
 const STOREFRONT = process.env.STOREFRONT_DATASET || "92iy-9c3n"; // LL157 storefront registry (bbl) — vacancy + business activity + lease expiry
+const HPD_REG = process.env.HPD_REG_DATASET || "tesw-yqqr";         // HPD registrations (bbl -> registrationid)
+const HPD_CONTACTS = process.env.HPD_CONTACTS_DATASET || "feu5-w2e2"; // registration contacts — named officers/owners/agents
 
 const BORO_CODE = { manhattan: "1", bronx: "2", brooklyn: "3", queens: "4", "staten island": "5" };
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
@@ -73,7 +75,7 @@ export default async function handler(req, res) {
 
     const variants = entityVariants(name);
 
-    const [corp, dob, ecb, hpd, biz, c311, evict, rest, cofo, permits, store] = await Promise.all([
+    const [corp, dob, ecb, hpd, biz, c311, evict, rest, cofo, permits, store, reg] = await Promise.all([
       // NY State business registry — match the owner entity across common name variants
       variants.length ? getJson(NYS, NY_CORP, {
         $limit: "1",
@@ -109,6 +111,9 @@ export default async function handler(req, res) {
         $select: "reporting_year,vacant_on_12_31,primary_business_activity,expir_dt_of_most_recent_lease",
         $order: "reporting_year DESC", $limit: "30",
       }, appToken) : Promise.resolve([]),
+      // HPD registration for this lot (bbl -> registrationid); officer names come from the
+      // Registration Contacts join below. Only residential / mixed-use buildings register.
+      haveLot ? getJson(NYC, HPD_REG, { $select: "registrationid,lastregistrationdate", $where: lotWhere("boroid"), $order: "lastregistrationdate DESC", $limit: "5" }, appToken) : Promise.resolve([]),
     ]);
 
     const c = corp[0];
@@ -176,8 +181,42 @@ export default async function handler(req, res) {
       };
     }
 
+    // HPD registration CONTACTS — the named officers/owners/agents behind the building's
+    // HPD registration. A real source of the PEOPLE behind the entity (head officer,
+    // owner, managing agent), when the building is registered (residential / mixed-use;
+    // pure-commercial lots usually aren't). Join the registrationid(s) -> contacts.
+    let officers = [];
+    if (reg && reg.length) {
+      const regIds = [...new Set(reg.map((x) => clean(x.registrationid)).filter(Boolean))];
+      if (regIds.length) {
+        const contacts = await getJson(NYC, HPD_CONTACTS, {
+          $where: `registrationid in (${sodaQuote(regIds)})`,
+          $select: "type,firstname,lastname,corporationname,businesshousenumber,businessstreetname,businesscity,businessstate,businesszip",
+          $limit: "100",
+        }, appToken).catch(() => []);
+        const ROLE = { HeadOfficer: "Head officer", Officer: "Officer", IndividualOwner: "Individual owner", JointOwner: "Joint owner", Agent: "Managing agent", Shareholder: "Shareholder", SiteManager: "Site manager", CorporateOwner: "Corporate owner", Lessee: "Lessee" };
+        const seen = new Set();
+        for (const x of contacts) {
+          const person = [clean(x.firstname), clean(x.lastname)].filter(Boolean).join(" ");
+          const name = person || clean(x.corporationname);
+          if (!name) continue;
+          const role = ROLE[clean(x.type)] || clean(x.type) || "Contact";
+          const key = `${name}|${role}`.toUpperCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const addr = clean(`${clean(x.businesshousenumber)} ${clean(x.businessstreetname)}`);
+          const tail = [clean(x.businesscity), clean(x.businessstate), clean(x.businesszip)].filter(Boolean).join(" ");
+          officers.push({ role, name, isPerson: !!person, address: [addr, tail].filter(Boolean).join(", ") });
+        }
+        const rank = (o) => (/head/i.test(o.role) ? 0 : /owner/i.test(o.role) ? 1 : o.role === "Officer" ? 2 : /agent/i.test(o.role) ? 3 : o.isPerson ? 4 : 6);
+        officers.sort((a, b) => rank(a) - rank(b));
+        officers = officers.slice(0, 12);
+      }
+    }
+
     return res.status(200).json({
       ny_corp,
+      officers,
       businesses,
       storefront,
       dob_violations: toNum(dob[0] && dob[0].count),

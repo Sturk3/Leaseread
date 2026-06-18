@@ -2247,6 +2247,17 @@ function PropertyDetail({ r, pw }) {
             ) : (
               <div style={{ color: C.muted }}>NY State registry: no match for this owner name (often an individual owner or a dissolved entity).</div>
             )}
+            {intel.officers && intel.officers.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <span style={{ color: C.ivory }}>Officers / owners</span> <span style={{ color: C.muted, fontSize: 11 }}>(HPD registration)</span>
+                {intel.officers.map((o, i) => (
+                  <div key={i} style={{ color: C.muted, marginTop: 2 }}>
+                    <span className="mono" style={{ fontSize: 10, color: C.gold }}>{o.role}</span>{" "}
+                    <span style={{ color: C.ivory }}>{o.name}</span>{o.address ? <span style={{ fontSize: 11 }}> — {o.address}</span> : null}
+                  </div>
+                ))}
+              </div>
+            )}
             <div style={{ marginTop: 4 }}>
               <span style={{ color: C.ivory }}>Violations:</span>{" "}
               <span style={{ color: intel.dob_violations ? C.red : C.muted }}>DOB {intel.dob_violations || 0}</span> ·{" "}

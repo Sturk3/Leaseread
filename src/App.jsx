@@ -1904,26 +1904,15 @@ function ContactList({ phones = [], emails = [] }) {
 // first (/api/findcontact, $0). If that finds a usable contact, you're done for free.
 // If it whiffs, a "deep skip trace" button runs the PAID lane (/api/skiptrace), which
 // is charged only on a match and cached by owner so you never pay twice.
+// Owner-contact lookup — one click runs the skip trace (Tracerfy), charged only on a
+// match, owner-deduped + cached so you never pay twice. (The free web-search lane is
+// parked; /api/findcontact still exists if a BRAVE_API_KEY is ever added back.)
 function ContactReveal({ r, pw }) {
   const cachedSkip = _skipCache.get(skipKey(r)) || null;
-  const [free, setFree] = useState(null);        // free-lane result
-  const [freeState, setFreeState] = useState("idle"); // idle|loading|done|error|nokey
-  const [skip, setSkip] = useState(cachedSkip);   // paid-lane result
-  const [skipState, setSkipState] = useState(cachedSkip ? "done" : "idle");
+  const [skip, setSkip] = useState(cachedSkip);
+  const [skipState, setSkipState] = useState(cachedSkip ? "done" : "idle"); // idle|loading|done|error|nokey
   const [err, setErr] = useState("");
   const [spend, setSpend] = useState(readSkipSpend());
-
-  const runFree = async () => {
-    setFreeState("loading"); setErr("");
-    try {
-      const d = await postJSON("/api/findcontact", {
-        password: pw, name: r.name, entity_type: r.entity_type,
-        contact_address: r.contact_address, city: r.city, state: r.state, borough: r.borough,
-      });
-      if (d.noKey) { setFree(d); setFreeState("nokey"); return; }
-      setFree(d); setFreeState("done");
-    } catch (e) { setErr(e.message || "Search failed."); setFreeState("error"); }
-  };
 
   const runSkip = async () => {
     setSkipState("loading"); setErr("");
@@ -1945,66 +1934,25 @@ function ContactReveal({ r, pw }) {
   const box = { background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", marginTop: 10 };
   const pill = (color) => ({ ...ACTION_PILL, padding: "7px 13px", background: C.panel, border: `1px solid ${color}`, color });
 
-  // Initial state — offer the free lookup.
-  if (freeState === "idle" && skipState === "idle") {
+  if (skipState === "idle") {
     return (
       <div style={box}>
-        <button onClick={runFree} className="mono lift" style={pill(C.gold)}>🔎 Find owner contact</button>
-        <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>free web search first · paid skip trace only if needed</span>
+        <button onClick={runSkip} className="mono lift" style={pill(C.gold)}>🔎 Find owner contact</button>
+        <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>~$0.12 · charged only on a match · cached</span>
       </div>
     );
   }
 
-  const freeMatched = free && free.matched;
   return (
     <div style={box}>
-      {/* FREE lane */}
-      {freeState === "loading" && <div style={{ color: C.muted, fontSize: 12.5 }}>Searching the web…</div>}
-      {freeState === "nokey" && (
-        <div style={{ fontSize: 11.5, color: C.amber }}>
-          Free web search isn’t configured — set <span className="mono">BRAVE_API_KEY</span> in Vercel env. Skipping to skip trace below.
-        </div>
-      )}
-      {freeState === "done" && (
-        <>
-          <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.06em", marginBottom: 6 }}>
-            WEB-FOUND CONTACT — via {free.provider} · free
-          </div>
-          {freeMatched ? <ContactList phones={free.phones} emails={free.emails} /> : (
-            <div style={{ fontSize: 12.5, color: C.muted }}>No public contact found on the web for this owner (common for anonymous LLCs).</div>
-          )}
-          {free.website && <div style={{ fontSize: 12, marginTop: 3 }}><a href={free.website} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>🌐 {free.website}</a></div>}
-          {free.principals?.length > 0 && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 4 }}>Principals: {free.principals.join(", ")}</div>}
-          {free.summary && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>{free.summary}</div>}
-          {free.results?.length > 0 && (
-            <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {free.results.slice(0, 4).map((x, i) => (
-                <a key={i} href={x.url} target="_blank" rel="noreferrer" className="mono lift" style={{ ...ACTION_PILL, fontSize: 10 }} title={x.title}>source {i + 1} ↗</a>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-
-      {/* PAID fallback — offered once the free lane has run (or wasn't configured) */}
-      {(freeState === "done" || freeState === "nokey") && skipState === "idle" && (
-        <div style={{ marginTop: freeState === "done" ? 10 : 0, paddingTop: freeState === "done" ? 10 : 0, borderTop: freeState === "done" ? `1px solid ${C.line}` : "none" }}>
-          <button onClick={runSkip} className="mono lift" style={pill(freeMatched ? C.line : C.gold)}>
-            📞 {freeMatched ? "Go deeper — skip trace" : "Try skip trace"} (~$0.12)
-          </button>
-          <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>charged only on a match · cached</span>
-        </div>
-      )}
-
-      {/* PAID lane results */}
-      {skipState === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 10 }}>Tracing owner…</div>}
+      {skipState === "loading" && <div style={{ color: C.muted, fontSize: 12.5 }}>Tracing owner…</div>}
       {skipState === "nokey" && (
-        <div style={{ fontSize: 11.5, color: C.amber, marginTop: 10 }}>
-          Skip tracing isn’t configured — set <span className="mono">{skip?.keyEnv || "BATCHDATA_API_KEY"}</span> in Vercel env. Provider: {skip?.provider || "BatchData"}.
+        <div style={{ fontSize: 11.5, color: C.amber }}>
+          Skip tracing isn’t configured — set <span className="mono">{skip?.keyEnv || "TRACERFY_API_KEY"}</span> in Vercel env. Provider: {skip?.provider || "Tracerfy"}.
         </div>
       )}
       {skipState === "done" && (
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
+        <div>
           <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.06em", marginBottom: 6 }}>
             VERIFIED CONTACT — via {skip.provider}{skip.business ? " · business trace" : ""} · paid
           </div>
@@ -2068,6 +2016,7 @@ function ContactReveal({ r, pw }) {
       )}
 
       {err && <div style={{ color: C.red, fontSize: 12, marginTop: 8 }}>{err}</div>}
+      {skipState === "error" && <button onClick={runSkip} className="mono lift" style={{ ...ACTION_PILL, marginTop: 8 }}>↻ retry</button>}
       {spend?.hits ? (
         <div style={{ fontSize: 10, color: C.muted, marginTop: 8 }}>skip-trace spend: ${Number(spend.est || 0).toFixed(2)} over {spend.hits} reveal{spend.hits === 1 ? "" : "s"}</div>
       ) : null}

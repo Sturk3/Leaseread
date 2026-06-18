@@ -320,11 +320,13 @@ export default function App() {
                 ? "Scan a corridor for leases estimated to be coming available — off-market, before they list."
                 : view === "nda"
                 ? "Redline an NDA against your playbook — what to leave in, narrow, or strike."
+                : view === "skiptrace"
+                ? "Trace a name + address straight to graded phones & emails — charged only on a match."
                 : "Source owners & deals from NYC public records — ACRIS · DOB · PLUTO."}
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               {/* Lease Radar deactivated 2026-06-17 (not needed right now) — re-add ["radar", "LEASE RADAR"] to restore. Component + api/leasescan.js left intact. */}
-              {[["screener", "SCREENER"], ["sourcing", "SOURCING"], ["nda", "NDA REVIEW"]].map(([v, lab]) => (
+              {[["screener", "SCREENER"], ["sourcing", "SOURCING"], ["skiptrace", "SKIP TRACE"], ["nda", "NDA REVIEW"]].map(([v, lab]) => (
                 <button key={v} onClick={() => setView(v)} className="mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "6px 13px", borderRadius: 7, border: `1px solid ${view === v ? C.gold : C.line}`, background: view === v ? C.goldSoft : "transparent", color: view === v ? C.gold : C.muted }}>
                   {lab}
@@ -348,6 +350,8 @@ export default function App() {
         {view === "sourcing" && <Sourcing pw={pw} />}
 
         {view === "radar" && <LeaseRadar pw={pw} />}
+
+        {view === "skiptrace" && <ManualSkipTrace pw={pw} />}
 
         {view === "nda" && <NDAReview pw={pw} />}
 
@@ -1912,7 +1916,7 @@ function ContactList({ phones = [], emails = [] }) {
 // Owner-contact lookup — one click runs the skip trace (Tracerfy), charged only on a
 // match, owner-deduped + cached so you never pay twice. (The free web-search lane is
 // parked; /api/findcontact still exists if a BRAVE_API_KEY is ever added back.)
-function ContactReveal({ r, pw }) {
+function ContactReveal({ r, pw, autoRun }) {
   const cachedSkip = _skipCache.get(skipKey(r)) || null;
   const [skip, setSkip] = useState(cachedSkip);
   const [skipState, setSkipState] = useState(cachedSkip ? "done" : "idle"); // idle|loading|done|error|nokey
@@ -1935,6 +1939,9 @@ function ContactReveal({ r, pw }) {
       setSkipState("done");
     } catch (e) { setErr(e.message || "Skip trace failed."); setSkipState("error"); }
   };
+
+  // Manual skip-trace tool passes autoRun so the trace fires immediately (no second click).
+  useEffect(() => { if (autoRun && skipState === "idle") runSkip(); /* eslint-disable-next-line */ }, []);
 
   const box = { background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", marginTop: 10 };
   const pill = (color) => ({ ...ACTION_PILL, padding: "7px 13px", background: C.panel, border: `1px solid ${color}`, color });
@@ -2029,6 +2036,53 @@ function ContactReveal({ r, pw }) {
       {spend?.hits ? (
         <div style={{ fontSize: 10, color: C.muted, marginTop: 8 }}>skip-trace spend: ${Number(spend.est || 0).toFixed(2)} over {spend.hits} reveal{spend.hits === 1 ? "" : "s"}</div>
       ) : null}
+    </div>
+  );
+}
+
+// Manual skip-trace tool — type any name + address and trace it directly (e.g. an
+// officer name you found in a property's HPD records, far better than tracing a building).
+function ManualSkipTrace({ pw }) {
+  const [name, setName] = useState("");
+  const [street, setStreet] = useState("");
+  const [city, setCity] = useState("");
+  const [stateV, setStateV] = useState("NY");
+  const [zip, setZip] = useState("");
+  const [target, setTarget] = useState(null);
+
+  const ready = name.trim() && street.trim();
+  const run = () => {
+    if (!ready) return;
+    setTarget({
+      name: name.trim(), entity_type: "",
+      contact_address: street.trim(), city: city.trim(), state: stateV.trim() || "NY", zip: zip.trim(),
+      address: street.trim(), borough: "",
+      deal_id: `manual-${name.trim()}-${zip.trim()}-${Date.now()}`,
+    });
+  };
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div className="mono" style={{ fontSize: 11, color: C.muted, letterSpacing: "0.05em", marginBottom: 12 }}>MANUAL SKIP TRACE — name + address</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+          <label style={{ gridColumn: "span 2" }}><div className="mono" style={labelStyle}>NAME</div><input value={name} onChange={(e) => setName(e.target.value)} placeholder="First Last (or an LLC name)" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+          <label style={{ gridColumn: "span 2" }}><div className="mono" style={labelStyle}>STREET ADDRESS</div><input value={street} onChange={(e) => setStreet(e.target.value)} placeholder="123 Main St" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+          <label><div className="mono" style={labelStyle}>CITY</div><input value={city} onChange={(e) => setCity(e.target.value)} placeholder="New York" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+          <label><div className="mono" style={labelStyle}>STATE</div><input value={stateV} onChange={(e) => setStateV(e.target.value)} placeholder="NY" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+          <label><div className="mono" style={labelStyle}>ZIP</div><input value={zip} onChange={(e) => setZip(e.target.value)} placeholder="10012" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+        </div>
+        <button onClick={run} disabled={!ready}
+          style={{ marginTop: 14, width: "100%", cursor: ready ? "pointer" : "default", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: ready ? C.gold : C.panel2, color: ready ? "#ffffff" : C.muted }}>
+          Skip trace →
+        </button>
+      </div>
+
+      {target && <ContactReveal key={target.deal_id} r={target} pw={pw} autoRun />}
+
+      <div style={{ marginTop: 14, fontSize: 12, color: C.muted, lineHeight: 1.55 }}>
+        Trace any name + address directly. <strong style={{ color: C.ivory }}>~$0.10 per match</strong> (Tracerfy), charged only on a hit, cached so you never pay twice for the same name. Best use: trace a <strong style={{ color: C.gold }}>specific person</strong> — e.g. a head officer / owner name from a property’s HPD records — instead of the building (which returns occupants). <span style={{ color: C.green }}>✓ OWNER MATCH</span> means a returned name matched what you typed.
+      </div>
     </div>
   );
 }

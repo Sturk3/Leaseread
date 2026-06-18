@@ -21,16 +21,10 @@
     "api/research.js": {
       "maxDuration": 60
     },
-    "api/leasescan.js": {
-      "maxDuration": 60
-    },
     "api/nda.js": {
       "maxDuration": 60
     },
     "api/skiptrace.js": {
-      "maxDuration": 30
-    },
-    "api/findcontact.js": {
       "maxDuration": 30
     },
     "api/comps.js": {

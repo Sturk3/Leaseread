@@ -38,6 +38,9 @@
     },
     "api/portfolio.js": {
       "maxDuration": 30
+    },
+    "api/foottraffic.js": {
+      "maxDuration": 30
     }
   }
 }

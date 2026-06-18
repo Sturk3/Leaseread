@@ -2199,6 +2199,7 @@ function PropertyDetail({ r, pw }) {
   const [port, setPort] = useState(null);
   const [intel, setIntel] = useState(null);
   const [comps, setComps] = useState(null);
+  const [foot, setFoot] = useState(null);
   const canHist = !!(r.borough && r.block && r.lot);
 
   useEffect(() => {
@@ -2222,6 +2223,12 @@ function PropertyDetail({ r, pw }) {
         .then((res) => res.json())
         .then((d) => { if (live) setComps(d.error ? [] : (d.comps || [])); })
         .catch(() => { if (live) setComps([]); });
+    }
+    if (r.lat != null && r.lon != null) {
+      fetch("/api/foottraffic", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: pw, lat: r.lat, lon: r.lon }) })
+        .then((res) => res.json())
+        .then((d) => { if (live) setFoot(d.error ? {} : d); })
+        .catch(() => { if (live) setFoot({}); });
     }
     return () => { live = false; };
     // eslint-disable-next-line
@@ -2324,6 +2331,26 @@ function PropertyDetail({ r, pw }) {
           </div>
           {r.buildable_sqft > 0 && <div style={{ color: C.green, marginTop: 2 }}>▲ {Number(r.buildable_sqft).toLocaleString()} sf unused air rights (built {r.built_far} / max {r.max_far} FAR)</div>}
         </div>
+
+        {r.lat != null && r.lon != null && (
+          <>
+            <div className="mono" style={title}>FOOT TRAFFIC</div>
+            {foot == null ? <div style={muted}>Loading…</div> : (
+              <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>
+                {foot.ped && foot.ped.count != null ? (
+                  <div>
+                    <span style={{ color: C.ivory }}>Pedestrians:</span> <strong style={{ color: C.gold }}>{Number(foot.ped.count).toLocaleString()}</strong> <span style={{ color: C.muted }}>({foot.ped.period}, DOT count {foot.ped.on ? `on ${foot.ped.on}` : ""}{foot.ped.between ? ` btw ${foot.ped.between}` : ""} · {foot.ped.distance_mi} mi away)</span>
+                  </div>
+                ) : (
+                  <div style={{ color: C.muted }}>No DOT pedestrian-count site nearby (only ~114 citywide).</div>
+                )}
+                {foot.subway && foot.subway.station ? (
+                  <div><span style={{ color: C.ivory }}>Nearest subway:</span> {foot.subway.station} <span className="mono" style={{ color: C.gold, fontSize: 11 }}>{foot.subway.routes}</span> <span style={{ color: C.muted }}>· {foot.subway.distance_mi} mi</span></div>
+                ) : null}
+              </div>
+            )}
+          </>
+        )}
 
         {(r.zoning || r.overlay || r.special_district || r.landmark || r.hist_district) && (
           <>

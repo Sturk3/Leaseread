@@ -155,8 +155,13 @@ function personEmails(p) {
   }
   return out;
 }
-function extractPersons(json) {
+function nameTokens(s) {
+  return clean(s).toUpperCase().replace(/[^A-Z\s]/g, " ").split(/\s+/)
+    .filter((t) => t.length > 1 && !["LLC", "INC", "CORP", "THE", "AND", "CO", "LP"].includes(t));
+}
+function extractPersons(json, ownerName) {
   const arr = findPersonsArray(json, 0) || [];
+  const ownerToks = nameTokens(ownerName);
   const seen = new Set(), out = [];
   for (const p of arr) {
     const name = personName(p);
@@ -167,10 +172,17 @@ function extractPersons(json) {
     if (key && seen.has(key)) continue; // drop duplicate rows (brokers echo the same entity)
     if (key) seen.add(key);
     // A "person" whose name reads as a company is the data broker echoing the owner's
-    // corporate web (common for institutional owners like Thor/REITs), NOT a real
-    // individual — flag it so the UI doesn't present an LLC as a callable person.
-    out.push({ name, isEntity: isCompany(name, ""), phones, emails });
+    // corporate web (common for institutional owners like Thor/REITs), NOT a real person.
+    const isEntity = isCompany(name, "");
+    // Does this person's name overlap the OWNER's name? Only meaningful for an individual
+    // owner — tells the user WHICH returned person is actually the owner vs. an occupant.
+    const ptoks = nameTokens(name);
+    const overlap = ownerToks.filter((t) => ptoks.includes(t)).length;
+    const matchesOwner = !isEntity && ownerToks.length >= 2 && overlap >= 2;
+    out.push({ name, isEntity, matchesOwner, phones, emails });
   }
+  // Owner-name matches first, then individuals, then entities.
+  out.sort((a, b) => (b.matchesOwner ? 1 : 0) - (a.matchesOwner ? 1 : 0) || (a.isEntity ? 1 : 0) - (b.isEntity ? 1 : 0));
   return out.slice(0, 8);
 }
 
@@ -180,17 +192,22 @@ const PROVIDERS = {
     label: "Tracerfy",
     keyEnv: "TRACERFY_API_KEY",
     estCost: () => 0.1, // 5 credits/hit × ~$0.02; 0 on miss
-    async lookup(key, input) {
+    async lookup(key, input, business) {
       // Verified contract (tracerfy.com/skip-tracing-api-documentation):
-      //   POST {base}/trace/lookup/  ·  Authorization: Bearer <key>
-      //   required: address, city, state  (+ zip optional)
+      //   POST {base}/trace/lookup/  ·  Authorization: Bearer <key>  ·  address/city/state (+zip)
       //   resp: { hit, persons:[{ phones:[{number,type,dnc}], emails:[{email}] }] }
-      // ALWAYS find_owner=true: resolve the owner OF the property at this address. Robust
-      // for both LLC and individual owners — the name-based path (find_owner=false) was
-      // too strict and missed real owners. We anchor on the subject property address.
+      // We anchor on the OWNER's mailing address (set in the handler). Individual owner →
+      // match by NAME (find_owner=false) so we get THAT person, not whoever else is at the
+      // address; LLC → find_owner=true resolves the owner at that address.
       const base = process.env.TRACERFY_BASE || "https://tracerfy.com/v1/api";
-      const body = { address: input.street, city: input.city, state: input.state, find_owner: true };
+      const body = { address: input.street, city: input.city, state: input.state };
       if (input.zip) body.zip = input.zip;
+      if (business) {
+        body.find_owner = true;
+      } else {
+        const { first, last } = splitName(input.name);
+        body.first_name = first; body.last_name = last; body.find_owner = false;
+      }
       const r = await fetch(base + "/trace/lookup/", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
@@ -261,32 +278,32 @@ export default async function handler(req, res) {
 
     if (!name) return res.status(400).json({ error: "Need an owner name to trace." });
 
-    // Anchor the trace on the PROPERTY address. Tracerfy/BatchData resolve the OWNER of
-    // the property at the given address, so the subject address is the right anchor — the
-    // owner's mailing address points at a DIFFERENT property and frequently misses. Fall
-    // back to the mailing address only when no property address is present.
+    // Anchor on the OWNER's MAILING address — where the owner actually is — NOT the
+    // property address. Skip-tracing a building returns its OCCUPANTS/tenants (the
+    // "random numbers" problem), not who owns it. The mailing address (derived from the
+    // deed grantee) is the owner's home/office, so it resolves the real owner. Use it as
+    // a coherent unit (its own city/state/zip). Fall back to the property only when no
+    // mailing address is known (borough → postal city, state NY).
     const NYC_CITY = { manhattan: "New York", bronx: "Bronx", brooklyn: "Brooklyn", queens: "Queens", "staten island": "Staten Island" };
+    const mailStreet = clean(contact_address);
     const propStreet = clean(address);
-    const onProperty = !!propStreet;
-    const street = propStreet || clean(contact_address);
-    if (!street) return res.status(400).json({ error: "Need a property or mailing address to trace." });
+    const onMailing = !!mailStreet;
+    const street = mailStreet || propStreet;
+    if (!street) return res.status(400).json({ error: "Need a mailing or property address to trace." });
     const input = {
       name: clean(name),
       street,
-      // Borough → a postal city the providers accept (Manhattan's USPS city is "New York").
-      city: onProperty ? (NYC_CITY[clean(borough).toLowerCase()] || clean(borough) || clean(city)) : (clean(city) || clean(borough)),
-      // On the property anchor the state is NY (all boroughs) — NOT the owner's mailing
-      // state, which for an absentee owner is elsewhere (e.g. NJ) and breaks the match.
-      state: onProperty ? "NY" : (clean(state) || "NY"),
-      // The mailing ZIP belongs to a different address than the property — only send a ZIP
-      // when we're actually tracing the mailing address.
-      zip: onProperty ? "" : clean(zip),
+      city: onMailing ? (clean(city) || clean(borough)) : (NYC_CITY[clean(borough).toLowerCase()] || clean(borough) || clean(city)),
+      state: onMailing ? (clean(state) || "NY") : "NY",
+      // The mailing ZIP goes with the mailing street; for the property fallback we have no
+      // matching ZIP, so omit it.
+      zip: onMailing ? clean(zip) : "",
     };
 
     const business = isCompany(name, entity_type);
     const raw = await provider.lookup(key, input, business);
     const { phones, emails } = normalizeContacts(raw);
-    const persons = extractPersons(raw);
+    const persons = extractPersons(raw, clean(name));
 
     return res.status(200).json({
       provider: provider.label,

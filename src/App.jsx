@@ -1867,10 +1867,12 @@ function bumpSkipSpend(est) {
 // The single most-callable number across all the people on a trace (phones are already
 // graded + sorted), with an email fallback when no phone is on record.
 function bestContact(persons) {
-  let bestPhone = null, firstEmail = null, firstEmailName = "";
+  let bestPhone = null, bestScore = -1, firstEmail = null, firstEmailName = "";
   for (const p of persons || []) {
     for (const ph of p.phones || []) {
-      if (!bestPhone || (ph.grade?.score || 0) > (bestPhone.grade?.score || 0)) bestPhone = { ...ph, name: p.name };
+      // Strongly prefer a number on the owner-name-matched person over a building occupant.
+      const s = (ph.grade?.score || 0) + (p.matchesOwner ? 1000 : 0);
+      if (s > bestScore) { bestScore = s; bestPhone = { ...ph, name: p.name, matchesOwner: p.matchesOwner }; }
     }
     if (!firstEmail && p.emails && p.emails.length) { firstEmail = p.emails[0]; firstEmailName = p.name; }
   }
@@ -1990,6 +1992,7 @@ function ContactReveal({ r, pw }) {
                   <div key={i} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: i < skip.persons.length - 1 ? `1px solid ${C.line}` : "none" }}>
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: p.isEntity ? C.muted : C.ivory, marginBottom: 3 }}>
                       {p.name || "Unnamed contact"}
+                      {p.matchesOwner && <span className="mono" title="Name matches the owner of record — most likely the right party." style={{ fontSize: 9, color: C.green, marginLeft: 6, border: `1px solid ${C.green}`, borderRadius: 4, padding: "0 5px" }}>✓ OWNER MATCH</span>}
                       {p.isEntity && <span className="mono" title="A company name, not an individual — likely the owner's corporate web. Verify." style={{ fontSize: 9, color: C.amber, marginLeft: 6, border: `1px solid ${C.amber}`, borderRadius: 4, padding: "0 5px" }}>ENTITY ⚠</span>}
                     </div>
                     <ContactList phones={p.phones} emails={p.emails} />
@@ -2003,8 +2006,8 @@ function ContactReveal({ r, pw }) {
                   ⚠ Only entity records came back — no individual. This owner is likely institutional (a REIT / big operator like Thor) whose data resolves to its corporate web, not a person. Use the ✦ AI Quick Take or the company’s office line; skip tracing works best on smaller private owners.
                 </div>
               )}
-              <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>
-                Sorted callable-first. <span style={{ color: C.red }}>DNC</span> = on the Do-Not-Call registry — prefer email or an unflagged line.
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>
+                Traced on the owner’s mailing address. <span style={{ color: C.green }}>✓ OWNER MATCH</span> = name matches the owner of record (most likely right); others may be occupants — verify. <span style={{ color: C.red }}>DNC</span> = Do-Not-Call — prefer email there.
               </div>
             </>
           ) : (

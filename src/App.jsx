@@ -2117,6 +2117,7 @@ function latestDebt(hist) {
 // trace on that human (name + their business address), instead of the building.
 function OfficerRow({ o, pw }) {
   const [open, setOpen] = useState(false);
+  const [port, setPort] = useState(null); // null=unloaded, "loading", or { buildings }
   const target = {
     name: o.name, entity_type: o.isPerson ? "person" : "",
     contact_address: o.street, city: o.city, state: o.state || "NY", zip: o.zip,
@@ -2124,6 +2125,14 @@ function OfficerRow({ o, pw }) {
     deal_id: `officer-${o.name}-${o.zip || ""}`,
   };
   const canTrace = o.isPerson && o.street;
+  const loadPort = async () => {
+    if (port && port !== "err") { setPort(port === "loading" ? port : (port.shown ? null : { ...port, shown: true })); return; }
+    setPort("loading");
+    try {
+      const d = await postJSON("/api/portfolio", { password: pw, name: o.name });
+      setPort({ buildings: d.buildings || [], shown: true });
+    } catch { setPort("err"); }
+  };
   return (
     <div style={{ marginTop: 2 }}>
       <div style={{ color: C.muted }}>
@@ -2134,8 +2143,31 @@ function OfficerRow({ o, pw }) {
             {open ? "▾ close" : "🔎 trace"}
           </button>
         )}
+        {o.isPerson && (
+          <button onClick={loadPort} className="mono lift" style={{ ...ACTION_PILL, marginLeft: 6, fontSize: 10, padding: "1px 7px" }}>
+            ▸ buildings
+          </button>
+        )}
       </div>
       {open && <ContactReveal key={target.deal_id} r={target} pw={pw} autoRun />}
+      {port === "loading" && <div style={{ fontSize: 11, color: C.muted, marginLeft: 14 }}>Finding their other buildings…</div>}
+      {port && typeof port === "object" && port.shown && (
+        <div style={{ marginLeft: 14, marginTop: 3, fontSize: 11.5 }}>
+          {port.buildings.length === 0 ? (
+            <span style={{ color: C.muted }}>No other HPD-registered buildings under this person.</span>
+          ) : (
+            <>
+              <div className="mono" style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>{port.buildings.length} building{port.buildings.length === 1 ? "" : "s"} where {o.name} is on the HPD registration:</div>
+              {port.buildings.slice(0, 30).map((b, i) => (
+                <div key={i} style={{ color: C.ivory }}>
+                  <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${b.address}, ${b.borough} NY`)}`} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{b.address}</a>
+                  <span style={{ color: C.muted }}> · {b.borough}</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

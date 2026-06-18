@@ -1828,10 +1828,11 @@ function ResearchBrief({ r, pw }) {
       setBrief(d.brief || ""); setState("done");
     } catch (e) { setErr(e.message || "Research failed."); setState("error"); }
   };
+  const isCo = isCompanyRow(r);
   return (
-    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
+    <div style={{ background: C.panel2, border: `1px solid ${isCo ? C.gold : C.line}`, borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>✦ AI QUICK TAKE — what’s known about this owner</div>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>✦ AI QUICK TAKE — {isCo ? "who they are & how to reach them" : "what’s known about this owner"}{isCo && <span style={{ color: C.muted }}> · recommended</span>}</div>
         {state !== "loading" && (
           <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>
             {state === "done" || state === "error" ? "↻ re-run" : "▸ run"}
@@ -1841,7 +1842,9 @@ function ResearchBrief({ r, pw }) {
       {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Compiling… (a few seconds)</div>}
       {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
       {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={brief} /></div>}
-      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Instant AI take from the model’s knowledge — great for recognizable owners (REITs, named developers). For obscure single-asset LLCs it will say there’s no public info rather than guess. (Live web search is coming once the hosting plan allows longer runs.)</div>}
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>{isCo
+        ? "Recommended for this owner — it reads as a company/firm, where skip tracing just returns the entity’s corporate web, not a person. The AI take recognizes named firms (REITs, big developers) and tells you who they are and how to reach their acquisitions team. For owners it doesn’t recognize, it says so rather than guess."
+        : "Instant AI take from the model’s knowledge — best for recognizable owners (REITs, named developers). For obscure single-asset LLCs it will say there’s no public info rather than guess — use skip tracing there."}</div>}
     </div>
   );
 }

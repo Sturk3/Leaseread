@@ -1858,6 +1858,19 @@ function bumpSkipSpend(est) {
   return next;
 }
 
+// The single most-callable number across all the people on a trace (phones are already
+// graded + sorted), with an email fallback when no phone is on record.
+function bestContact(persons) {
+  let bestPhone = null, firstEmail = null, firstEmailName = "";
+  for (const p of persons || []) {
+    for (const ph of p.phones || []) {
+      if (!bestPhone || (ph.grade?.score || 0) > (bestPhone.grade?.score || 0)) bestPhone = { ...ph, name: p.name };
+    }
+    if (!firstEmail && p.emails && p.emails.length) { firstEmail = p.emails[0]; firstEmailName = p.name; }
+  }
+  return { bestPhone, firstEmail, firstEmailName };
+}
+
 // Render a list of phones + emails (shared by the free and paid lanes).
 function ContactList({ phones = [], emails = [] }) {
   if (!phones.length && !emails.length) return null;
@@ -1994,6 +2007,30 @@ function ContactReveal({ r, pw }) {
           </div>
           {skip.matched ? (
             <>
+              {(() => {
+                const { bestPhone, firstEmail, firstEmailName } = bestContact(skip.persons);
+                if (!bestPhone && !firstEmail) return null;
+                const tcol = bestPhone ? (bestPhone.grade?.tier === "BEST" ? C.green : bestPhone.grade?.tier === "GOOD" ? C.gold : C.muted) : C.gold;
+                return (
+                  <div style={{ marginBottom: 9, padding: "7px 10px", background: C.panel, border: `1px solid ${tcol}`, borderRadius: 7 }}>
+                    <span className="mono" style={{ fontSize: 9.5, color: C.muted, letterSpacing: "0.05em" }}>📞 BEST CONTACT </span>
+                    {bestPhone ? (
+                      <>
+                        <a href={`tel:${String(bestPhone.number).replace(/[^\d+]/g, "")}`} style={{ color: C.ivory, fontWeight: 700, textDecoration: "none", fontSize: 14 }}>{bestPhone.number}</a>
+                        <span className="mono" style={{ fontSize: 9, color: tcol, marginLeft: 6, border: `1px solid ${tcol}`, borderRadius: 4, padding: "0 5px" }}>{bestPhone.grade?.tier}</span>
+                        {bestPhone.type && <span className="mono" style={{ fontSize: 10, color: C.muted, marginLeft: 6 }}>{String(bestPhone.type).toUpperCase()}</span>}
+                        {bestPhone.name && <span style={{ color: C.muted, fontSize: 12.5 }}> · {bestPhone.name}</span>}
+                      </>
+                    ) : (
+                      <>
+                        <a href={`mailto:${firstEmail}`} style={{ color: C.gold, fontWeight: 700, textDecoration: "none", fontSize: 13.5 }}>{firstEmail}</a>
+                        {firstEmailName && <span style={{ color: C.muted, fontSize: 12.5 }}> · {firstEmailName}</span>}
+                        <span style={{ color: C.muted, fontSize: 11 }}> (no phone on record)</span>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
               {skip.persons && skip.persons.length ? (
                 skip.persons.map((p, i) => (
                   <div key={i} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: i < skip.persons.length - 1 ? `1px solid ${C.line}` : "none" }}>

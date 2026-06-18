@@ -107,19 +107,39 @@ function personName(p) {
   const last = clean(nm.last || nm.last_name || nm.lastName);
   return clean([first, last].filter(Boolean).join(" "));
 }
+// Grade how callable a number is, 0–100 → BEST / GOOD / LOW. A mobile you can dial
+// reaches the person directly; a landline is more likely an office/voicemail; DNC and
+// low provider rank/reachability drag it down. Gives the team a call-order at a glance.
+function phoneGrade(p, provScore) {
+  let s = 55;
+  if (/mobile|wireless|cell/.test(p.type)) s += 22;
+  else if (/land/.test(p.type)) s += 4;
+  if (p.rank != null && Number.isFinite(p.rank)) s += Math.max(0, 14 - (p.rank - 1) * 4); // rank 1 best
+  if (p.reachable) s += 12;
+  if (provScore != null) s = Math.round((s + provScore) / 2); // blend a provider's own score
+  if (p.dnc) s -= 38; // legally riskier to cold-call
+  s = Math.max(0, Math.min(100, Math.round(s)));
+  return { score: s, tier: s >= 72 ? "BEST" : s >= 50 ? "GOOD" : "LOW" };
+}
 function personPhones(p) {
   const arr = Array.isArray(p.phones) ? p.phones : Array.isArray(p.phoneNumbers) ? p.phoneNumbers : [];
   const seen = new Set(), out = [];
   for (const x of arr) {
-    const number = typeof x === "string" ? clean(x) : clean(x.number || x.phone || x.value);
+    const isObj = x && typeof x === "object";
+    const number = isObj ? clean(x.number || x.phone || x.value) : clean(x);
     const d = number.replace(/\D/g, "");
     if (d.length < 10 || seen.has(d)) continue;
     seen.add(d);
-    const type = typeof x === "object" ? clean(x.type || x.phoneType || x.lineType || x.line_type || "").toLowerCase() : "";
-    const dnc = typeof x === "object" ? !!(x.dnc || x.doNotCall || x.do_not_call) : false;
-    out.push({ number, type, dnc });
+    const type = isObj ? clean(x.type || x.phoneType || x.lineType || x.line_type || "").toLowerCase() : "";
+    const dnc = isObj ? !!(x.dnc || x.doNotCall || x.do_not_call) : false;
+    const rank = isObj && x.rank != null ? Number(x.rank) : null;
+    const reachable = isObj ? (x.reachable === true || x.connected === true || /reachable|connected/i.test(clean(x.reachability))) : false;
+    const provScore = isObj && x.score != null && Number.isFinite(Number(x.score)) ? Number(x.score) : null;
+    const ph = { number, type, dnc, rank, reachable };
+    ph.grade = phoneGrade(ph, provScore);
+    out.push(ph);
   }
-  out.sort((a, b) => (a.dnc ? 1 : 0) - (b.dnc ? 1 : 0)); // callable (non-DNC) first
+  out.sort((a, b) => b.grade.score - a.grade.score); // most callable first
   return out;
 }
 function personEmails(p) {

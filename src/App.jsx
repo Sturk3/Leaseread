@@ -1863,13 +1863,18 @@ function ContactList({ phones = [], emails = [] }) {
   if (!phones.length && !emails.length) return null;
   return (
     <>
-      {phones.map((p, i) => (
-        <div key={`p${i}`} style={{ fontSize: 13.5, marginBottom: 3 }}>
-          <a href={`tel:${String(p.number).replace(/[^\d+]/g, "")}`} style={{ color: C.ivory, textDecoration: "none", fontWeight: 600 }}>{p.number}</a>
-          {p.type && <span className="mono" style={{ fontSize: 10, color: C.muted, marginLeft: 6 }}>{String(p.type).toUpperCase()}</span>}
-          {p.dnc && <span className="mono" style={{ fontSize: 9.5, color: C.red, marginLeft: 6, border: `1px solid ${C.red}`, borderRadius: 4, padding: "0 5px" }}>DNC</span>}
-        </div>
-      ))}
+      {phones.map((p, i) => {
+        const tier = p.grade && p.grade.tier;
+        const tcol = tier === "BEST" ? C.green : tier === "GOOD" ? C.gold : C.muted;
+        return (
+          <div key={`p${i}`} style={{ fontSize: 13.5, marginBottom: 3 }}>
+            <a href={`tel:${String(p.number).replace(/[^\d+]/g, "")}`} style={{ color: C.ivory, textDecoration: "none", fontWeight: 600 }}>{p.number}</a>
+            {tier && <span className="mono" title={`callability ${p.grade.score}/100`} style={{ fontSize: 9, color: tcol, marginLeft: 6, border: `1px solid ${tcol}`, borderRadius: 4, padding: "0 5px" }}>{tier}</span>}
+            {p.type && <span className="mono" style={{ fontSize: 10, color: C.muted, marginLeft: 6 }}>{String(p.type).toUpperCase()}</span>}
+            {p.dnc && <span className="mono" style={{ fontSize: 9.5, color: C.red, marginLeft: 6, border: `1px solid ${C.red}`, borderRadius: 4, padding: "0 5px" }}>DNC</span>}
+          </div>
+        );
+      })}
       {emails.map((e, i) => (
         <div key={`e${i}`} style={{ fontSize: 13, marginBottom: 2 }}>
           <a href={`mailto:${e}`} style={{ color: C.gold, textDecoration: "none" }}>{e}</a>

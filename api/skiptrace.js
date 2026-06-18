@@ -88,6 +88,57 @@ function normalizeContacts(json) {
   return { phones: phones.slice(0, 8), emails: emails.slice(0, 5) };
 }
 
+// Group contacts BY PERSON. Tracerfy/BatchData return a `persons` array, each with a
+// name + their own phones/emails — so the UI can show WHO each number belongs to,
+// instead of one anonymous pile. Falls back to the flat list when no grouping exists.
+function findPersonsArray(json, depth) {
+  if (!json || typeof json !== "object" || depth > 6) return null;
+  if (Array.isArray(json.persons) && json.persons.length) return json.persons;
+  for (const v of Object.values(json)) {
+    if (v && typeof v === "object") { const f = findPersonsArray(v, (depth || 0) + 1); if (f) return f; }
+  }
+  return null;
+}
+function personName(p) {
+  const full = clean(p.full_name || p.fullName || p.name_full);
+  if (full) return full;
+  const nm = p.name && typeof p.name === "object" ? p.name : p;
+  const first = clean(nm.first || nm.first_name || nm.firstName);
+  const last = clean(nm.last || nm.last_name || nm.lastName);
+  return clean([first, last].filter(Boolean).join(" "));
+}
+function personPhones(p) {
+  const arr = Array.isArray(p.phones) ? p.phones : Array.isArray(p.phoneNumbers) ? p.phoneNumbers : [];
+  const seen = new Set(), out = [];
+  for (const x of arr) {
+    const number = typeof x === "string" ? clean(x) : clean(x.number || x.phone || x.value);
+    const d = number.replace(/\D/g, "");
+    if (d.length < 10 || seen.has(d)) continue;
+    seen.add(d);
+    const type = typeof x === "object" ? clean(x.type || x.phoneType || x.lineType || x.line_type || "").toLowerCase() : "";
+    const dnc = typeof x === "object" ? !!(x.dnc || x.doNotCall || x.do_not_call) : false;
+    out.push({ number, type, dnc });
+  }
+  out.sort((a, b) => (a.dnc ? 1 : 0) - (b.dnc ? 1 : 0)); // callable (non-DNC) first
+  return out;
+}
+function personEmails(p) {
+  const arr = Array.isArray(p.emails) ? p.emails : Array.isArray(p.email_addresses) ? p.email_addresses : [];
+  const seen = new Set(), out = [];
+  for (const x of arr) {
+    const email = (typeof x === "string" ? clean(x) : clean(x.email || x.address || x.value)).toLowerCase();
+    if (!/.+@.+\..+/.test(email) || seen.has(email)) continue;
+    seen.add(email); out.push(email);
+  }
+  return out;
+}
+function extractPersons(json) {
+  const arr = findPersonsArray(json, 0) || [];
+  return arr.map((p) => ({ name: personName(p), phones: personPhones(p), emails: personEmails(p) }))
+    .filter((p) => p.phones.length || p.emails.length)
+    .slice(0, 8);
+}
+
 // ── provider lanes ───────────────────────────────────────────────────────────
 const PROVIDERS = {
   tracerfy: {
@@ -200,10 +251,12 @@ export default async function handler(req, res) {
     const business = isCompany(name, entity_type);
     const raw = await provider.lookup(key, input, business);
     const { phones, emails } = normalizeContacts(raw);
+    const persons = extractPersons(raw);
 
     return res.status(200).json({
       provider: provider.label,
       business,
+      persons,
       phones,
       emails,
       matched: phones.length > 0 || emails.length > 0,

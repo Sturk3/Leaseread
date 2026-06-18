@@ -1913,7 +1913,7 @@ function ContactReveal({ r, pw }) {
         address: r.address, borough: r.borough,
       });
       if (d.noKey) { setSkip(d); setSkipState("nokey"); return; }
-      const result = { phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched };
+      const result = { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched };
       _skipCache.set(skipKey(r), result);
       setSkip(result);
       if (result.matched) setSpend(bumpSkipSpend(d.cost));
@@ -1987,7 +1987,23 @@ function ContactReveal({ r, pw }) {
           <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.06em", marginBottom: 6 }}>
             VERIFIED CONTACT — via {skip.provider}{skip.business ? " · business trace" : ""} · paid
           </div>
-          {skip.matched ? <ContactList phones={skip.phones} emails={skip.emails} /> : (
+          {skip.matched ? (
+            <>
+              {skip.persons && skip.persons.length ? (
+                skip.persons.map((p, i) => (
+                  <div key={i} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: i < skip.persons.length - 1 ? `1px solid ${C.line}` : "none" }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ivory, marginBottom: 3 }}>{p.name || "Unnamed contact"}</div>
+                    <ContactList phones={p.phones} emails={p.emails} />
+                  </div>
+                ))
+              ) : (
+                <ContactList phones={skip.phones} emails={skip.emails} />
+              )}
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>
+                Sorted callable-first. <span style={{ color: C.red }}>DNC</span> = on the Do-Not-Call registry — prefer email or an unflagged line.
+              </div>
+            </>
+          ) : (
             <div style={{ fontSize: 12.5, color: C.muted }}>No match found (no charge).</div>
           )}
           {skip.business && skip.matched && (

@@ -1928,7 +1928,7 @@ function ContactReveal({ r, pw }) {
         address: r.address, borough: r.borough,
       });
       if (d.noKey) { setSkip(d); setSkipState("nokey"); return; }
-      const result = { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched };
+      const result = { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched, tracedAddress: d.tracedAddress };
       _skipCache.set(skipKey(r), result);
       setSkip(result);
       if (result.matched) setSpend(bumpSkipSpend(d.cost));
@@ -2007,7 +2007,10 @@ function ContactReveal({ r, pw }) {
                 </div>
               )}
               <div style={{ fontSize: 10, color: C.muted, marginTop: 4, lineHeight: 1.5 }}>
-                Traced on the owner’s mailing address. <span style={{ color: C.green }}>✓ OWNER MATCH</span> = name matches the owner of record (most likely right); others may be occupants — verify. <span style={{ color: C.red }}>DNC</span> = Do-Not-Call — prefer email there.
+                {skip.tracedAddress === "property"
+                  ? <>Traced on the <span style={{ color: C.amber }}>property address</span> (no owner mailing on file) — results may be building occupants; verify. </>
+                  : <>Traced on the owner’s mailing address. </>}
+                <span style={{ color: C.green }}>✓ OWNER MATCH</span> = name matches the owner of record (most likely right). <span style={{ color: C.red }}>DNC</span> = Do-Not-Call — prefer email there.
               </div>
             </>
           ) : (

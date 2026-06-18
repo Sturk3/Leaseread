@@ -192,22 +192,16 @@ const PROVIDERS = {
     label: "Tracerfy",
     keyEnv: "TRACERFY_API_KEY",
     estCost: () => 0.1, // 5 credits/hit × ~$0.02; 0 on miss
-    async lookup(key, input, business) {
+    async lookup(key, input) {
       // Verified contract (tracerfy.com/skip-tracing-api-documentation):
       //   POST {base}/trace/lookup/  ·  Authorization: Bearer <key>  ·  address/city/state (+zip)
       //   resp: { hit, persons:[{ phones:[{number,type,dnc}], emails:[{email}] }] }
-      // We anchor on the OWNER's mailing address (set in the handler). Individual owner →
-      // match by NAME (find_owner=false) so we get THAT person, not whoever else is at the
-      // address; LLC → find_owner=true resolves the owner at that address.
+      // find_owner=true → resolve the owner at this address. (The name-based find_owner=false
+      // path was too strict and returned nothing.) The HANDLER controls which address we hit:
+      // the owner's mailing address first, falling back to the property.
       const base = process.env.TRACERFY_BASE || "https://tracerfy.com/v1/api";
-      const body = { address: input.street, city: input.city, state: input.state };
+      const body = { address: input.street, city: input.city, state: input.state, find_owner: true };
       if (input.zip) body.zip = input.zip;
-      if (business) {
-        body.find_owner = true;
-      } else {
-        const { first, last } = splitName(input.name);
-        body.first_name = first; body.last_name = last; body.find_owner = false;
-      }
       const r = await fetch(base + "/trace/lookup/", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
@@ -287,27 +281,38 @@ export default async function handler(req, res) {
     const NYC_CITY = { manhattan: "New York", bronx: "Bronx", brooklyn: "Brooklyn", queens: "Queens", "staten island": "Staten Island" };
     const mailStreet = clean(contact_address);
     const propStreet = clean(address);
-    const onMailing = !!mailStreet;
-    const street = mailStreet || propStreet;
-    if (!street) return res.status(400).json({ error: "Need a mailing or property address to trace." });
-    const input = {
-      name: clean(name),
-      street,
-      city: onMailing ? (clean(city) || clean(borough)) : (NYC_CITY[clean(borough).toLowerCase()] || clean(borough) || clean(city)),
-      state: onMailing ? (clean(state) || "NY") : "NY",
-      // The mailing ZIP goes with the mailing street; for the property fallback we have no
-      // matching ZIP, so omit it.
-      zip: onMailing ? clean(zip) : "",
-    };
+    if (!mailStreet && !propStreet) return res.status(400).json({ error: "Need a mailing or property address to trace." });
+    const ownerName = clean(name);
+
+    // Owner's MAILING address (their home/office — resolves the actual OWNER), as a coherent
+    // unit. The PROPERTY address is the fallback (may return building occupants).
+    const mailingInput = mailStreet ? {
+      name: ownerName, street: mailStreet, city: clean(city) || clean(borough), state: clean(state) || "NY", zip: clean(zip),
+    } : null;
+    const propertyInput = propStreet ? {
+      name: ownerName, street: propStreet, city: NYC_CITY[clean(borough).toLowerCase()] || clean(borough) || clean(city), state: "NY", zip: "",
+    } : null;
 
     const business = isCompany(name, entity_type);
-    const raw = await provider.lookup(key, input, business);
-    const { phones, emails } = normalizeContacts(raw);
-    const persons = extractPersons(raw, clean(name));
+    const attempt = async (inp) => {
+      const raw = await provider.lookup(key, inp);
+      return { persons: extractPersons(raw, ownerName), ...normalizeContacts(raw) };
+    };
+
+    // Try the mailing address (the owner) first; only if it finds NOTHING fall back to the
+    // property address. A Tracerfy miss is free, so the fallback costs at most one hit.
+    let tracedAddress = null, result = null;
+    if (mailingInput) { result = await attempt(mailingInput); tracedAddress = "owner mailing"; }
+    const empty = !result || (!result.phones.length && !result.emails.length);
+    if (empty && propertyInput && (!mailingInput || propStreet.toLowerCase() !== mailStreet.toLowerCase())) {
+      result = await attempt(propertyInput); tracedAddress = "property";
+    }
+    const { persons = [], phones = [], emails = [] } = result || {};
 
     return res.status(200).json({
       provider: provider.label,
       business,
+      tracedAddress,
       persons,
       phones,
       emails,

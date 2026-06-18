@@ -157,9 +157,21 @@ function personEmails(p) {
 }
 function extractPersons(json) {
   const arr = findPersonsArray(json, 0) || [];
-  return arr.map((p) => ({ name: personName(p), phones: personPhones(p), emails: personEmails(p) }))
-    .filter((p) => p.phones.length || p.emails.length)
-    .slice(0, 8);
+  const seen = new Set(), out = [];
+  for (const p of arr) {
+    const name = personName(p);
+    const phones = personPhones(p);
+    const emails = personEmails(p);
+    if (!phones.length && !emails.length) continue;
+    const key = name.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (key && seen.has(key)) continue; // drop duplicate rows (brokers echo the same entity)
+    if (key) seen.add(key);
+    // A "person" whose name reads as a company is the data broker echoing the owner's
+    // corporate web (common for institutional owners like Thor/REITs), NOT a real
+    // individual — flag it so the UI doesn't present an LLC as a callable person.
+    out.push({ name, isEntity: isCompany(name, ""), phones, emails });
+  }
+  return out.slice(0, 8);
 }
 
 // ── provider lanes ───────────────────────────────────────────────────────────

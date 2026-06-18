@@ -2034,12 +2034,20 @@ function ContactReveal({ r, pw }) {
               {skip.persons && skip.persons.length ? (
                 skip.persons.map((p, i) => (
                   <div key={i} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: i < skip.persons.length - 1 ? `1px solid ${C.line}` : "none" }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ivory, marginBottom: 3 }}>{p.name || "Unnamed contact"}</div>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: p.isEntity ? C.muted : C.ivory, marginBottom: 3 }}>
+                      {p.name || "Unnamed contact"}
+                      {p.isEntity && <span className="mono" title="A company name, not an individual — likely the owner's corporate web. Verify." style={{ fontSize: 9, color: C.amber, marginLeft: 6, border: `1px solid ${C.amber}`, borderRadius: 4, padding: "0 5px" }}>ENTITY ⚠</span>}
+                    </div>
                     <ContactList phones={p.phones} emails={p.emails} />
                   </div>
                 ))
               ) : (
                 <ContactList phones={skip.phones} emails={skip.emails} />
+              )}
+              {skip.persons && skip.persons.length > 0 && skip.persons.every((p) => p.isEntity) && (
+                <div style={{ fontSize: 11, color: C.amber, marginTop: 4, lineHeight: 1.5 }}>
+                  ⚠ Only entity records came back — no individual. This owner is likely institutional (a REIT / big operator like Thor) whose data resolves to its corporate web, not a person. Use the ✦ AI Quick Take or the company’s office line; skip tracing works best on smaller private owners.
+                </div>
               )}
               <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>
                 Sorted callable-first. <span style={{ color: C.red }}>DNC</span> = on the Do-Not-Call registry — prefer email or an unflagged line.

@@ -41,15 +41,25 @@ const dedupePhones = (a) => {
   return out;
 };
 
-async function braveSearch(key, query) {
-  const base = process.env.BRAVE_BASE || "https://api.search.brave.com/res/v1/web/search";
-  const url = `${base}?q=${encodeURIComponent(query)}&count=10`;
-  const r = await fetch(url, { headers: { Accept: "application/json", "X-Subscription-Token": key } });
-  if (!r.ok) throw new Error(`Brave ${r.status}: ${(await r.text()).slice(0, 160)}`);
+// Serper.dev = Google results API. Returns organic results PLUS a knowledge panel /
+// local pack that often carries a business's website + phone directly (structured),
+// which is exactly what we want for institutional owners.
+async function serperSearch(key, query) {
+  const base = process.env.SERPER_BASE || "https://google.serper.dev/search";
+  const r = await fetch(base, {
+    method: "POST",
+    headers: { "X-API-KEY": key, "Content-Type": "application/json" },
+    body: JSON.stringify({ q: query, num: 10 }),
+  });
+  if (!r.ok) throw new Error(`Serper ${r.status}: ${(await r.text()).slice(0, 160)}`);
   const j = await r.json().catch(() => ({}));
-  return (j.web && j.web.results ? j.web.results : []).map((x) => ({
-    title: clean(x.title), url: clean(x.url), description: clean(x.description),
-  }));
+  const results = (j.organic || []).map((x) => ({ title: clean(x.title), url: clean(x.link), description: clean(x.snippet) }));
+  // Structured business contact from the knowledge panel / local pack.
+  const kg = j.knowledgeGraph || {};
+  const place = (j.places && j.places[0]) || {};
+  const website = clean(kg.website || place.website || "");
+  const kgPhone = clean((kg.attributes && (kg.attributes.Phone || kg.attributes.phone)) || kg.phoneNumber || place.phoneNumber || "");
+  return { results, website, phones: kgPhone ? [kgPhone] : [] };
 }
 
 // Optional Claude pass — extract ONLY contacts that literally appear in the snippets.
@@ -91,11 +101,11 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
 
-    const braveKey = process.env.BRAVE_API_KEY;
+    const serperKey = process.env.SERPER_API_KEY;
     if (req.body && req.body.debug) {
-      return res.status(200).json({ ok: true, braveConfigured: !!braveKey, synthConfigured: !!process.env.ANTHROPIC_API_KEY, build: "findcontact-v1" });
+      return res.status(200).json({ ok: true, serperConfigured: !!serperKey, synthConfigured: !!process.env.ANTHROPIC_API_KEY, build: "findcontact-v2-serper" });
     }
-    if (!braveKey) return res.status(200).json({ noKey: true, keyEnv: "BRAVE_API_KEY", provider: "Brave Search" });
+    if (!serperKey) return res.status(200).json({ noKey: true, keyEnv: "SERPER_API_KEY", provider: "Serper" });
     if (!name) return res.status(400).json({ error: "Need an owner name to look up." });
 
     const owner = clean(name);
@@ -107,27 +117,28 @@ export default async function handler(req, res) {
       ? `"${owner}" ${place} ${region} (contact OR phone OR email OR leasing OR office)`
       : `"${owner}" ${place} ${region} phone`;
 
-    const results = await braveSearch(braveKey, query);
+    const search = await serperSearch(serperKey, query);
+    const results = search.results;
 
-    // Regex sweep over the snippets as a floor (works even with no Anthropic key).
+    // Structured knowledge-panel phone/website first, then a regex sweep over the snippets.
     const swept = extractFromText(results.map((x) => `${x.title} ${x.description}`).join(" \n "));
-    let phones = dedupePhones(swept.phones);
+    let phones = dedupePhones([...search.phones, ...swept.phones]);
     let emails = uniq(swept.emails);
-    let website = "", principals = [], summary = "";
+    let website = search.website, principals = [], summary = "";
 
     if (process.env.ANTHROPIC_API_KEY && results.length) {
       const s = await synthesize(process.env.ANTHROPIC_API_KEY, owner, results).catch(() => null);
       if (s) {
-        phones = dedupePhones([...(s.phones || []), ...phones]);
-        emails = uniq([...(s.emails || []), ...emails]);
-        website = clean(s.website);
+        phones = dedupePhones([...phones, ...(s.phones || [])]);
+        emails = uniq([...emails, ...(s.emails || [])]);
+        if (!website) website = clean(s.website); // prefer the structured KG website
         principals = (s.principals || []).map(clean).filter(Boolean).slice(0, 6);
         summary = clean(s.summary);
       }
     }
 
     return res.status(200).json({
-      provider: process.env.ANTHROPIC_API_KEY ? "Brave + Claude" : "Brave Search",
+      provider: process.env.ANTHROPIC_API_KEY ? "Serper + Claude" : "Serper",
       source: "web",
       phones: phones.slice(0, 6).map((number) => ({ number, type: "", dnc: false })),
       emails: emails.slice(0, 5),

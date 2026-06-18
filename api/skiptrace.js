@@ -94,22 +94,17 @@ const PROVIDERS = {
     label: "Tracerfy",
     keyEnv: "TRACERFY_API_KEY",
     estCost: () => 0.1, // 5 credits/hit × ~$0.02; 0 on miss
-    async lookup(key, input, business) {
+    async lookup(key, input) {
       // Verified contract (tracerfy.com/skip-tracing-api-documentation):
       //   POST {base}/trace/lookup/  ·  Authorization: Bearer <key>
-      //   required: address, city, state  (+ zip recommended)
-      //   find_owner=true → resolve the owner at that address (use for LLCs);
-      //   for a known person pass first_name/last_name + find_owner=false.
+      //   required: address, city, state  (+ zip optional)
       //   resp: { hit, persons:[{ phones:[{number,type,dnc}], emails:[{email}] }] }
-      // We pass the owner's MAILING address, so the owner resolves there.
+      // ALWAYS find_owner=true: resolve the owner OF the property at this address. Robust
+      // for both LLC and individual owners — the name-based path (find_owner=false) was
+      // too strict and missed real owners. We anchor on the subject property address.
       const base = process.env.TRACERFY_BASE || "https://tracerfy.com/v1/api";
-      const body = { address: input.street, city: input.city, state: input.state, zip: input.zip };
-      if (business) {
-        body.find_owner = true;
-      } else {
-        const { first, last } = splitName(input.name);
-        body.first_name = first; body.last_name = last; body.find_owner = false;
-      }
+      const body = { address: input.street, city: input.city, state: input.state, find_owner: true };
+      if (input.zip) body.zip = input.zip;
       const r = await fetch(base + "/trace/lookup/", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
@@ -180,17 +175,25 @@ export default async function handler(req, res) {
 
     if (!name) return res.status(400).json({ error: "Need an owner name to trace." });
 
-    // Prefer the owner's MAILING address (what providers match on); fall back to the
-    // property address. City defaults to the borough when mailing city is blank.
-    const street = clean(contact_address) || clean(address);
+    // Anchor the trace on the PROPERTY address. Tracerfy/BatchData resolve the OWNER of
+    // the property at the given address, so the subject address is the right anchor — the
+    // owner's mailing address points at a DIFFERENT property and frequently misses. Fall
+    // back to the mailing address only when no property address is present.
+    const NYC_CITY = { manhattan: "New York", bronx: "Bronx", brooklyn: "Brooklyn", queens: "Queens", "staten island": "Staten Island" };
+    const propStreet = clean(address);
+    const onProperty = !!propStreet;
+    const street = propStreet || clean(contact_address);
+    if (!street) return res.status(400).json({ error: "Need a property or mailing address to trace." });
     const input = {
       name: clean(name),
       street,
-      city: clean(city) || clean(borough),
+      // Borough → a postal city the providers accept (Manhattan's USPS city is "New York").
+      city: onProperty ? (NYC_CITY[clean(borough).toLowerCase()] || clean(borough) || clean(city)) : (clean(city) || clean(borough)),
       state: clean(state) || "NY",
-      zip: clean(zip),
+      // The mailing ZIP belongs to a different address than the property — only send a ZIP
+      // when we're actually tracing the mailing address.
+      zip: onProperty ? "" : clean(zip),
     };
-    if (!input.street) return res.status(400).json({ error: "Need a mailing or property address to trace." });
 
     const business = isCompany(name, entity_type);
     const raw = await provider.lookup(key, input, business);

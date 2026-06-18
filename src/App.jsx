@@ -2113,6 +2113,27 @@ function latestDebt(hist) {
   return { amount: latest.amount, date: latest.date, lender, satisfied, count: m.length, year, yearsAgo, maturity };
 }
 
+// Synthesize the distress / motivation signals the dossier already pulls into one read.
+// (The specific lis-pendens / 421-a-expiry sources aren't cleanly in NYC open data — this
+// uses what IS: tax lien, ECB penalties owed, open violations, evictions, 311, vacancy.)
+function distressRead(intel, r) {
+  if (!intel) return null;
+  const reasons = [];
+  let score = 0;
+  if (r && r.tax_lien) { score += 3; reasons.push("tax lien"); }
+  const ecb = Number(intel.ecb_balance_due) || 0;
+  if (ecb >= 25000) { score += 3; reasons.push(`$${ecb.toLocaleString()} ECB penalties owed`); }
+  else if (ecb > 0) { score += 1; reasons.push(`$${ecb.toLocaleString()} ECB owed`); }
+  const viol = (Number(intel.dob_violations) || 0) + (Number(intel.ecb_violations) || 0) + (Number(intel.hpd_violations) || 0);
+  if (viol >= 20) { score += 2; reasons.push(`${viol} open violations`); }
+  else if (viol >= 5) { score += 1; reasons.push(`${viol} open violations`); }
+  if (intel.evictions && intel.evictions.commercial) { score += 2; reasons.push("commercial eviction on record"); }
+  const c311 = Number(intel.complaints_311) || 0;
+  if (c311 >= 30) { score += 1; reasons.push(`${c311} 311 complaints (2yr)`); }
+  if (intel.storefront && intel.storefront.any_vacant) { score += 1; reasons.push("storefront reported vacant"); }
+  return { level: score >= 5 ? "High" : score >= 2 ? "Medium" : "Low", score, reasons };
+}
+
 // One HPD officer/owner with a one-click "trace this person" button → runs the skip
 // trace on that human (name + their business address), instead of the building.
 function OfficerRow({ o, pw }) {
@@ -2357,6 +2378,17 @@ function PropertyDetail({ r, pw }) {
         )}
 
         <div className="mono" style={title}>PUBLIC RECORDS</div>
+        {intel && (() => {
+          const d = distressRead(intel, r);
+          if (!d) return null;
+          const col = d.level === "High" ? C.red : d.level === "Medium" ? C.amber : C.muted;
+          return (
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              <span className="mono" style={{ fontSize: 9.5, color: col, border: `1px solid ${col}`, borderRadius: 4, padding: "1px 6px" }}>DISTRESS · {d.level.toUpperCase()}</span>
+              {d.reasons.length > 0 && <span style={{ color: C.muted, marginLeft: 8 }}>{d.reasons.join(" · ")}</span>}
+            </div>
+          );
+        })()}
         {intel == null ? <div style={muted}>Loading…</div> : (
           <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>
             {intel.ny_corp ? (

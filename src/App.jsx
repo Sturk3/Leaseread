@@ -816,6 +816,9 @@ function lookupLinks(r) {
   if (isCompanyRow(r)) {
     const co = r.name || "";
     return [
+      // Company website — Google surfaces the firm's official site (+ knowledge panel with
+      // phone/address) as the top result. Keyless; the real fetched URL needs a search key.
+      { label: "🌐 Website", href: `https://www.google.com/search?q=${enc(`"${co}" official website`)}` },
       // OpenCorporates → the LLC's actual officers/principals (a real human to skip-trace).
       { label: "🏢 NY officers (OpenCorporates)", href: `https://opencorporates.com/companies?q=${enc(co)}&jurisdiction_code=us_ny` },
       ...(tpsAddr ? [tpsAddr] : []),

@@ -2056,7 +2056,6 @@ function PropertyDetail({ r, pw }) {
   const [port, setPort] = useState(null);
   const [intel, setIntel] = useState(null);
   const [comps, setComps] = useState(null);
-  const [note, setNote] = useState(() => loadNotes()[r.deal_id] || "");
   const canHist = !!(r.borough && r.block && r.lot);
 
   useEffect(() => {
@@ -2090,12 +2089,6 @@ function PropertyDetail({ r, pw }) {
   return (
     <div style={{ paddingTop: 8 }}>
       <ResearchBrief r={r} pw={pw} />
-      <div style={{ marginBottom: 14 }}>
-        <div className="mono" style={{ fontSize: 10.5, color: C.muted, letterSpacing: "0.06em", marginBottom: 6 }}>NOTES</div>
-        <textarea value={note} onChange={(e) => { setNote(e.target.value); saveNote(r.deal_id, e.target.value); }}
-          placeholder="Your notes on this property — saved automatically (this browser only)."
-          style={{ width: "100%", minHeight: 56, background: C.panel, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, fontFamily: "Archivo, sans-serif", resize: "vertical", boxSizing: "border-box" }} />
-      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 22 }}>
       <div>
         <PropertyPhoto r={r} />

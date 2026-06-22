@@ -129,7 +129,7 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: RESEARCH_MODEL,
-          max_tokens: freeQuery ? 2200 : 1500,
+          max_tokens: freeQuery ? 3200 : 2600,
           system: systemPrompt,
           ...(useWeb ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_SEARCHES }] } : {}),
           messages,

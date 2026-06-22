@@ -1942,7 +1942,6 @@ function GreenwichSourcing({ pw }) {
 
 function Sourcing({ pw }) {
   const [market, setMarket] = useState("nyc");
-  const [sources, setSources] = useState({ acris: true, dob: true, pluto: true });
   const [borough, setBorough] = useState("");
   const [assetType, setAssetType] = useState("any");
   const [street, setStreet] = useState("");
@@ -1969,11 +1968,11 @@ function Sourcing({ pw }) {
 
   async function run() {
     setError(""); setLeads(null); setCenter(null);
-    const picked = Object.keys(sources).filter((s) => sources[s]);
-    if (!picked.length) { setError("Pick at least one source (ACRIS, DOB, or PLUTO)."); return; }
     setLoading(true);
     try {
-      const data = await postJSON("/api/source", { password: pw, sources: picked, borough, assetType, street, nearAddress, radiusMiles, limit, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) });
+      // Always query every NYC source. (For radius/address searches the backend uses PLUTO
+      // automatically — only it has coordinates — and folds in ACRIS/DOB elsewhere.)
+      const data = await postJSON("/api/source", { password: pw, sources: ["acris", "dob", "pluto"], borough, assetType, street, nearAddress, radiusMiles, limit, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) });
       setLeads(data.leads || []);
       setCenter(data.center || null);
     } catch (e) { setError(e.message || "Sourcing failed."); }
@@ -2006,15 +2005,7 @@ function Sourcing({ pw }) {
       {market === "nyc" && (<>
           {/* Filters */}
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
-            <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SOURCES</div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-              {[["acris", "ACRIS (deeds + parties)"], ["dob", "DOB (filings + owners)"], ["pluto", "PLUTO (properties by type)"]].map(([s, lab]) => (
-                <button key={s} onClick={() => setSources((p) => ({ ...p, [s]: !p[s] }))} className="mono"
-                  style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${sources[s] ? C.gold : C.line}`, background: sources[s] ? C.goldSoft : "transparent", color: sources[s] ? C.gold : C.muted }}>
-                  {sources[s] ? "✓ " : ""}{lab}
-                </button>
-              ))}
-            </div>
+            <div className="mono" style={{ ...labelStyle, marginBottom: 12 }}>NEW YORK CITY — ALL PUBLIC RECORDS</div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
               <label>

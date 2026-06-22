@@ -777,6 +777,17 @@ function pickLeadFields(r) {
 const SPEND_KEY = "fr_skiptrace_spend_v1";
 function addSpend(amount) { try { const cur = Number(localStorage.getItem(SPEND_KEY)) || 0; localStorage.setItem(SPEND_KEY, String(cur + amount)); } catch { /* quota */ } }
 
+// Scout web-research spend tracking + monthly cap (client-side guardrail; cost is an
+// estimate, ~$0.15 per live web run). Resets automatically each calendar month.
+const SCOUT_SPEND_KEY = "fr_scout_spend_v1", SCOUT_CAP_KEY = "fr_scout_cap_v1", SCOUT_MODE_KEY = "fr_scout_mode_v1";
+const WEB_RUN_COST = 0.15;
+const MAX_AGENT_STEPS = 6; // cap tool steps per request (was 10) to bound cost/runaway
+const curMonth = () => new Date().toISOString().slice(0, 7);
+function scoutSpend() { try { const o = JSON.parse(localStorage.getItem(SCOUT_SPEND_KEY) || "{}"); return o.month === curMonth() ? (Number(o.spent) || 0) : 0; } catch { return 0; } }
+function addScoutSpend(amt) { try { localStorage.setItem(SCOUT_SPEND_KEY, JSON.stringify({ month: curMonth(), spent: scoutSpend() + amt })); } catch { /* quota */ } }
+function scoutCap() { try { const v = Number(localStorage.getItem(SCOUT_CAP_KEY)); return Number.isFinite(v) && v > 0 ? v : 25; } catch { return 25; } }
+function setScoutCapLS(n) { try { localStorage.setItem(SCOUT_CAP_KEY, String(n)); } catch { /* quota */ } }
+
 // Trim/summarize an endpoint's response into { forModel, uiSummary }.
 function shapeResult(name, data) {
   if (name === "search_properties") {
@@ -810,6 +821,10 @@ function AgentChat({ pw, config }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [attachedPdf, setAttachedPdf] = useState(null); // { name, data } — an offering memo to grade
+  const [mode, setModeState] = useState(() => { try { return localStorage.getItem(SCOUT_MODE_KEY) || "deep"; } catch { return "deep"; } });
+  const [spend, setSpend] = useState(scoutSpend());
+  const [cap, setCapState] = useState(scoutCap());
+  const setMode = (m) => { setModeState(m); try { localStorage.setItem(SCOUT_MODE_KEY, m); } catch { /* quota */ } };
   const idRef = useRef(0);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
@@ -842,6 +857,15 @@ function AgentChat({ pw, config }) {
       const data = await postJSON("/api/screen", body);
       return { forModel: data, uiSummary: attachedPdf ? `graded ${attachedPdf.name}` : "graded OM" };
     }
+    // Web research/search: honor Quick (knowledge, free-ish) vs Deep (live web, paid) and
+    // the monthly spend cap. Over cap, deep auto-downgrades to knowledge so nothing breaks.
+    if (name === "web_research" || name === "web_search") {
+      const overCap = scoutSpend() >= cap;
+      const deep = mode === "deep" && !overCap;
+      const data = await postJSON(TOOL_ROUTES[name].url, { password: pw, ...TOOL_ROUTES[name].body(inputArgs), mode: deep ? "web" : "knowledge" });
+      if (deep) { addScoutSpend(WEB_RUN_COST); setSpend(scoutSpend()); }
+      return { forModel: data, uiSummary: deep ? "web research" : (overCap ? "quick take (cap reached)" : "quick take") };
+    }
     const route = TOOL_ROUTES[name];
     if (!route || !route.url) return { forModel: { error: `Unknown tool ${name}` }, uiSummary: "unknown tool" };
     if (route.paid) {
@@ -854,7 +878,7 @@ function AgentChat({ pw, config }) {
 
   // One request = run the agent loop to completion (or the safety step cap).
   const runLoop = async (messages) => {
-    for (let turn = 0; turn < 10; turn++) {
+    for (let turn = 0; turn < MAX_AGENT_STEPS; turn++) {
       const data = await postJSON("/api/agent", { password: pw, messages });
       const content = data.content || [];
       const toolUses = [];
@@ -952,7 +976,22 @@ function AgentChat({ pw, config }) {
           <span onClick={() => setAttachedPdf(null)} style={{ cursor: "pointer", color: C.muted, marginLeft: 4 }}>✕</span>
         </div>
       )}
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+      {/* Cost controls: Quick (free-ish) vs Deep (paid web) + monthly web-spend cap */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap", fontSize: 11.5 }}>
+        <div style={{ display: "flex", gap: 3, border: `1px solid ${C.line}`, borderRadius: 8, padding: 2 }}>
+          {[["quick", "⚡ Quick", "Knowledge only — no paid web search"], ["deep", "🔎 Deep web", "Live web research (~$0.15/run)"]].map(([m, lab, tip]) => (
+            <button key={m} onClick={() => setMode(m)} title={tip} className="mono"
+              style={{ cursor: "pointer", fontSize: 10.5, padding: "5px 11px", borderRadius: 6, border: "none", background: mode === m ? C.goldSoft : "transparent", color: mode === m ? C.gold : C.muted, letterSpacing: "0.04em" }}>{lab}</button>
+          ))}
+        </div>
+        <span style={{ color: spend >= cap ? C.red : C.muted }}>
+          Web spend / mo: <strong style={{ color: spend >= cap ? C.red : C.ivory }}>${spend.toFixed(2)}</strong> / $
+          <input type="number" value={cap} onChange={(e) => { const n = Number(e.target.value) || 0; setCapState(n); setScoutCapLS(n); }}
+            style={{ width: 46, fontSize: 11.5, padding: "2px 4px", border: `1px solid ${C.line}`, borderRadius: 5, background: C.panel, color: C.ivory, fontFamily: "'IBM Plex Mono',monospace" }} />
+        </span>
+        {spend >= cap && <span style={{ color: C.red }}>cap reached — deep web paused, using Quick</span>}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         <input ref={fileRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => { onAttach(e.target.files[0]); e.target.value = ""; }} />
         <button onClick={() => fileRef.current && fileRef.current.click()} disabled={busy} title="Attach an offering memorandum PDF to grade"
           className="mono lift" style={{ cursor: busy ? "default" : "pointer", fontSize: 14, padding: "0 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory }}>📎</button>

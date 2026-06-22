@@ -780,7 +780,7 @@ function addSpend(amount) { try { const cur = Number(localStorage.getItem(SPEND_
 // Trim/summarize an endpoint's response into { forModel, uiSummary }.
 function shapeResult(name, data) {
   if (name === "search_properties") {
-    const leads = (data.leads || []).slice(0, 25).map(pickLeadFields);
+    const leads = (data.leads || []).slice(0, 15).map(pickLeadFields);
     const n = leads.length;
     return { forModel: { count: data.counts?.deals ?? n, center: data.center, leads }, uiSummary: `${n} propert${n === 1 ? "y" : "ies"}` };
   }

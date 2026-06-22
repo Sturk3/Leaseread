@@ -12,7 +12,7 @@ const RESEARCH_MODEL = process.env.RESEARCH_MODEL || "claude-sonnet-4-6";
 // Pro (300s) can go deeper for a richer brief — default 5, override RESEARCH_MAX_SEARCHES.
 // Only used in WEB mode (knowledge mode runs no searches), so this is inert until the
 // frontend is flipped to mode:"web" (which only makes sense on Pro's higher timeout).
-const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 5;
+const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 3;
 
 function buildSystem() {
   return `You are an off-market real estate acquisitions research analyst for a firm that buys trophy / high-street RETAIL property (primarily NYC, expanding nationwide). You are given a PROPERTY (an address, and often — but not always — its owner of record). Use the web_search tool to find WHO owns it, their PORTFOLIO, and HOW TO REACH them, then write a tight intelligence brief.

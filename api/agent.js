@@ -210,8 +210,11 @@ HOW TO REASON ABOUT MOTIVATION (the firm's wedge = finding off-market motivated 
 DEAL SCREENING (offering memos)
 - If the user attaches an offering memorandum PDF (or pastes one) and wants it underwritten/graded, call grade_offering_memo. It scores the deal against the firm's saved buy-box and returns extracted financials, the tenant roster, per-criterion scores, and a Pursue/Watch/Pass recommendation. Lead with the recommendation and the few drivers that moved it; flag any missing/low-confidence figures rather than glossing them.
 
-CONTACTS — COST DISCIPLINE
-- reveal_contact is a PAID skip trace (~$0.10 per match). Call it ONLY when the user explicitly asks to get an owner's phone/contact for a specific property, and one at a time — never speculatively or across a whole list. When you do, say plainly it's a paid lookup. For institutional owners prefer web_research (free) first.
+COST DISCIPLINE (important — the team is cost-conscious)
+- The FREE structured tools (search_properties, property_intel, transaction_history, portfolios, foot_traffic, sales_comps, search_ct_properties) cost nothing — use them freely and ALWAYS try them first.
+- web_research / web_search hit the live web and cost real money (~$0.10–0.20 each). Use them PURPOSEFULLY: ONE focused call when the structured data genuinely can't answer (owner-behind-an-LLC, contacts, news, non-NYC markets) — not several, and never re-run one you've already done in this conversation. Batch the question into a single good search rather than many small ones.
+- reveal_contact is a PAID skip trace (~$0.10 per match). Call it ONLY when the user explicitly asks for an owner's phone/contact for a specific property, one at a time — never speculatively. Say plainly it's a paid lookup. For institutional owners prefer web_research first.
+- Don't pad: answer in as few tool calls as the task honestly needs.
 
 STYLE
 - Lead with the answer. Use tight markdown: short bold headers, bullets, and a property's address in **bold**. When you list candidates, order them by how worth-pursuing they are and give a one-line "why" each.
@@ -231,7 +234,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v5-ct" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v6-cache" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {
@@ -239,6 +242,20 @@ export default async function handler(req, res) {
     }
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
+    }
+
+    // PROMPT CACHING — the big cost lever for a multi-turn agent loop. The (large, static)
+    // system prompt + tool definitions are re-sent every turn; caching them means each turn
+    // pays ~10% on those instead of full price. We also cache the growing message prefix so
+    // accumulated tool results aren't re-billed at full rate on later turns.
+    const cachedTools = TOOLS.map((t, i) => (i === TOOLS.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t));
+    const cachedMessages = messages.slice();
+    const lastM = cachedMessages[cachedMessages.length - 1];
+    if (lastM && Array.isArray(lastM.content) && lastM.content.length) {
+      cachedMessages[cachedMessages.length - 1] = {
+        ...lastM,
+        content: lastM.content.map((b, i) => (i === lastM.content.length - 1 && b && typeof b === "object" ? { ...b, cache_control: { type: "ephemeral" } } : b)),
+      };
     }
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -251,9 +268,9 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: AGENT_MODEL,
         max_tokens: MAX_TOKENS,
-        system: buildSystem(),
-        tools: TOOLS,
-        messages,
+        system: [{ type: "text", text: buildSystem(), cache_control: { type: "ephemeral" } }],
+        tools: cachedTools,
+        messages: cachedMessages,
       }),
     });
     const raw = await r.text();

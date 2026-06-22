@@ -99,17 +99,18 @@ const TOOLS = [
   {
     name: "web_research",
     description:
-      "AI quick take on an owner: who's behind the entity, portfolio, motivation signals, and how to reach the decision-maker. " +
-      "BEST for INSTITUTIONAL / named owners (REITs, developers, management companies) where there's public info. For anonymous " +
-      "single-asset LLCs it will honestly report little is public — prefer hidden_portfolio + reveal_contact for those.",
+      "Deep web research on a PROPERTY and/or its OWNER. Give it an address (and the owner name if you have it) and it works the " +
+      "chain on the live web: identifies the owner if unknown, unmasks the parent/management firm and principals, pulls their " +
+      "PORTFOLIO, and digs the company's own website for PUBLICLY-LISTED institutional contacts (main/leasing/acquisitions lines " +
+      "and emails) — surfacing each with its source. Best for institutional / named owners (REITs, developers, management cos). " +
+      "Won't return a private owner's cell (use reveal_contact for that). Provide a name OR an address.",
     input_schema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Owner name to research." },
-        address: { type: "string", description: "Property address for context." },
+        name: { type: "string", description: "Owner name to research, if known." },
+        address: { type: "string", description: "Property address — enough on its own; research will find the owner from it." },
         borough: { type: "string" },
       },
-      required: ["name"],
     },
   },
   {
@@ -159,6 +160,11 @@ WHAT YOU DO
 - Default thesis when unspecified: trophy / high-street RETAIL. If the user names another asset type or neighborhood, follow that.
 - Always begin a sourcing task with search_properties. Use its borough/block/lot, owner name, mailing address, and lat/lon to drive the follow-on tools (property_intel, transaction_history, foot_traffic, owner/hidden portfolio, web_research).
 
+"WHO OWNS THIS + HOW TO REACH THEM" (a top use case — given an address, find the owner, their portfolio, and institutional contacts on the web)
+- NYC address: get the owner of record cheaply first via search_properties (free public records), then web_research to unmask the parent/management firm + principals, map the portfolio, and pull publicly-listed institutional contacts (main/leasing/acquisitions lines and emails) from the company's own website. Add owner_portfolio / hidden_portfolio to widen the holdings picture.
+- Non-NYC address: web_research alone works the whole chain — it will identify the owner FROM the address, then portfolio + contacts.
+- Surface every institutional contact you find WITH its source. Be clear these are published business numbers; a private owner's personal cell is not on the open web and needs reveal_contact (paid skip trace).
+
 HOW TO REASON ABOUT MOTIVATION (the firm's wedge = finding off-market motivated owners)
 - Strong seller signals: long hold (15+ years owned), absentee / out-of-state owner, tax lien or ECB penalties owed, maturing/old mortgage, underbuilt lot with air rights, storefront vacancy. Call these out explicitly when you see them.
 - For INSTITUTIONAL / named owners (REITs, developers, management cos): use web_research to identify the decision-maker and acquisitions/dispositions contact.
@@ -185,7 +191,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v2-general" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v3-owner" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

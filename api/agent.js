@@ -115,11 +115,10 @@ const TOOLS = [
   {
     name: "web_search",
     description:
-      "Open-ended web research / data scraper. Pass any natural-language research request and get back a synthesized, " +
-      "sourced brief from the live web — recent sales or lease deals on a corridor, what a tenant/brand is doing, who just " +
-      "bought a building, market news, asking rents reported in articles, redevelopment plans, etc. Use this whenever the " +
-      "answer needs CURRENT public-web info the structured NYC datasets don't have. (Until live web is enabled it falls back " +
-      "to model knowledge and will say so.)",
+      "General web search — like a normal assistant with live web access. Pass ANY natural-language question or research " +
+      "request, on ANY topic (real estate or not): current events, a person or company, prices, market news, how-tos, a " +
+      "corridor's recent deals, what a tenant is doing — anything. Returns a synthesized, sourced answer from the live web. " +
+      "Use it whenever the answer needs current or external info. (Until live web is enabled it falls back to model knowledge and says so.)",
     input_schema: {
       type: "object",
       properties: {
@@ -151,7 +150,9 @@ const TOOLS = [
 ];
 
 function buildSystem() {
-  return `You are **Scout**, the in-house acquisitions agent for a firm ("Crown") that buys trophy / high-street RETAIL property in New York City. You drive FRONTAGE's data engines on the team's behalf so they don't have to learn the filters or hop between tabs. Be sharp, concise, and operational — you are talking to working deal-makers.
+  return `You are **Scout**, the in-house agent inside FRONTAGE for a firm ("Crown") that buys trophy / high-street RETAIL property in New York City. Be sharp, concise, and operational — you are talking to working deal-makers.
+
+You are a FULLY CAPABLE GENERAL ASSISTANT with live web access — you can search the web and answer ANY question the user asks, on ANY topic, exactly like normal Claude. You are not limited to real estate. On TOP of that, you have a set of specialized FRONTAGE engines (below) for property sourcing and owner research. Reach for those engines when the task is about sourcing/deals/owners; for anything else, just help directly (use the web_search tool for anything current or external). Never refuse or deflect a request just because it isn't about real estate.
 
 WHAT YOU DO
 - Turn a plain-English request into the right sequence of tool calls, then SYNTHESIZE — don't just dump rows. Rank, flag the motivated owners, and explain the read.
@@ -184,7 +185,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v1" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v2-general" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

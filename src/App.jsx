@@ -358,7 +358,7 @@ export default function App() {
               ? "Redline an NDA against your playbook — what to leave in, narrow, or strike."
               : view === "skiptrace"
               ? "Trace a name + address straight to graded phones & emails — charged only on a match."
-              : "Source owners & deals from NYC public records — ACRIS · DOB · PLUTO."}
+              : "Source owners & deals from public records — New York City (ACRIS · PLUTO) and Greenwich · CT."}
           </p>
           {(view === "screener" || view === "agent") && (
             <button onClick={() => setShowSettings((s) => !s)} className="mono lift"
@@ -1738,7 +1738,105 @@ const ASSET_OPTIONS = [
 const fieldStyle = { background: C.ink, color: C.ivory, border: `1px solid ${C.line}`, borderRadius: 7, padding: "8px 10px", fontSize: 13, fontFamily: "Archivo, sans-serif" };
 const labelStyle = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
 
+// Greenwich / CT sourcing — same Sourcing tab as NYC, switched via the market toggle.
+// Built on CT's free public sale records (api/ctsource). CT publishes no owner/SF, so
+// each row has an "AI deep dive" that runs web research (owner + how to reach them) —
+// structured sourcing is the bread and butter; the deep dive is for the ones you like.
+const CT_TYPE_OPTIONS = [
+  ["commercial", "Commercial (retail / office)"], ["any", "Any type"], ["apartments", "Apartments"],
+  ["industrial", "Industrial"], ["condo", "Condo"], ["single_family", "Single family"], ["residential", "Residential"], ["vacant", "Vacant land"],
+];
+function ctCSV(rows) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const cols = [["Address", (r) => r.address], ["Town", (r) => r.town], ["Type", (r) => r.property_type], ["Residential type", (r) => r.residential_type], ["Sale price", (r) => r.sale_amount], ["Assessed value", (r) => r.assessed_value], ["Sale/assess ratio", (r) => r.sales_ratio], ["Sale date", (r) => r.sale_date], ["Lat", (r) => r.lat], ["Lon", (r) => r.lon]];
+  return cols.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => cols.map((c) => esc(c[1](r))).join(",")).join("\n");
+}
+function GreenwichSourcing({ pw }) {
+  const [town, setTown] = useState("Greenwich");
+  const [propertyType, setPropertyType] = useState("commercial");
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [sinceYear, setSinceYear] = useState("2020");
+  const [streetq, setStreetq] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [props, setProps] = useState(null);
+  const [openIdx, setOpenIdx] = useState(null);
+
+  const run = async () => {
+    setError(""); setProps(null); setOpenIdx(null); setLoading(true);
+    try {
+      const d = await postJSON("/api/ctsource", { password: pw, town, propertyType, minPrice, maxPrice, sinceYear, address: streetq });
+      setProps(d.properties || []);
+    } catch (e) { setError(e.message || "Greenwich sourcing failed."); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+          <label><div className="mono" style={labelStyle}>TOWN</div><input value={town} onChange={(e) => setTown(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="Greenwich" /></label>
+          <label><div className="mono" style={labelStyle}>TYPE</div><select value={propertyType} onChange={(e) => setPropertyType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{CT_TYPE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+          <label><div className="mono" style={labelStyle}>STREET (optional)</div><input value={streetq} onChange={(e) => setStreetq(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="e.g. GREENWICH AVENUE" /></label>
+          <label><div className="mono" style={labelStyle}>MIN PRICE</div><input type="number" value={minPrice} onChange={(e) => setMinPrice(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="1000000" /></label>
+          <label><div className="mono" style={labelStyle}>MAX PRICE</div><input type="number" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
+          <label><div className="mono" style={labelStyle}>SOLD SINCE (YEAR)</div><input type="number" value={sinceYear} onChange={(e) => setSinceYear(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="2020" /></label>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
+          <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "SEARCHING…" : "◎ SOURCE PROPERTIES"}</button>
+          {props && props.length > 0 && <button onClick={() => downloadBlob(ctCSV(props), `frontage_${town.toLowerCase().replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>}
+        </div>
+        {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
+        <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
+          Connecticut public sale records (data.ct.gov) — price, assessed value, type, date, location. CT doesn't publish owner names, so use <strong style={{ color: C.ivory }}>▸ AI deep dive</strong> on a property to research the owner &amp; how to reach them. CT commercial trades are sparse — keep filters loose.
+        </div>
+      </div>
+
+      {props && (
+        <div style={{ marginTop: 18 }}>
+          <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>{props.length} PROPERT{props.length === 1 ? "Y" : "IES"} · {town.toUpperCase()}</div>
+          {props.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No sales matched. Widen the price range, type, or year.</div> : (
+            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>
+                  {["Address", "Type", "Sale price", "Assessed", "Ratio", "Sold", ""].map((h, i) => <th key={h} style={{ textAlign: i >= 2 && i <= 3 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {props.map((p, i) => (<React.Fragment key={i}>
+                    <tr style={{ borderBottom: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "9px 12px", fontSize: 13 }}><a href={p.maps_url} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{p.address} ↗</a></td>
+                      <td style={{ padding: "9px 12px", fontSize: 12.5, color: C.muted }}>{p.property_type}{p.residential_type ? ` · ${p.residential_type}` : ""}</td>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right", fontWeight: 700 }}>{p.sale_amount ? fmtAmount(p.sale_amount) : "—"}</td>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right", color: C.muted }}>{p.assessed_value ? fmtAmount(p.assessed_value) : "—"}</td>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12, color: C.muted }}>{p.sales_ratio != null ? Number(p.sales_ratio).toFixed(2) : "—"}</td>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>{p.sale_date}</td>
+                      <td style={{ padding: "9px 12px" }}><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ AI deep dive"}</button></td>
+                    </tr>
+                    {openIdx === i && (
+                      <tr><td colSpan={7} style={{ padding: "0 12px 16px", background: C.ink }}>
+                        <ResearchBrief r={{ name: "", entity_type: "", address: p.address, borough: `${p.town}, CT`, contact_address: "", city: p.town, state: "CT", last_sale_price: p.sale_amount, last_sale_date: p.sale_date, years_owned: null }} pw={pw} />
+                      </td></tr>
+                    )}
+                  </React.Fragment>))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!props && !loading && (
+        <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
+          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>Greenwich sourcing.</span> Structured sale records are the bread and butter — find what's traded by type, price, and street. Then run the <strong style={{ color: C.ivory }}>AI deep dive</strong> on the ones you like to uncover the owner and how to reach them (CT doesn't publish owners, so that's where Scout's web research comes in).
+        </div>
+      )}
+    </>
+  );
+}
+
 function Sourcing({ pw }) {
+  const [market, setMarket] = useState("nyc");
   const [sources, setSources] = useState({ acris: true, dob: true, pluto: true });
   const [borough, setBorough] = useState("");
   const [assetType, setAssetType] = useState("any");
@@ -1788,6 +1886,19 @@ function Sourcing({ pw }) {
 
   return (
     <div style={{ marginTop: 22 }}>
+      {/* Market toggle — one Sourcing tab, two markets */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {[["nyc", "NEW YORK CITY"], ["ct", "GREENWICH · CT"]].map(([m, lab]) => (
+          <button key={m} onClick={() => setMarket(m)} className="mono"
+            style={{ cursor: "pointer", fontSize: 12, padding: "8px 16px", borderRadius: 8, border: `1px solid ${market === m ? C.gold : C.line}`, background: market === m ? C.goldSoft : "transparent", color: market === m ? C.gold : C.muted, letterSpacing: "0.05em" }}>
+            {lab}
+          </button>
+        ))}
+      </div>
+
+      {market === "ct" && <GreenwichSourcing pw={pw} />}
+
+      {market === "nyc" && (<>
           {/* Filters */}
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
             <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SOURCES</div>
@@ -1900,6 +2011,7 @@ function Sourcing({ pw }) {
               and owners — as your leads. Narrow by asset type and street, then export a clean CSV.
             </div>
           )}
+      </>)}
     </div>
   );
 }

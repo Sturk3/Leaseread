@@ -787,6 +787,16 @@ function scoutSpend() { try { const o = JSON.parse(localStorage.getItem(SCOUT_SP
 function addScoutSpend(amt) { try { localStorage.setItem(SCOUT_SPEND_KEY, JSON.stringify({ month: curMonth(), spent: scoutSpend() + amt })); } catch { /* quota */ } }
 function scoutCap() { try { const v = Number(localStorage.getItem(SCOUT_CAP_KEY)); return Number.isFinite(v) && v > 0 ? v : 25; } catch { return 25; } }
 function setScoutCapLS(n) { try { localStorage.setItem(SCOUT_CAP_KEY, String(n)); } catch { /* quota */ } }
+// Effective research mode for ANY web-research caller (Scout, dossier, comp sheet):
+// honors the global Quick/Deep toggle and the monthly cap. Over cap or in Quick →
+// "knowledge" (no paid web search). Use with addScoutSpend when it returns "web".
+function webResearchMode() {
+  try {
+    const m = localStorage.getItem(SCOUT_MODE_KEY) || "deep";
+    if (m !== "deep") return "knowledge";
+    return scoutSpend() >= scoutCap() ? "knowledge" : "web";
+  } catch { return "web"; }
+}
 
 // Trim/summarize an endpoint's response into { forModel, uiSummary }.
 function shapeResult(name, data) {
@@ -1292,7 +1302,9 @@ function CompSheet({ pw }) {
     try {
       const where = [data.subject.address, data.subject.borough].filter(Boolean).join(", ");
       const q = `What are current asking RETAIL rents (per SF/year) near ${where}? Give the corridor/neighborhood asking-rent range and cite specific sources — REBNY's Manhattan Retail Report, brokerage market reports (Cushman/CBRE/JLL/Colliers), and any recently reported lease deals. Be clear these are asking rents and name each source.`;
-      const d = await postJSON("/api/research", { mode: "web", password: pw, query: q });
+      const m = webResearchMode();
+      const d = await postJSON("/api/research", { mode: m, password: pw, query: q });
+      if (m === "web") addScoutSpend(WEB_RUN_COST);
       setRent({ state: "done", text: d.brief || "No rent context found.", err: "" });
     } catch (e) { setRent({ state: "error", text: "", err: e.message || "Rent lookup failed." }); }
   };
@@ -1305,7 +1317,9 @@ function CompSheet({ pw }) {
     try {
       const where = [data.subject.address, data.subject.borough].filter(Boolean).join(", ");
       const q = `Find RECENT reported commercial/retail building SALES near ${where} (within ~0.25 mile, last ~5 years). For each, give the address, sale price, sale date, and building size or $/SF if reported, and CITE the source (The Real Deal, Commercial Observer, public records, broker release). List them SORTED BY PRICE (highest first). Only include sales you actually find with a source — do not estimate or invent prices.`;
-      const d = await postJSON("/api/research", { mode: "web", password: pw, query: q });
+      const m = webResearchMode();
+      const d = await postJSON("/api/research", { mode: m, password: pw, query: q });
+      if (m === "web") addScoutSpend(WEB_RUN_COST);
       setSales({ state: "done", text: d.brief || "No reported sales found.", err: "" });
     } catch (e) { setSales({ state: "error", text: "", err: e.message || "Sales lookup failed." }); }
   };
@@ -2764,7 +2778,9 @@ function ResearchBrief({ r, pw }) {
       // Requests live web mode; api/research transparently downgrades to knowledge until
       // the RESEARCH_LIVE_WEB env flag is set (needs Vercel Pro's 300s timeout). So this is
       // safe on Hobby today and auto-upgrades to real web research the moment Pro is on.
-      const d = await postJSON("/api/research", { mode: "web", password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned });
+      const m = webResearchMode();
+      const d = await postJSON("/api/research", { mode: m, password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned });
+      if (m === "web") addScoutSpend(WEB_RUN_COST);
       setBrief(d.brief || ""); setState("done");
     } catch (e) { setErr(e.message || "Research failed."); setState("error"); }
   };

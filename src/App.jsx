@@ -286,9 +286,9 @@ export default function App() {
   }
 
   return (
-    <div style={{ background: C.ink, color: C.ivory, minHeight: "100vh", fontFamily: "Archivo, sans-serif" }}>
+    <div className="app-shell" style={{ display: "flex", height: "100vh", overflow: "hidden", fontFamily: "'Hanken Grotesk', Archivo, sans-serif", background: C.ink, color: C.ivory }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Archivo:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700&family=Hanken+Grotesk:wght@300;400;500;600&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&display=swap');
         * { box-sizing: border-box; }
         .mono { font-family: 'IBM Plex Mono', monospace; }
         .serif { font-family: 'Fraunces', serif; }
@@ -301,55 +301,74 @@ export default function App() {
         .lift:hover { transform: translateY(-1px); border-color: ${C.gold}; }
         input[type=range] { accent-color: ${C.gold}; }
         .addr-opt:hover { background: ${C.goldSoft}; color: ${C.gold}; }
+        .rail-item { position:relative; display:flex; align-items:center; gap:11px; padding:11px 14px; border-radius:9px; font-family:'Hanken Grotesk',sans-serif; font-size:11px; font-weight:400; letter-spacing:1.5px; text-transform:uppercase; color:#B4AEC4; cursor:pointer; border:1px solid transparent; transition:background .2s,color .2s,box-shadow .2s; background:none; width:100%; text-align:left; }
+        .rail-item .ic { width:16px; text-align:center; color:#6E6883; font-size:13px; transition:color .2s; }
+        .rail-item:hover { background:rgba(255,255,255,.05); color:#F4F2FB; }
+        .rail-item:hover .ic { color:#B4AEC4; }
+        .rail-item.active { background:linear-gradient(90deg,rgba(157,139,245,.18),rgba(157,139,245,.07)); color:#D7CDFB; border-color:rgba(157,139,245,.28); box-shadow:0 10px 30px -16px rgba(157,139,245,.9); }
+        .rail-item.active .ic { color:#B6A4FA; }
+        .rail-item.active::before { content:""; position:absolute; left:0; top:50%; transform:translateY(-50%); width:2px; height:18px; border-radius:2px; background:#9D8BF5; box-shadow:0 0 10px rgba(157,139,245,.9); }
+        @media (max-width:820px){
+          .app-shell{ flex-direction:column !important; height:auto !important; min-height:100vh; overflow:auto !important; }
+          .rail-wrap{ width:100% !important; flex:none !important; flex-direction:row !important; align-items:center !important; padding:14px 16px !important; gap:16px; overflow-x:auto; }
+          .rail-brand{ border-bottom:none !important; border-right:1px solid rgba(255,255,255,.09); padding:0 16px 0 0 !important; flex:0 0 auto; }
+          .rail-eyebrow{ display:none !important; }
+          .rail-nav{ flex-direction:row !important; padding:0 !important; flex:1; }
+          .rail-label, .rail-foot{ display:none !important; }
+          .rail-item{ white-space:nowrap; padding:8px 12px; }
+          .main-top, .main-scroll{ padding-left:20px !important; padding-right:20px !important; }
+        }
       `}</style>
 
-      <div style={{ maxWidth: 1040, margin: "0 auto", padding: "28px 22px 80px" }}>
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", borderBottom: `1px solid ${C.line}`, paddingBottom: 18 }}>
-          <div>
-            <div className="serif" style={{ fontSize: 34, letterSpacing: "0.04em", fontWeight: 500, lineHeight: 1 }}>
-              FRONTAGE<span style={{ color: C.gold }}>.</span>
-            </div>
-            <div className="mono" style={{ color: C.gold, fontSize: 10, marginTop: 7, letterSpacing: "0.22em" }}>
-              TROPHY RETAIL ACQUISITIONS
-            </div>
-            <div style={{ color: C.muted, fontSize: 13, marginTop: 6 }}>
-              {view === "agent"
-                ? "Just ask. Scout runs the right engines — sourcing, intel, contacts, research — and hands back the read."
-                : view === "comps"
-                ? "Auto-build a retail comp sheet — nearby sales with $/SF, subject summary, and rent context — ready to print or export."
-                : view === "screener"
-                ? "Underwrite high-street flagship assets against your mandate."
-                : view === "radar"
-                ? "Scan a corridor for leases estimated to be coming available — off-market, before they list."
-                : view === "nda"
-                ? "Redline an NDA against your playbook — what to leave in, narrow, or strike."
-                : view === "skiptrace"
-                ? "Trace a name + address straight to graded phones & emails — charged only on a match."
-                : "Source owners & deals from NYC public records — ACRIS · DOB · PLUTO."}
-            </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              {/* Hidden tabs (re-add the entry to restore; components + api endpoints left intact): Lease Radar (2026-06-17), NDA Review (2026-06-22, 60s timeout), Skip Trace standalone (2026-06-22, in dossier), Screener (2026-06-22, OM grading now lives in Scout via grade_offering_memo; ⚙ GRADING CRITERIA editor moved to the Agent view). */}
-              {[["agent", "✦ AGENT"], ["sourcing", "SOURCING"], ["comps", "COMP SHEET"]].map(([v, lab]) => (
-                <button key={v} onClick={() => setView(v)} className="mono"
-                  style={{ cursor: "pointer", fontSize: 12, padding: "6px 13px", borderRadius: 7, border: `1px solid ${view === v ? C.gold : C.line}`, background: view === v ? C.goldSoft : "transparent", color: view === v ? C.gold : C.muted }}>
-                  {lab}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-            {(view === "screener" || view === "agent") && (
-              <button onClick={() => setShowSettings((s) => !s)} className="mono lift"
-                style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${showSettings ? C.gold : C.line}`, background: showSettings ? C.goldSoft : C.panel, color: showSettings ? C.gold : C.ivory }}>
-                ⚙ GRADING CRITERIA
-              </button>
-            )}
-            <div className="mono" style={{ fontSize: 11, color: C.gold, textAlign: "right", lineHeight: 1.5 }}>
-              POWERED BY CLAUDE<br /><span style={{ color: C.muted }}>{view === "agent" ? "Scout · orchestrator" : view === "screener" ? `mandate · ${config.name}` : view === "nda" ? "NDA playbook" : "ACRIS · DOB"}</span>
-            </div>
-          </div>
+      {/* LUXURY SIDEBAR */}
+      <aside className="rail-wrap" style={{ width: 268, flex: "0 0 268px", background: "radial-gradient(120% 60% at 50% -10%, rgba(157,139,245,.14), transparent 60%), linear-gradient(180deg,#1B1827 0%,#141019 60%,#100D16 100%)", borderRight: "1px solid rgba(255,255,255,.06)", display: "flex", flexDirection: "column", padding: "40px 0 28px" }}>
+        <div className="rail-brand" style={{ padding: "0 30px 28px", borderBottom: "1px solid rgba(255,255,255,.07)" }}>
+          <div style={{ fontFamily: "'Bricolage Grotesque', sans-serif", fontWeight: 600, fontSize: 31, letterSpacing: "-.5px", lineHeight: 1, color: "#F4F2FB" }}>FRONTAGE<span style={{ color: "#9D8BF5", textShadow: "0 0 16px rgba(157,139,245,.75)" }}>.</span></div>
+          <div className="rail-eyebrow" style={{ fontSize: 9.5, letterSpacing: "2.8px", textTransform: "uppercase", color: "#8E879F", marginTop: 12 }}>Trophy Retail Acquisitions</div>
         </div>
+        <nav className="rail-nav" style={{ padding: "28px 18px", display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
+          <div className="rail-label" style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2.4px", textTransform: "uppercase", color: "#5E586E", padding: "4px 14px 12px" }}>Engines</div>
+          {[["agent", "Agent", "✦"], ["sourcing", "Sourcing", "◎"], ["comps", "Comp Sheet", "≣"]].map(([v, lab, ic]) => (
+            <button key={v} onClick={() => setView(v)} className={view === v ? "rail-item active" : "rail-item"}>
+              <span className="ic">{ic}</span> {lab}
+            </button>
+          ))}
+        </nav>
+        <div className="rail-foot" style={{ padding: "20px 30px 0", borderTop: "1px solid rgba(255,255,255,.07)" }}>
+          <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2px", textTransform: "uppercase", color: "#9D8BF5", lineHeight: 1.8 }}>Powered by Claude<span style={{ color: "#5E586E", display: "block", letterSpacing: "1.6px", fontWeight: 400 }}>Scout · orchestrator</span></div>
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: C.ink }}>
+        <header className="main-top" style={{ padding: "20px 40px", borderBottom: `1px solid ${C.line}`, display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap", background: C.panel }}>
+          <h1 style={{ fontSize: 12, fontWeight: 600, letterSpacing: "2px", textTransform: "uppercase", color: C.ivory, margin: 0 }}>
+            {view === "agent" ? "Agent" : view === "sourcing" ? "Sourcing" : view === "comps" ? "Comp Sheet" : view === "screener" ? "Screener" : view === "skiptrace" ? "Skip Trace" : view === "nda" ? "NDA Review" : "Lease Radar"}
+          </h1>
+          <p style={{ fontSize: 13, color: C.muted, fontWeight: 300, margin: 0, flex: "1 1 240px" }}>
+            {view === "agent"
+              ? "Just ask. Scout runs the right engines — sourcing, intel, contacts, research — and hands back the read."
+              : view === "comps"
+              ? "Auto-build a retail comp sheet — nearby sales with $/SF, subject summary, and rent context."
+              : view === "screener"
+              ? "Underwrite high-street flagship assets against your mandate."
+              : view === "radar"
+              ? "Scan a corridor for leases estimated to be coming available — off-market, before they list."
+              : view === "nda"
+              ? "Redline an NDA against your playbook — what to leave in, narrow, or strike."
+              : view === "skiptrace"
+              ? "Trace a name + address straight to graded phones & emails — charged only on a match."
+              : "Source owners & deals from NYC public records — ACRIS · DOB · PLUTO."}
+          </p>
+          {(view === "screener" || view === "agent") && (
+            <button onClick={() => setShowSettings((s) => !s)} className="mono lift"
+              style={{ cursor: "pointer", fontSize: 11, padding: "7px 13px", borderRadius: 7, border: `1px solid ${showSettings ? C.gold : C.line}`, background: showSettings ? C.goldSoft : C.panel, color: showSettings ? C.gold : C.ivory, letterSpacing: "0.5px" }}>
+              ⚙ GRADING CRITERIA
+            </button>
+          )}
+        </header>
+        <div className="main-scroll" style={{ flex: 1, overflowY: "auto", padding: "0 40px 60px" }}>
+          <div style={{ maxWidth: 1040, margin: "0 auto" }}>
 
         {view === "agent" && <>
           {showSettings && <Settings config={config} setConfig={setConfig} presets={presets} setPresets={setPresets} onClose={() => setShowSettings(false)} />}
@@ -417,7 +436,9 @@ export default function App() {
           </div>
         )}
         </>)}
-      </div>
+          </div>
+        </div>
+      </main>
     </div>
   );
 }

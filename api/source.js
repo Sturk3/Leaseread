@@ -490,6 +490,9 @@ function buildLeads(deals, contacts) {
       address: d.address || "", block: d.block || "", lot: d.lot || "",
       amount: d.amount ?? null, deal_date: d.date || "",
       last_sale_date: d.last_sale_date || "", last_sale_price: d.last_sale_price ?? null,
+      portfolio_sale: d.portfolio_sale || false, last_deed_lots: d.last_deed_lots ?? null,
+      portfolio_total_price: d.portfolio_total_price ?? null, last_deed_id: d.last_deed_id || "",
+      deed_owner: c.deed_owner || "",
       years_owned: d.last_sale_date ? Math.max(0, new Date().getFullYear() - Number(String(d.last_sale_date).slice(0, 4))) : null,
       tax_lien: d.tax_lien || false,
       built_far: d.built_far ?? null, max_far: d.max_far ?? null,
@@ -603,6 +606,13 @@ async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
       d.last_sale_date = v.date || "";
       d.last_sale_price = portfolio ? null : (deedAmt[v.id] ?? null);
       d.portfolio_sale = !!portfolio;
+      d.last_deed_lots = lots ? lots.size : 1;
+      // The whole-portfolio price IS meaningful context even though it's not this lot's
+      // price — carry it so the UI can note "part of a $Xm, N-property deal".
+      d.portfolio_total_price = portfolio ? (deedAmt[v.id] ?? null) : null;
+      // ACRIS document id of the latest deed — lets the UI deep-link to the actual
+      // recorded deed image in the public ACRIS viewer.
+      d.last_deed_id = v.id || "";
     }
   }
   for (const c of contacts) {
@@ -610,6 +620,9 @@ async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
     const v = latestByKey[dealKey[c.deal_id]];
     const g = v && granteeByDoc[v.id];
     if (!g) continue;
+    // The grantee (buyer) on the latest deed is the CURRENT owner of record — more
+    // up to date than PLUTO's annual ownername snapshot. Surface it for accuracy.
+    c.deed_owner = clean(g.name);
     const addr = clean(`${g.address_1 || ""} ${g.address_2 || ""}`);
     const city = clean(g.city);
     // Only overwrite the property-address fallback when the deed actually recorded a

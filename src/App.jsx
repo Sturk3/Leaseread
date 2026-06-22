@@ -954,6 +954,8 @@ function siteHighlights(s) {
   if (s.tax_lien) h.push(`Tax lien on record — possible distress / motivation`);
   return h;
 }
+// Deep link to the actual recorded deed in NYC's public ACRIS document viewer.
+const acrisDeedUrl = (id) => (id ? `https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=${encodeURIComponent(id)}` : null);
 const escHtml = (x) => String(x ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function miniMd(text) {
   return String(text || "").split("\n").map((line) => {
@@ -968,8 +970,9 @@ function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedB
   const money = (a) => (a == null || a === "" ? "—" : "$" + Number(a).toLocaleString());
   const num = (a) => (a == null || a === "" ? "—" : Number(a).toLocaleString());
   const ppsf = (a) => (a == null ? "—" : "$" + Math.round(a).toLocaleString());
+  const deedLink = (id, label) => (id ? `<a href="${acrisDeedUrl(id)}">${label} ↗</a>` : label);
   const compRows = comps.map((c, i) => `<tr>
-      <td class="muted">${i + 1}</td><td>${escHtml(c.address)}</td><td>${escHtml(c._saleYear)}</td>
+      <td class="muted">${i + 1}</td><td>${escHtml(c.address)}</td><td>${deedLink(c.last_deed_id, escHtml(c._saleYear))}</td>
       <td class="r">${money(c._price)}</td><td class="r">${num(c.bldg_sqft)}</td>
       <td class="r b">${ppsf(c._ppsf)}</td><td class="r">${c.year_built || "—"}</td>
       <td class="r">${c.distance != null ? Number(c.distance).toFixed(2) : "—"}</td></tr>`).join("");
@@ -978,6 +981,12 @@ function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedB
   const lastSale = (s.source === "pluto" ? s.last_sale_price : s.amount);
   const lastSaleYr = s.last_sale_date ? String(s.last_sale_date).slice(0, 4) : "";
   const subjHead = escHtml(s.address || "Subject property");
+  const ownerNow = s.deed_owner || s.name || "—";
+  const ownerNote = (s.deed_owner && s.name && s.deed_owner.toUpperCase() !== s.name.toUpperCase())
+    ? `<div class="note">Owner per latest deed: <strong>${escHtml(s.deed_owner)}</strong> — PLUTO assessor lists "${escHtml(s.name)}" (annual snapshot, may lag).</div>` : "";
+  const deedNote = s.portfolio_sale
+    ? `<div class="note">Most recent transfer was a portfolio / bulk deed conveying ${s.last_deed_lots} lots${s.portfolio_total_price ? ` for $${Number(s.portfolio_total_price).toLocaleString()} total` : ""}${s.last_sale_date ? ` (${String(s.last_sale_date).slice(0, 10)})` : ""} — this lot's individual price isn't separable. ${s.last_deed_id ? `<a href="${acrisDeedUrl(s.last_deed_id)}">View deed ↗</a>` : ""}</div>`
+    : (s.last_deed_id ? `<div class="note"><a href="${acrisDeedUrl(s.last_deed_id)}">View recorded deed ↗</a> (ACRIS document ${escHtml(s.last_deed_id)})</div>` : "");
   const hlBlock = (highlights && highlights.length)
     ? `<div class="sec">INVESTMENT HIGHLIGHTS</div><ul class="hl">${highlights.map((h) => `<li>${escHtml(h)}</li>`).join("")}</ul>` : "";
   const notesBlock = (notes && notes.trim())
@@ -1014,6 +1023,7 @@ function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedB
   td{ font-size:12.5px; padding:8px 9px; border-bottom:1px solid #eee; }
   .r{ text-align:right; } th.r{ text-align:right; } .b{ font-weight:700; } .muted{ color:#999; }
   .notes p{ font-size:12.5px; line-height:1.6; margin:4px 0; } .notes li{ font-size:12.5px; line-height:1.6; margin:3px 0 3px 18px; }
+  .note{ font-size:11px; color:#555; line-height:1.6; margin-top:8px; } .note a{ color:#1a1a1a; }
   .foot{ margin-top:22px; padding-top:10px; border-top:1px solid #ddd; font-size:9.5px; color:#888; line-height:1.55; }
   @media print{ body{ background:#fff; } .bar{ display:none; } .page{ margin:0; border:none; padding:0; } @page{ margin:16mm; } }
 </style></head><body>
@@ -1028,7 +1038,7 @@ function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedB
   <div class="subj">${subjHead}</div>
   <div class="subline">${escHtml([s.borough, s.doc_type && ("class " + s.doc_type)].filter(Boolean).join(" · "))}</div>
   <div class="grid">
-    ${kv("Owner", escHtml(s.name || "—"))}
+    ${kv("Owner", escHtml(ownerNow))}
     ${kv("Building SF", num(s.bldg_sqft))}
     ${kv("Retail SF", num(s.retail_sqft))}
     ${kv("Lot SF", num(s.lot_sqft))}
@@ -1038,6 +1048,7 @@ function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedB
     ${kv("Assessed value", money(s.source === "pluto" ? s.amount : null))}
     ${kv("Last sale", lastSale ? money(lastSale) + (lastSaleYr ? " (" + lastSaleYr + ")" : "") : "—")}
   </div>
+  ${ownerNote}${deedNote}
 
   ${hlBlock}
 
@@ -1254,7 +1265,7 @@ function CompSheet({ pw }) {
             <div style={{ fontSize: 17, fontWeight: 700 }}>{s.address || "—"}</div>
             <div style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>{[s.borough, s.doc_type && `class ${s.doc_type}`].filter(Boolean).join(" · ")}</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, auto 1fr)", gap: "4px 14px", marginTop: 12 }}>
-              {kv("Owner", s.name || "—")}
+              {kv("Owner", s.deed_owner || s.name || "—")}
               {kv("Building SF", s.bldg_sqft ? Number(s.bldg_sqft).toLocaleString() : "—")}
               {kv("Retail SF", s.retail_sqft ? Number(s.retail_sqft).toLocaleString() : "—")}
               {kv("Lot SF", s.lot_sqft ? Number(s.lot_sqft).toLocaleString() : "—")}
@@ -1266,6 +1277,21 @@ function CompSheet({ pw }) {
               {kv("Implied value", st.implied != null ? `${fmtAmount(Math.round(st.implied))}` : "—")}
             </div>
           </div>
+
+          {/* Owner currency, portfolio-deed context, and a link to the actual deed */}
+          {(s.last_deed_id || s.portfolio_sale || (s.deed_owner && s.name && s.deed_owner.toUpperCase() !== s.name.toUpperCase())) && (
+            <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.65 }}>
+              {s.deed_owner && s.name && s.deed_owner.toUpperCase() !== s.name.toUpperCase() && (
+                <div>Owner per latest deed: <strong style={{ color: C.ivory }}>{s.deed_owner}</strong> — PLUTO assessor still lists "{s.name}" (annual snapshot, can lag a sale by 1–2 years).</div>
+              )}
+              {s.portfolio_sale && (
+                <div>ⓘ Most recent transfer was a <strong style={{ color: C.ivory }}>portfolio / bulk deed</strong> conveying {s.last_deed_lots} lots{s.portfolio_total_price ? ` for ${fmtAmount(s.portfolio_total_price)} total` : ""}{s.last_sale_date ? ` (${String(s.last_sale_date).slice(0, 10)})` : ""} — this lot's individual price isn't separable from the bundle. {acrisDeedUrl(s.last_deed_id) && <a href={acrisDeedUrl(s.last_deed_id)} target="_blank" rel="noreferrer" style={{ color: C.gold }}>View deed ↗</a>}</div>
+              )}
+              {!s.portfolio_sale && s.last_deed_id && (
+                <div><a href={acrisDeedUrl(s.last_deed_id)} target="_blank" rel="noreferrer" style={{ color: C.gold }}>View recorded deed ↗</a> <span>(ACRIS document {s.last_deed_id})</span></div>
+              )}
+            </div>
+          )}
 
           {/* Investment highlights (auto from PLUTO attributes) */}
           {siteHighlights(s).length > 0 && (
@@ -1301,7 +1327,7 @@ function CompSheet({ pw }) {
                   <tr key={c.deal_id || i}>
                     <td style={{ ...cell, color: C.muted }}>{i + 1}</td>
                     <td style={cell}>{c.address}</td>
-                    <td style={cell}>{c._saleYear}</td>
+                    <td style={cell}>{c.last_deed_id ? <a href={acrisDeedUrl(c.last_deed_id)} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }} title="View recorded deed in ACRIS">{c._saleYear} ↗</a> : c._saleYear}</td>
                     <td style={numCell}>{fmtAmount(c._price)}</td>
                     <td style={numCell}>{Number(c.bldg_sqft).toLocaleString()}</td>
                     <td style={{ ...numCell, fontWeight: 700, color: C.gold }}>${Math.round(c._ppsf).toLocaleString()}</td>
@@ -3232,7 +3258,9 @@ function HistoryList({ hist }) {
       {hist.map((h, i) => (
         <div key={i} style={{ display: "flex", gap: 12, padding: "6px 0", borderTop: `1px solid ${C.line}`, fontSize: 12.5, alignItems: "baseline", flexWrap: "wrap" }}>
           <span className="mono" style={{ color: C.muted, width: 84 }}>{h.date || "—"}</span>
-          <span style={{ width: 150, color: h.doc_type === "DEED" ? C.green : /lease/i.test(h.doc_label) ? "#3b82c4" : C.ivory }}>{h.doc_label}</span>
+          <span style={{ width: 150, color: h.doc_type === "DEED" ? C.green : /lease/i.test(h.doc_label) ? "#3b82c4" : C.ivory }}>
+            {h.document_id ? <a href={acrisDeedUrl(h.document_id)} target="_blank" rel="noreferrer" style={{ color: "inherit", textDecoration: "none" }} title="Open this document in ACRIS">{h.doc_label} ↗</a> : h.doc_label}
+          </span>
           <span className="mono" style={{ width: 110, color: C.muted, whiteSpace: "nowrap" }}>{h.amount ? "$" + Number(h.amount).toLocaleString() : "—"}</span>
           <span style={{ color: C.muted, flex: "1 1 220px" }}>{h.parties.map((p) => p.name).join(" · ") || "—"}</span>
         </div>

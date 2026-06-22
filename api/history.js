@@ -90,7 +90,7 @@ export default async function handler(req, res) {
       return {
         doc_type: t, doc_label: DOC_LABEL[t] || t || "Document",
         date: dt ? dt.slice(0, 10) : "", amount: toNum(m.document_amt),
-        parties: partiesByDoc[id] || [],
+        document_id: id, parties: partiesByDoc[id] || [],
       };
     }).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 

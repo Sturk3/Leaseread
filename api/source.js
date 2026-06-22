@@ -300,6 +300,7 @@ function devFields(row) {
     //  use overlays (Times Sq, 5th Ave), landmark/historic = facade/alteration limits.
     frontage_ft: toNum(row.bldgfront) || toNum(row.lotfront) || null,
     num_floors: toNum(row.numfloors) || null,
+    year_built: toNum(row.yearbuilt) || null,
     zoning: clean(row.zonedist1) || null,
     overlay: clean(row.overlay1) || null,
     special_district: clean(row.spdist1) || null,
@@ -497,7 +498,7 @@ function buildLeads(deals, contacts) {
       office_sqft: d.office_sqft ?? null, res_sqft: d.res_sqft ?? null, commercial_sqft: d.commercial_sqft ?? null,
       garage_sqft: d.garage_sqft ?? null, storage_sqft: d.storage_sqft ?? null, factory_sqft: d.factory_sqft ?? null,
       other_sqft: d.other_sqft ?? null, avg_floor_sqft: d.avg_floor_sqft ?? null,
-      frontage_ft: d.frontage_ft ?? null, num_floors: d.num_floors ?? null, zoning: d.zoning ?? null,
+      frontage_ft: d.frontage_ft ?? null, num_floors: d.num_floors ?? null, year_built: d.year_built ?? null, zoning: d.zoning ?? null,
       overlay: d.overlay ?? null, special_district: d.special_district ?? null, landmark: d.landmark ?? null, hist_district: d.hist_district ?? null,
       lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null, pinned: d.pinned || false,
       name: c.name, role: c.role, entity_type: c.entity_type || "unknown",

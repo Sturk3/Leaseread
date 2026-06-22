@@ -316,6 +316,8 @@ export default function App() {
             <div style={{ color: C.muted, fontSize: 13, marginTop: 6 }}>
               {view === "agent"
                 ? "Just ask. Scout runs the right engines — sourcing, intel, contacts, research — and hands back the read."
+                : view === "comps"
+                ? "Auto-build a retail comp sheet — nearby sales with $/SF, subject summary, and rent context — ready to print or export."
                 : view === "screener"
                 ? "Underwrite high-street flagship assets against your mandate."
                 : view === "radar"
@@ -328,7 +330,7 @@ export default function App() {
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               {/* Lease Radar deactivated 2026-06-17, NDA Review hidden 2026-06-22 (times out on Hobby's 60s limit) — re-add ["radar","LEASE RADAR"] / ["nda","NDA REVIEW"] to restore. Components + api endpoints left intact. */}
-              {[["agent", "✦ AGENT"], ["screener", "SCREENER"], ["sourcing", "SOURCING"], ["skiptrace", "SKIP TRACE"]].map(([v, lab]) => (
+              {[["agent", "✦ AGENT"], ["screener", "SCREENER"], ["sourcing", "SOURCING"], ["comps", "COMP SHEET"], ["skiptrace", "SKIP TRACE"]].map(([v, lab]) => (
                 <button key={v} onClick={() => setView(v)} className="mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "6px 13px", borderRadius: 7, border: `1px solid ${view === v ? C.gold : C.line}`, background: view === v ? C.goldSoft : "transparent", color: view === v ? C.gold : C.muted }}>
                   {lab}
@@ -350,6 +352,8 @@ export default function App() {
         </div>
 
         {view === "agent" && <AgentChat pw={pw} />}
+
+        {view === "comps" && <CompSheet pw={pw} />}
 
         {view === "sourcing" && <Sourcing pw={pw} />}
 
@@ -898,6 +902,222 @@ function AgentChat({ pw }) {
       <div style={{ fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>
         Scout runs your live engines (ACRIS · PLUTO · DOB · HPD · NY registry · foot traffic · AI research). Contact reveals are a paid skip trace and always ask first.
       </div>
+    </div>
+  );
+}
+
+// ── COMP SHEET — automatic retail comparable analysis ───────────────────────────
+// Given a subject address, pull nearby PLUTO properties (reusing /api/source), keep the
+// ones that traded recently and have a building size, compute $/SF, and render a clean
+// tear sheet: subject summary + sales comps + stats + a rent section (auto-fills via web
+// research on Pro). Exports CSV and prints to a one-page PDF. No new backend function.
+const COMP_COLS = [
+  ["", (r, i) => (r._subject ? "SUBJECT" : i)],
+  ["Address", (r) => r.address],
+  ["Sale date", (r) => r._saleYear || ""],
+  ["Sale price", (r) => (r._price != null ? r._price : "")],
+  ["Building SF", (r) => (r.bldg_sqft != null ? r.bldg_sqft : "")],
+  ["$/SF", (r) => (r._ppsf != null ? Math.round(r._ppsf) : "")],
+  ["Retail SF", (r) => (r.retail_sqft != null ? r.retail_sqft : "")],
+  ["Year built", (r) => (r.year_built != null ? r.year_built : "")],
+  ["Distance (mi)", (r) => (r.distance != null ? Number(r.distance).toFixed(2) : "")],
+];
+function compsToCSV(subject, comps) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const head = COMP_COLS.map((c) => esc(c[0])).join(",");
+  const rows = [{ ...subject, _subject: true }, ...comps];
+  const body = rows.map((r, i) => COMP_COLS.map((c) => esc(c[1](r, i))).join(",")).join("\n");
+  return head + "\n" + body;
+}
+const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const ppsfOf = (r) => (r.last_sale_price && r.bldg_sqft ? r.last_sale_price / r.bldg_sqft : null);
+
+function CompSheet({ pw }) {
+  const [nearAddress, setNearAddress] = useState("");
+  const [picked, setPicked] = useState(null);
+  const [radius, setRadius] = useState("0.25");
+  const [assetType, setAssetType] = useState("retail");
+  const [lookback, setLookback] = useState("7");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [data, setData] = useState(null); // { subject, comps, stats }
+  const [rent, setRent] = useState({ state: "idle", text: "", err: "" });
+
+  const generate = async () => {
+    if (!picked) { setError("Pick an address from the dropdown so I have exact coordinates."); return; }
+    setLoading(true); setError(""); setData(null); setRent({ state: "idle", text: "", err: "" });
+    try {
+      const res = await postJSON("/api/source", {
+        password: pw, sources: ["pluto"], assetType, radiusMiles: radius || "0.25",
+        centerLat: picked.lat, centerLon: picked.lon, pickedBbl: picked.bbl,
+      });
+      const leads = res.leads || [];
+      const subject = leads.find((l) => l.pinned) || leads[0] || null;
+      if (!subject) { setError("Couldn't load the subject property. Try another address."); setLoading(false); return; }
+      const cutoff = new Date().getFullYear() - Number(lookback || 7);
+      const comps = leads
+        .filter((l) => !l.pinned && l.last_sale_price && l.bldg_sqft && l.last_sale_date && Number(String(l.last_sale_date).slice(0, 4)) >= cutoff)
+        .map((l) => ({ ...l, _ppsf: ppsfOf(l), _price: l.last_sale_price, _saleYear: String(l.last_sale_date).slice(0, 4) }))
+        .sort((a, b) => (b._saleYear || "").localeCompare(a._saleYear || ""));
+      const ppsfs = comps.map((c) => c._ppsf).filter((x) => x != null && isFinite(x));
+      const avg = ppsfs.length ? ppsfs.reduce((s, x) => s + x, 0) / ppsfs.length : null;
+      const stats = {
+        count: comps.length, withPpsf: ppsfs.length,
+        avg, median: median(ppsfs), min: ppsfs.length ? Math.min(...ppsfs) : null, max: ppsfs.length ? Math.max(...ppsfs) : null,
+        implied: avg && subject.bldg_sqft ? avg * subject.bldg_sqft : null,
+      };
+      setData({ subject, comps, stats });
+    } catch (e) { setError(e.message || "Something went wrong."); }
+    finally { setLoading(false); }
+  };
+
+  const pullRent = async () => {
+    if (!data) return;
+    setRent({ state: "loading", text: "", err: "" });
+    try {
+      const where = [data.subject.address, data.subject.borough].filter(Boolean).join(", ");
+      const q = `What are current asking RETAIL rents (per SF/year) near ${where}? Give the corridor/neighborhood asking-rent range and cite specific sources — REBNY's Manhattan Retail Report, brokerage market reports (Cushman/CBRE/JLL/Colliers), and any recently reported lease deals. Be clear these are asking rents and name each source.`;
+      const d = await postJSON("/api/research", { mode: "web", password: pw, query: q });
+      setRent({ state: "done", text: d.brief || "No rent context found.", err: "" });
+    } catch (e) { setRent({ state: "error", text: "", err: e.message || "Rent lookup failed." }); }
+  };
+
+  const s = data && data.subject;
+  const st = data && data.stats;
+  const cell = { padding: "7px 10px", fontSize: 12, borderBottom: `1px solid ${C.line}`, textAlign: "left" };
+  const numCell = { ...cell, textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" };
+  const kv = (label, val) => (<><div style={{ color: C.muted, fontSize: 12 }}>{label}</div><div style={{ color: C.ivory, fontSize: 12.5 }}>{val ?? "—"}</div></>);
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      {/* print rules: when printing, show only the comp sheet */}
+      <style>{`@media print { body * { visibility: hidden !important; } #compsheet, #compsheet * { visibility: visible !important; } #compsheet { position: absolute; left: 0; top: 0; width: 100%; } .no-print { display: none !important; } }`}</style>
+
+      {/* Controls */}
+      <div className="no-print" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 12, alignItems: "end" }}>
+          <label>
+            <div className="mono" style={labelStyle}>SUBJECT ADDRESS — type &amp; pick</div>
+            <div style={{ marginTop: 4 }}>
+              <AddressAutocomplete value={nearAddress}
+                onChange={(t) => { setNearAddress(t); setPicked(null); }}
+                onPick={(label, lat, lon, bbl) => { setNearAddress(label); setPicked({ lat, lon, bbl }); }}
+                placeholder="e.g. 650 5th Ave…" style={{ ...fieldStyle, width: "100%" }} />
+            </div>
+          </label>
+          <label><div className="mono" style={labelStyle}>ASSET TYPE</div>
+            <select value={assetType} onChange={(e) => setAssetType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
+              {ASSET_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select></label>
+          <label><div className="mono" style={labelStyle}>RADIUS</div>
+            <select value={radius} onChange={(e) => setRadius(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
+              {[["0.1", "0.1 mi"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"], ["1", "1 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select></label>
+          <label><div className="mono" style={labelStyle}>SOLD WITHIN</div>
+            <select value={lookback} onChange={(e) => setLookback(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>
+              {[["3", "3 years"], ["5", "5 years"], ["7", "7 years"], ["10", "10 years"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select></label>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
+          <button onClick={generate} disabled={loading} className="mono lift"
+            style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>
+            {loading ? "BUILDING…" : "■ GENERATE COMP SHEET"}
+          </button>
+          {data && <>
+            <button onClick={() => downloadBlob(compsToCSV({ ...s, _ppsf: null, _price: purchasePrice(s), _saleYear: purchaseDate(s) }, data.comps), `comp-sheet-${(s.address || "subject").replace(/[^a-z0-9]+/gi, "-")}.csv`, "text/csv")}
+              className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>
+            <button onClick={() => window.print()} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>⎙ PRINT / PDF</button>
+          </>}
+        </div>
+        {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
+        <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
+          Comps are nearby {assetType === "any" ? "" : assetType + " "}properties that traded in the lookback window, with $/SF from the recorded ACRIS price ÷ PLUTO building area. Rent comps populate via live web research (REBNY / brokerage reports) once Vercel Pro is on.
+        </div>
+      </div>
+
+      {/* The tear sheet */}
+      {data && (
+        <div id="compsheet" style={{ marginTop: 18, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 24, color: C.ivory }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: `2px solid ${C.gold}`, paddingBottom: 10 }}>
+            <div>
+              <div className="serif" style={{ fontSize: 22, fontWeight: 600, letterSpacing: "0.03em" }}>FRONTAGE<span style={{ color: C.gold }}>.</span></div>
+              <div className="mono" style={{ fontSize: 9.5, color: C.gold, letterSpacing: "0.2em", marginTop: 3 }}>RETAIL COMPARABLE ANALYSIS</div>
+            </div>
+            <div className="mono" style={{ fontSize: 10, color: C.muted, textAlign: "right" }}>{new Date().toLocaleDateString()}<br />{data.comps.length} comps · {radius} mi · ≤{lookback}y</div>
+          </div>
+
+          {/* Subject */}
+          <div style={{ marginTop: 16 }}>
+            <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", marginBottom: 8 }}>SUBJECT PROPERTY</div>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>{s.address || "—"}</div>
+            <div style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>{[s.borough, s.doc_type && `class ${s.doc_type}`].filter(Boolean).join(" · ")}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, auto 1fr)", gap: "4px 14px", marginTop: 12 }}>
+              {kv("Owner", s.name || "—")}
+              {kv("Building SF", s.bldg_sqft ? Number(s.bldg_sqft).toLocaleString() : "—")}
+              {kv("Retail SF", s.retail_sqft ? Number(s.retail_sqft).toLocaleString() : "—")}
+              {kv("Lot SF", s.lot_sqft ? Number(s.lot_sqft).toLocaleString() : "—")}
+              {kv("Year built", s.year_built || "—")}
+              {kv("Frontage", s.frontage_ft ? `${s.frontage_ft} ft` : "—")}
+              {kv("Zoning", s.zoning || "—")}
+              {kv("Assessed", assessedValue(s) != null ? fmtAmount(assessedValue(s)) : "—")}
+              {kv("Last sale", purchasePrice(s) != null && purchasePrice(s) !== "" ? `${fmtAmount(purchasePrice(s))}${purchaseDate(s) ? ` (${purchaseDate(s)})` : ""}` : "—")}
+              {kv("Implied value", st.implied != null ? `${fmtAmount(Math.round(st.implied))}` : "—")}
+            </div>
+          </div>
+
+          {/* Stats band */}
+          <div style={{ display: "flex", gap: 0, marginTop: 18, border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden" }}>
+            {[["COMPS", st.count], ["AVG $/SF", st.avg != null ? `$${Math.round(st.avg).toLocaleString()}` : "—"], ["MEDIAN $/SF", st.median != null ? `$${Math.round(st.median).toLocaleString()}` : "—"], ["RANGE $/SF", st.min != null ? `$${Math.round(st.min).toLocaleString()}–${Math.round(st.max).toLocaleString()}` : "—"]].map(([k, v], i) => (
+              <div key={k} style={{ flex: 1, padding: "10px 12px", borderLeft: i ? `1px solid ${C.line}` : "none", background: C.ink }}>
+                <div className="mono" style={{ fontSize: 9, color: C.muted, letterSpacing: "0.12em" }}>{k}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, marginTop: 3 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Comps table */}
+          <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "18px 0 8px" }}>SALES COMPARABLES</div>
+          {data.comps.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: C.muted }}>No recorded retail sales in this radius and window. Try a wider radius or longer lookback.</div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>
+                {["#", "Address", "Sold", "Price", "Bldg SF", "$/SF", "Yr", "Dist"].map((h, i) => <th key={h} style={{ ...cell, color: C.muted, fontWeight: 600, textAlign: i >= 3 && i <= 5 ? "right" : "left" }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {data.comps.map((c, i) => (
+                  <tr key={c.deal_id || i}>
+                    <td style={{ ...cell, color: C.muted }}>{i + 1}</td>
+                    <td style={cell}>{c.address}</td>
+                    <td style={cell}>{c._saleYear}</td>
+                    <td style={numCell}>{fmtAmount(c._price)}</td>
+                    <td style={numCell}>{Number(c.bldg_sqft).toLocaleString()}</td>
+                    <td style={{ ...numCell, fontWeight: 700, color: C.gold }}>${Math.round(c._ppsf).toLocaleString()}</td>
+                    <td style={numCell}>{c.year_built || "—"}</td>
+                    <td style={numCell}>{c.distance != null ? Number(c.distance).toFixed(2) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {/* Rent comps */}
+          <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "20px 0 8px" }}>RENT COMPARABLES <span style={{ color: C.muted }}>(asking · corridor)</span></div>
+          {rent.state === "idle" && (
+            <div style={{ fontSize: 12.5, color: C.muted }}>
+              <button className="no-print" onClick={pullRent} style={{ cursor: "pointer", fontSize: 12, padding: "7px 13px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>✦ Pull rent context</button>
+              <span style={{ marginLeft: 10 }}>Synthesizes corridor asking rents from REBNY + brokerage reports. Live web on Pro; on the current plan it answers from model knowledge and flags what needs live web.</span>
+            </div>
+          )}
+          {rent.state === "loading" && <div className="mono" style={{ fontSize: 11, color: C.gold }}>▸ pulling rent context…</div>}
+          {rent.state === "error" && <div style={{ fontSize: 12.5, color: C.red }}>{rent.err}</div>}
+          {rent.state === "done" && <ResearchBriefBody text={rent.text} />}
+
+          <div style={{ marginTop: 18, paddingTop: 10, borderTop: `1px solid ${C.line}`, fontSize: 9.5, color: C.muted, lineHeight: 1.5 }}>
+            Sources: NYC ACRIS (recorded sale prices) + PLUTO (building areas) for sales comps; rent comps via published market reports. $/SF = recorded deed price ÷ PLUTO gross building area; recorded prices can include non-arm's-length transfers — verify outliers. Asking rents are not effective/in-place rents. For internal underwriting use.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

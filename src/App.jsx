@@ -964,7 +964,7 @@ function miniMd(text) {
     return bullet ? `<li>${c}</li>` : `<p>${c}</p>`;
   }).join("");
 }
-function onePagerHTML(s, comps, st, meta, rentText, highlights, notes) {
+function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedBy) {
   const money = (a) => (a == null || a === "" ? "—" : "$" + Number(a).toLocaleString());
   const num = (a) => (a == null || a === "" ? "—" : Number(a).toLocaleString());
   const ppsf = (a) => (a == null ? "—" : "$" + Math.round(a).toLocaleString());
@@ -1020,7 +1020,7 @@ function onePagerHTML(s, comps, st, meta, rentText, highlights, notes) {
 <div class="bar"><button onclick="window.print()">Print / Save as PDF</button></div>
 <div class="page">
   <div class="head">
-    <h1>Retail Comparable Analysis</h1>
+    <div><h1>Retail Comparable Analysis</h1>${preparedBy && preparedBy.trim() ? `<div style="font-size:11px;color:#666;margin-top:3px">Prepared by ${escHtml(preparedBy)}</div>` : ""}</div>
     <div class="meta">${new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}<br/>${comps.length} comps · ${escHtml(meta.radius)} mi · ≤${escHtml(meta.lookback)}y</div>
   </div>
 
@@ -1070,8 +1070,12 @@ function CompSheet({ pw }) {
   const [error, setError] = useState("");
   const [data, setData] = useState(null); // { subject, comps, stats }
   const [rent, setRent] = useState({ state: "idle", text: "", err: "" });
+  const [sales, setSales] = useState({ state: "idle", text: "", err: "" });
   const [notes, setNotes] = useState("");
   const [drafting, setDrafting] = useState(false);
+  const [sortBy, setSortBy] = useState("recent"); // recent | ppsf | price
+  const [preparedBy, setPreparedBy] = useState(() => { try { return localStorage.getItem("fr_prepared_by") || ""; } catch { return ""; } });
+  const setPrepared = (t) => { setPreparedBy(t); try { localStorage.setItem("fr_prepared_by", t); } catch { /* quota */ } };
 
   // Persist analyst notes per subject (BBL) so they survive a re-generate / reload.
   const NOTES_STORE = "fr_comp_notes_v1";
@@ -1098,7 +1102,7 @@ function CompSheet({ pw }) {
 
   const generate = async () => {
     if (!picked) { setError("Pick an address from the dropdown so I have exact coordinates."); return; }
-    setLoading(true); setError(""); setData(null); setRent({ state: "idle", text: "", err: "" });
+    setLoading(true); setError(""); setData(null); setRent({ state: "idle", text: "", err: "" }); setSales({ state: "idle", text: "", err: "" });
     try {
       const res = await postJSON("/api/source", {
         password: pw, sources: ["pluto"], assetType, radiusMiles: radius || "0.25",
@@ -1108,9 +1112,14 @@ function CompSheet({ pw }) {
       const subject = leads.find((l) => l.pinned) || leads[0] || null;
       if (!subject) { setError("Couldn't load the subject property. Try another address."); setLoading(false); return; }
       const cutoff = new Date().getFullYear() - Number(lookback || 7);
+      // Accuracy guards: a recorded deed price must clear a floor (drops $0/$10/nominal
+      // intra-LLC transfers that aren't real sales) and the resulting $/SF must be sane
+      // (drops non-arm's-length deeds that would skew the average). Tunable.
+      const MIN_PRICE = 100000, MIN_PPSF = 25, MAX_PPSF = 60000;
       const comps = leads
         .filter((l) => !l.pinned && l.last_sale_price && l.bldg_sqft && l.last_sale_date && Number(String(l.last_sale_date).slice(0, 4)) >= cutoff)
         .map((l) => ({ ...l, _ppsf: ppsfOf(l), _price: l.last_sale_price, _saleYear: String(l.last_sale_date).slice(0, 4) }))
+        .filter((c) => c._price >= MIN_PRICE && c._ppsf != null && c._ppsf >= MIN_PPSF && c._ppsf <= MAX_PPSF)
         .sort((a, b) => (b._saleYear || "").localeCompare(a._saleYear || ""));
       const ppsfs = comps.map((c) => c._ppsf).filter((x) => x != null && isFinite(x));
       const avg = ppsfs.length ? ppsfs.reduce((s, x) => s + x, 0) / ppsfs.length : null;
@@ -1134,6 +1143,28 @@ function CompSheet({ pw }) {
       const d = await postJSON("/api/research", { mode: "web", password: pw, query: q });
       setRent({ state: "done", text: d.brief || "No rent context found.", err: "" });
     } catch (e) { setRent({ state: "error", text: "", err: e.message || "Rent lookup failed." }); }
+  };
+
+  // Live-web sale comps (Pro): real reported transaction prices from news/public sources,
+  // to verify/augment the recorded ACRIS figures and catch sales records miss.
+  const pullSales = async () => {
+    if (!data) return;
+    setSales({ state: "loading", text: "", err: "" });
+    try {
+      const where = [data.subject.address, data.subject.borough].filter(Boolean).join(", ");
+      const q = `Find RECENT reported commercial/retail building SALES near ${where} (within ~0.25 mile, last ~5 years). For each, give the address, sale price, sale date, and building size or $/SF if reported, and CITE the source (The Real Deal, Commercial Observer, public records, broker release). List them SORTED BY PRICE (highest first). Only include sales you actually find with a source — do not estimate or invent prices.`;
+      const d = await postJSON("/api/research", { mode: "web", password: pw, query: q });
+      setSales({ state: "done", text: d.brief || "No reported sales found.", err: "" });
+    } catch (e) { setSales({ state: "error", text: "", err: e.message || "Sales lookup failed." }); }
+  };
+
+  // Re-sort comps for display without refetching.
+  const sortComps = (arr) => {
+    const a = [...arr];
+    if (sortBy === "ppsf") a.sort((x, y) => (y._ppsf || 0) - (x._ppsf || 0));
+    else if (sortBy === "price") a.sort((x, y) => (y._price || 0) - (x._price || 0));
+    else a.sort((x, y) => (y._saleYear || "").localeCompare(x._saleYear || ""));
+    return a;
   };
 
   const s = data && data.subject;
@@ -1178,17 +1209,28 @@ function CompSheet({ pw }) {
             {loading ? "BUILDING…" : "■ GENERATE COMP SHEET"}
           </button>
           {data && <>
-            <button onClick={() => downloadBlob(compsToCSV({ ...s, _ppsf: null, _price: purchasePrice(s), _saleYear: purchaseDate(s) }, data.comps), `comp-sheet-${(s.address || "subject").replace(/[^a-z0-9]+/gi, "-")}.csv`, "text/csv")}
+            <button onClick={() => downloadBlob(compsToCSV({ ...s, _ppsf: null, _price: purchasePrice(s), _saleYear: purchaseDate(s) }, sortComps(data.comps)), `comp-sheet-${(s.address || "subject").replace(/[^a-z0-9]+/gi, "-")}.csv`, "text/csv")}
               className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>
             <button onClick={() => {
-              const html = onePagerHTML(s, data.comps, data.stats, { radius, lookback, assetType }, rent.state === "done" ? rent.text : "", siteHighlights(s), notes);
+              const html = onePagerHTML(s, sortComps(data.comps), data.stats, { radius, lookback, assetType }, rent.state === "done" ? rent.text : "", siteHighlights(s), notes, preparedBy);
               const w = window.open("", "_blank");
               if (!w) { setError("Allow pop-ups for this site to open the one-pager."); return; }
               w.document.open(); w.document.write(html); w.document.close();
             }} className="mono lift" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>⤓ ONE-PAGER</button>
             <button onClick={() => window.print()} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>⎙ PRINT</button>
+            <label className="mono" style={{ marginLeft: "auto", fontSize: 11, color: C.muted, display: "flex", alignItems: "center", gap: 6 }}>SORT
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={{ ...fieldStyle, padding: "6px 8px", fontSize: 12 }}>
+                {[["recent", "Most recent"], ["price", "Price (high→low)"], ["ppsf", "$/SF (high→low)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select></label>
           </>}
         </div>
+        {data && (
+          <div style={{ marginTop: 10 }}>
+            <div className="mono" style={labelStyle}>PREPARED BY (optional — your name / firm)</div>
+            <input value={preparedBy} onChange={(e) => setPrepared(e.target.value)} placeholder="e.g. Jordan Avery · Avery Retail Advisory"
+              style={{ ...fieldStyle, width: "100%", marginTop: 4, maxWidth: 420 }} />
+          </div>
+        )}
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
           Comps are nearby {assetType === "any" ? "" : assetType + " "}properties that traded in the lookback window, with $/SF from the recorded ACRIS price ÷ PLUTO building area. Rent comps populate via live web research (REBNY / brokerage reports) once Vercel Pro is on.
@@ -1199,7 +1241,10 @@ function CompSheet({ pw }) {
       {data && (
         <div id="compsheet" style={{ marginTop: 18, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 24, color: C.ivory }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: `2px solid ${C.ivory}`, paddingBottom: 10 }}>
-            <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.01em" }}>Retail Comparable Analysis</div>
+            <div>
+              <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.01em" }}>Retail Comparable Analysis</div>
+              {preparedBy.trim() && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>Prepared by {preparedBy}</div>}
+            </div>
             <div className="mono" style={{ fontSize: 10, color: C.muted, textAlign: "right" }}>{new Date().toLocaleDateString()}<br />{data.comps.length} comps · {radius} mi · ≤{lookback}y</div>
           </div>
 
@@ -1252,7 +1297,7 @@ function CompSheet({ pw }) {
                 {["#", "Address", "Sold", "Price", "Bldg SF", "$/SF", "Yr", "Dist"].map((h, i) => <th key={h} style={{ ...cell, color: C.muted, fontWeight: 600, textAlign: i >= 3 && i <= 5 ? "right" : "left" }}>{h}</th>)}
               </tr></thead>
               <tbody>
-                {data.comps.map((c, i) => (
+                {sortComps(data.comps).map((c, i) => (
                   <tr key={c.deal_id || i}>
                     <td style={{ ...cell, color: C.muted }}>{i + 1}</td>
                     <td style={cell}>{c.address}</td>
@@ -1289,6 +1334,18 @@ function CompSheet({ pw }) {
           {rent.state === "loading" && <div className="mono" style={{ fontSize: 11, color: C.gold }}>▸ pulling rent context…</div>}
           {rent.state === "error" && <div style={{ fontSize: 12.5, color: C.red }}>{rent.err}</div>}
           {rent.state === "done" && <ResearchBriefBody text={rent.text} />}
+
+          {/* Online market sales — verifies/augments the recorded comps with reported deals (live web on Pro) */}
+          <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "20px 0 8px" }}>MARKET SALES <span style={{ color: C.muted }}>(reported · online)</span></div>
+          {sales.state === "idle" && (
+            <div style={{ fontSize: 12.5, color: C.muted }}>
+              <button className="no-print" onClick={pullSales} style={{ cursor: "pointer", fontSize: 12, padding: "7px 13px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>✦ Pull market sales</button>
+              <span style={{ marginLeft: 10 }}>Finds recently reported nearby sales (price, date, source) and sorts by price — the online cross-check for the recorded comps above. Live web on Pro.</span>
+            </div>
+          )}
+          {sales.state === "loading" && <div className="mono" style={{ fontSize: 11, color: C.gold }}>▸ searching reported sales…</div>}
+          {sales.state === "error" && <div style={{ fontSize: 12.5, color: C.red }}>{sales.err}</div>}
+          {sales.state === "done" && <ResearchBriefBody text={sales.text} />}
 
           <div style={{ marginTop: 18, paddingTop: 10, borderTop: `1px solid ${C.line}`, fontSize: 9.5, color: C.muted, lineHeight: 1.5 }}>
             Sources: NYC ACRIS (recorded sale prices) + PLUTO (building areas) for sales comps; rent comps via published market reports. $/SF = recorded deed price ÷ PLUTO gross building area; recorded prices can include non-arm's-length transfers — verify outliers. Asking rents are not effective/in-place rents. For internal underwriting use.

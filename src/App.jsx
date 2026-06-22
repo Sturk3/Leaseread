@@ -754,6 +754,7 @@ const TOOL_ROUTES = {
   sales_comps: { url: "/api/comps", label: "Pulling sale comps", body: (a) => ({ borough: a.borough, block: a.block }) },
   web_research: { url: "/api/research", label: "Researching owner", body: (a) => ({ mode: "web", name: a.name, address: a.address, borough: a.borough }) },
   web_search: { url: "/api/research", label: "Searching the web", body: (a) => ({ mode: "web", query: a.query }) },
+  search_ct_properties: { url: "/api/ctsource", label: "Searching Greenwich / CT", body: (a) => ({ town: a.town || "Greenwich", propertyType: a.propertyType, minPrice: a.minPrice, maxPrice: a.maxPrice, sinceYear: a.sinceYear, address: a.address }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
   reveal_contact: { url: "/api/skiptrace", label: "Revealing contact", paid: true, body: (a) => ({ name: a.name, entity_type: a.entity_type, contact_address: a.contact_address, city: a.city, state: a.state, zip: a.zip, address: a.address, borough: a.borough }) },
 };
@@ -782,6 +783,10 @@ function shapeResult(name, data) {
     const leads = (data.leads || []).slice(0, 25).map(pickLeadFields);
     const n = leads.length;
     return { forModel: { count: data.counts?.deals ?? n, center: data.center, leads }, uiSummary: `${n} propert${n === 1 ? "y" : "ies"}` };
+  }
+  if (name === "search_ct_properties") {
+    const props = (data.properties || []).slice(0, 30);
+    return { forModel: { count: data.count, town: data.town, note: data.note, properties: props }, uiSummary: `${data.count || 0} in ${data.town || "CT"}` };
   }
   if (name === "reveal_contact") {
     if (data.noKey) return { forModel: data, uiSummary: "skip-trace not configured" };

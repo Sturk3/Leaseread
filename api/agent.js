@@ -114,6 +114,26 @@ const TOOLS = [
     },
   },
   {
+    name: "search_ct_properties",
+    description:
+      "Source properties in CONNECTICUT towns (default Greenwich) from CT's public real-estate sale records. Returns address, " +
+      "SALE PRICE, assessed value, sale/assessment ratio, property type, sale date, and lat/lon — filterable by type, price, " +
+      "year, and street. Use this for Greenwich/CT sourcing (the NYC tools don't apply outside the city). NOTE: this source has " +
+      "NO owner names or building SF — once you have a property, use web_research to identify the owner and reach them. " +
+      "Commercial/retail trades are sparse in CT (a handful a year), so don't over-filter.",
+    input_schema: {
+      type: "object",
+      properties: {
+        town: { type: "string", description: "CT town name, e.g. 'Greenwich' (default), 'Darien', 'Westport'." },
+        propertyType: { type: "string", enum: ["any", "commercial", "apartments", "industrial", "single_family", "residential", "condo", "vacant"], description: "Property type filter. Use 'commercial' for retail/office (CT lumps retail under Commercial)." },
+        minPrice: { type: "number", description: "Minimum sale price." },
+        maxPrice: { type: "number", description: "Maximum sale price." },
+        sinceYear: { type: "number", description: "Only sales from this grand-list year onward, e.g. 2020." },
+        address: { type: "string", description: "Filter to a street, e.g. 'GREENWICH AVENUE'." },
+      },
+    },
+  },
+  {
     name: "web_search",
     description:
       "General web search — like a normal assistant with live web access. Pass ANY natural-language question or research " +
@@ -173,6 +193,10 @@ WHAT YOU DO
 - Default thesis when unspecified: trophy / high-street RETAIL. If the user names another asset type or neighborhood, follow that.
 - Always begin a sourcing task with search_properties. Use its borough/block/lot, owner name, mailing address, and lat/lon to drive the follow-on tools (property_intel, transaction_history, foot_traffic, owner/hidden portfolio, web_research).
 
+"MARKETS — NYC vs CONNECTICUT
+- NEW YORK CITY: use the full structured stack (search_properties + property_intel + transaction_history + portfolios + foot_traffic + sales_comps). Owners come straight from the public records.
+- GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there. Use search_ct_properties for sale records (price, assessed value, type, location) — but it has NO owner names or building SF, so once you find a property, use web_research to identify the owner and how to reach them. CT commercial/retail trades are sparse, so keep filters loose and lean on web_research for depth. For any other US market, lean on web_search / web_research entirely.
+
 "WHO OWNS THIS + HOW TO REACH THEM" (a top use case — given an address, find the owner, their portfolio, and institutional contacts on the web)
 - NYC address: get the owner of record cheaply first via search_properties (free public records), then web_research to unmask the parent/management firm + principals, map the portfolio, and pull publicly-listed institutional contacts (main/leasing/acquisitions lines and emails) from the company's own website. Add owner_portfolio / hidden_portfolio to widen the holdings picture.
 - Non-NYC address: web_research alone works the whole chain — it will identify the owner FROM the address, then portfolio + contacts.
@@ -207,7 +231,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v4-screener" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v5-ct" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

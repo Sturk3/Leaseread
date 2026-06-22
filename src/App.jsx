@@ -936,6 +936,24 @@ const ppsfOf = (r) => (r.last_sale_price && r.bldg_sqft ? r.last_sale_price / r.
 // Builds a STANDALONE, branded HTML document (its own light theme + print CSS) and
 // opens it in a new tab — so the export looks like a designed tear sheet, not a
 // screenshot of the app. The user saves it to PDF from the print dialog.
+// Auto investment highlights derived from the subject's PLUTO attributes — the
+// trophy-retail value drivers (frontage, landmark, air rights, zoning, owner signals).
+function siteHighlights(s) {
+  const h = [];
+  if (s.frontage_ft) h.push(`${s.frontage_ft} ft of building frontage${Number(s.frontage_ft) >= 25 ? " — strong high-street presence" : ""}`);
+  if (s.retail_sqft) h.push(`${Number(s.retail_sqft).toLocaleString()} SF of ground-floor retail`);
+  if (s.bldg_sqft) h.push(`${Number(s.bldg_sqft).toLocaleString()} SF building${s.num_floors ? ` across ${s.num_floors} floor${Number(s.num_floors) === 1 ? "" : "s"}` : ""}`);
+  if (s.landmark || s.hist_district) h.push(`Landmarked / historic district — protected facade and trophy permanence`);
+  if (s.special_district) h.push(`Within the ${s.special_district} special district (signage / use overlay)`);
+  if (s.overlay) h.push(`Commercial overlay ${s.overlay} — retail use as-of-right`);
+  else if (s.zoning) h.push(`Zoned ${s.zoning}`);
+  if (s.buildable_sqft && Number(s.buildable_sqft) >= 2500) h.push(`~${Number(s.buildable_sqft).toLocaleString()} SF of unused air rights — expansion / development upside`);
+  if (s.year_built && Number(s.year_built) < 1940) h.push(`Prewar construction (built ${s.year_built})`);
+  if (s.years_owned != null && Number(s.years_owned) >= 15) h.push(`Held ${s.years_owned}+ years by the current owner — potential off-market seller`);
+  if (s.absentee) h.push(`${s.absentee === "out-of-state" ? "Out-of-state" : "Out-of-area"} owner — approachable off-market`);
+  if (s.tax_lien) h.push(`Tax lien on record — possible distress / motivation`);
+  return h;
+}
 const escHtml = (x) => String(x ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function miniMd(text) {
   return String(text || "").split("\n").map((line) => {
@@ -946,70 +964,67 @@ function miniMd(text) {
     return bullet ? `<li>${c}</li>` : `<p>${c}</p>`;
   }).join("");
 }
-function onePagerHTML(s, comps, st, meta, rentText) {
+function onePagerHTML(s, comps, st, meta, rentText, highlights, notes) {
   const money = (a) => (a == null || a === "" ? "—" : "$" + Number(a).toLocaleString());
   const num = (a) => (a == null || a === "" ? "—" : Number(a).toLocaleString());
   const ppsf = (a) => (a == null ? "—" : "$" + Math.round(a).toLocaleString());
   const compRows = comps.map((c, i) => `<tr>
       <td class="muted">${i + 1}</td><td>${escHtml(c.address)}</td><td>${escHtml(c._saleYear)}</td>
       <td class="r">${money(c._price)}</td><td class="r">${num(c.bldg_sqft)}</td>
-      <td class="r accent b">${ppsf(c._ppsf)}</td><td class="r">${c.year_built || "—"}</td>
+      <td class="r b">${ppsf(c._ppsf)}</td><td class="r">${c.year_built || "—"}</td>
       <td class="r">${c.distance != null ? Number(c.distance).toFixed(2) : "—"}</td></tr>`).join("");
   const kv = (k, v) => `<div class="kv"><span class="kl">${k}</span><span class="kvv">${v}</span></div>`;
   const stat = (k, v) => `<div class="stat"><div class="sk">${k}</div><div class="sv">${v}</div></div>`;
   const lastSale = (s.source === "pluto" ? s.last_sale_price : s.amount);
   const lastSaleYr = s.last_sale_date ? String(s.last_sale_date).slice(0, 4) : "";
   const subjHead = escHtml(s.address || "Subject property");
+  const hlBlock = (highlights && highlights.length)
+    ? `<div class="sec">INVESTMENT HIGHLIGHTS</div><ul class="hl">${highlights.map((h) => `<li>${escHtml(h)}</li>`).join("")}</ul>` : "";
+  const notesBlock = (notes && notes.trim())
+    ? `<div class="sec">NOTES &amp; INVESTMENT THESIS</div><div class="notes">${miniMd(notes)}</div>` : "";
   const rentBlock = rentText
-    ? `<div class="sec">RENT COMPARABLES <span class="muted">· asking · corridor</span></div><div class="rent">${miniMd(rentText)}</div>`
-    : "";
+    ? `<div class="sec">RENT COMPARABLES (asking · corridor)</div><div class="notes">${miniMd(rentText)}</div>` : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>FRONTAGE — Comp Sheet — ${subjHead}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<title>Retail Comparable Analysis — ${subjHead}</title>
 <style>
-  :root{ --ink:#1b1930; --muted:#6c6982; --line:#e5e3f1; --accent:#6a5cf6; --soft:#f4f3fb; --paper:#ffffff; }
   *{ box-sizing:border-box; }
-  body{ margin:0; background:#edecf6; color:var(--ink); font-family:Archivo,system-ui,sans-serif; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  .page{ max-width:820px; margin:24px auto; background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:40px 44px; box-shadow:0 6px 30px rgba(27,25,48,.08); }
-  .bar{ position:sticky; top:0; background:#edecf6; padding:12px 0; text-align:center; }
-  .bar button{ font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.05em; cursor:pointer; padding:9px 18px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; }
-  .head{ display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid var(--accent); padding-bottom:14px; }
-  .wm{ font-family:Fraunces,Georgia,serif; font-size:30px; font-weight:600; letter-spacing:.02em; }
-  .wm span{ color:var(--accent); }
-  .eyebrow{ font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.22em; color:var(--accent); margin-top:6px; }
-  .meta{ font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--muted); text-align:right; line-height:1.6; }
-  .sec{ font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:.16em; color:var(--accent); margin:26px 0 12px; }
-  .subj{ font-size:22px; font-weight:700; font-family:Fraunces,Georgia,serif; }
-  .subline{ color:var(--muted); font-size:12.5px; margin-top:3px; }
-  .grid{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px 26px; margin-top:16px; }
-  .kv{ display:flex; flex-direction:column; gap:1px; border-bottom:1px solid var(--line); padding-bottom:6px; }
-  .kl{ font-size:10px; letter-spacing:.04em; color:var(--muted); text-transform:uppercase; }
-  .kvv{ font-size:14px; font-weight:600; }
-  .stats{ display:flex; gap:0; margin-top:22px; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
-  .stat{ flex:1; padding:14px 16px; background:var(--soft); }
-  .stat+.stat{ border-left:1px solid var(--line); }
-  .sk{ font-family:'IBM Plex Mono',monospace; font-size:9px; letter-spacing:.12em; color:var(--muted); }
-  .sv{ font-size:20px; font-weight:700; margin-top:5px; font-family:Fraunces,Georgia,serif; }
-  table{ width:100%; border-collapse:collapse; margin-top:4px; }
-  th{ text-align:left; font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); border-bottom:2px solid var(--line); padding:8px 10px; }
-  td{ font-size:12.5px; padding:9px 10px; border-bottom:1px solid var(--line); }
-  tbody tr:nth-child(even){ background:#faf9fe; }
-  .r{ text-align:right; font-family:'IBM Plex Mono',monospace; } th.r{ text-align:right; }
-  .accent{ color:var(--accent); } .b{ font-weight:700; } .muted{ color:var(--muted); }
-  .rent p{ font-size:12.5px; line-height:1.6; margin:4px 0; } .rent li{ font-size:12.5px; line-height:1.6; margin:3px 0 3px 18px; } .rent strong{ color:var(--ink); }
-  .foot{ margin-top:24px; padding-top:12px; border-top:1px solid var(--line); font-size:9.5px; color:var(--muted); line-height:1.55; }
-  @media print{ body{ background:#fff; } .bar{ display:none; } .page{ margin:0; border:none; border-radius:0; box-shadow:none; padding:0 6px; } @page{ margin:14mm; } }
+  body{ margin:0; background:#f3f3f3; color:#1a1a1a; font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .page{ max-width:800px; margin:20px auto; background:#fff; border:1px solid #ddd; padding:38px 40px; }
+  .bar{ text-align:center; padding:10px 0; }
+  .bar button{ font-size:13px; cursor:pointer; padding:8px 18px; border:1px solid #888; background:#fff; color:#1a1a1a; border-radius:4px; }
+  h1{ font-size:18px; font-weight:700; margin:0; letter-spacing:.01em; }
+  .head{ border-bottom:2px solid #1a1a1a; padding-bottom:10px; display:flex; justify-content:space-between; align-items:flex-end; }
+  .meta{ font-size:11px; color:#666; text-align:right; line-height:1.6; }
+  .sec{ font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#1a1a1a; margin:24px 0 10px; border-bottom:1px solid #ccc; padding-bottom:4px; }
+  .subj{ font-size:18px; font-weight:700; }
+  .subline{ color:#666; font-size:12px; margin-top:2px; }
+  .grid{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px 24px; margin-top:14px; }
+  .kv{ display:flex; flex-direction:column; gap:1px; border-bottom:1px solid #eee; padding-bottom:5px; }
+  .kl{ font-size:10px; letter-spacing:.03em; color:#888; text-transform:uppercase; }
+  .kvv{ font-size:13.5px; font-weight:600; }
+  .stats{ display:flex; margin-top:18px; border:1px solid #ddd; }
+  .stat{ flex:1; padding:12px 14px; }
+  .stat+.stat{ border-left:1px solid #ddd; }
+  .sk{ font-size:9px; letter-spacing:.08em; color:#888; text-transform:uppercase; }
+  .sv{ font-size:18px; font-weight:700; margin-top:4px; }
+  ul.hl{ margin:0; padding-left:20px; } ul.hl li{ font-size:12.5px; line-height:1.55; margin:4px 0; }
+  table{ width:100%; border-collapse:collapse; }
+  th{ text-align:left; font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#888; border-bottom:1.5px solid #999; padding:7px 9px; }
+  td{ font-size:12.5px; padding:8px 9px; border-bottom:1px solid #eee; }
+  .r{ text-align:right; } th.r{ text-align:right; } .b{ font-weight:700; } .muted{ color:#999; }
+  .notes p{ font-size:12.5px; line-height:1.6; margin:4px 0; } .notes li{ font-size:12.5px; line-height:1.6; margin:3px 0 3px 18px; }
+  .foot{ margin-top:22px; padding-top:10px; border-top:1px solid #ddd; font-size:9.5px; color:#888; line-height:1.55; }
+  @media print{ body{ background:#fff; } .bar{ display:none; } .page{ margin:0; border:none; padding:0; } @page{ margin:16mm; } }
 </style></head><body>
 <div class="bar"><button onclick="window.print()">Print / Save as PDF</button></div>
 <div class="page">
   <div class="head">
-    <div><div class="wm">FRONTAGE<span>.</span></div><div class="eyebrow">RETAIL COMPARABLE ANALYSIS</div></div>
-    <div class="meta">${new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}<br/>${comps.length} comps · ${escHtml(meta.radius)} mi · ≤${escHtml(meta.lookback)}y · ${escHtml(meta.assetType)}</div>
+    <h1>Retail Comparable Analysis</h1>
+    <div class="meta">${new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}<br/>${comps.length} comps · ${escHtml(meta.radius)} mi · ≤${escHtml(meta.lookback)}y</div>
   </div>
 
-  <div class="sec">SUBJECT PROPERTY</div>
+  <div class="sec">Subject property</div>
   <div class="subj">${subjHead}</div>
   <div class="subline">${escHtml([s.borough, s.doc_type && ("class " + s.doc_type)].filter(Boolean).join(" · "))}</div>
   <div class="grid">
@@ -1024,21 +1039,24 @@ function onePagerHTML(s, comps, st, meta, rentText) {
     ${kv("Last sale", lastSale ? money(lastSale) + (lastSaleYr ? " (" + lastSaleYr + ")" : "") : "—")}
   </div>
 
+  ${hlBlock}
+
   <div class="stats">
-    ${stat("COMPS", st.count)}
-    ${stat("AVG $/SF", st.avg != null ? "$" + Math.round(st.avg).toLocaleString() : "—")}
-    ${stat("MEDIAN $/SF", st.median != null ? "$" + Math.round(st.median).toLocaleString() : "—")}
-    ${stat("IMPLIED VALUE", st.implied != null ? "$" + Math.round(st.implied).toLocaleString() : "—")}
+    ${stat("Comps", st.count)}
+    ${stat("Avg $/SF", st.avg != null ? "$" + Math.round(st.avg).toLocaleString() : "—")}
+    ${stat("Median $/SF", st.median != null ? "$" + Math.round(st.median).toLocaleString() : "—")}
+    ${stat("Implied value", st.implied != null ? "$" + Math.round(st.implied).toLocaleString() : "—")}
   </div>
 
-  <div class="sec">SALES COMPARABLES</div>
+  <div class="sec">Sales comparables</div>
   ${comps.length ? `<table><thead><tr>
     <th>#</th><th>Address</th><th>Sold</th><th class="r">Price</th><th class="r">Bldg SF</th><th class="r">$/SF</th><th class="r">Yr</th><th class="r">Dist</th>
   </tr></thead><tbody>${compRows}</tbody></table>` : `<p class="muted" style="font-size:12.5px">No recorded sales in this radius and window.</p>`}
 
+  ${notesBlock}
   ${rentBlock}
 
-  <div class="foot">Sources: NYC ACRIS (recorded sale prices) + PLUTO (building areas). $/SF = recorded deed price ÷ PLUTO gross building area; implied value = average $/SF × subject building area. Recorded prices can include non-arm's-length transfers — verify outliers. Asking rents are not effective/in-place rents. Prepared by FRONTAGE for internal underwriting use.</div>
+  <div class="foot">Sources: NYC ACRIS (recorded sale prices) + PLUTO (building areas). $/SF = recorded deed price ÷ PLUTO gross building area; implied value = average $/SF × subject building area. Recorded prices can include non-arm's-length transfers — verify outliers. Asking rents are not effective/in-place rents. For internal underwriting use.</div>
 </div></body></html>`;
 }
 
@@ -1052,6 +1070,31 @@ function CompSheet({ pw }) {
   const [error, setError] = useState("");
   const [data, setData] = useState(null); // { subject, comps, stats }
   const [rent, setRent] = useState({ state: "idle", text: "", err: "" });
+  const [notes, setNotes] = useState("");
+  const [drafting, setDrafting] = useState(false);
+
+  // Persist analyst notes per subject (BBL) so they survive a re-generate / reload.
+  const NOTES_STORE = "fr_comp_notes_v1";
+  const loadCompNote = (bbl) => { try { return (JSON.parse(localStorage.getItem(NOTES_STORE) || "{}"))[bbl] || ""; } catch { return ""; } };
+  const updateNotes = (t) => {
+    setNotes(t);
+    try { const all = JSON.parse(localStorage.getItem(NOTES_STORE) || "{}"); const bbl = data && data.subject.deal_id; if (bbl) { if (t) all[bbl] = t; else delete all[bbl]; localStorage.setItem(NOTES_STORE, JSON.stringify(all)); } } catch { /* quota */ }
+  };
+
+  // Have Claude draft a short "why it's attractive" thesis from the subject's own
+  // attributes (reasoning over the data — works now in knowledge mode, web on Pro).
+  const draftThesis = async () => {
+    if (!data || drafting) return;
+    setDrafting(true);
+    try {
+      const hi = siteHighlights(s).join("; ");
+      const q = `Write a concise investment thesis — 3 to 4 tight bullet points, no fluff — for why this NYC retail property is an attractive acquisition target. Ground it ONLY in these facts: Address ${s.address}, ${s.borough}. Attributes: ${hi || "n/a"}. Building ${s.bldg_sqft ? Number(s.bldg_sqft).toLocaleString() + " SF" : "size n/a"}${s.year_built ? `, built ${s.year_built}` : ""}. Focus on trophy / high-street retail value drivers (frontage, location, retail SF, air rights, zoning, owner motivation). Do not invent facts not given.`;
+      const d = await postJSON("/api/research", { mode: "web", password: pw, query: q });
+      const brief = (d.brief || "").trim();
+      if (brief) updateNotes(notes ? `${notes}\n\n${brief}` : brief);
+    } catch (e) { setError(e.message || "Draft failed."); }
+    finally { setDrafting(false); }
+  };
 
   const generate = async () => {
     if (!picked) { setError("Pick an address from the dropdown so I have exact coordinates."); return; }
@@ -1077,6 +1120,7 @@ function CompSheet({ pw }) {
         implied: avg && subject.bldg_sqft ? avg * subject.bldg_sqft : null,
       };
       setData({ subject, comps, stats });
+      setNotes(loadCompNote(subject.deal_id));
     } catch (e) { setError(e.message || "Something went wrong."); }
     finally { setLoading(false); }
   };
@@ -1101,7 +1145,7 @@ function CompSheet({ pw }) {
   return (
     <div style={{ marginTop: 22 }}>
       {/* print rules: when printing, show only the comp sheet */}
-      <style>{`@media print { body * { visibility: hidden !important; } #compsheet, #compsheet * { visibility: visible !important; } #compsheet { position: absolute; left: 0; top: 0; width: 100%; } .no-print { display: none !important; } }`}</style>
+      <style>{`.cs-print-only{ display:none; } @media print { body * { visibility: hidden !important; } #compsheet, #compsheet * { visibility: visible !important; } #compsheet { position: absolute; left: 0; top: 0; width: 100%; } .no-print { display: none !important; } .cs-print-only { display: block !important; } }`}</style>
 
       {/* Controls */}
       <div className="no-print" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
@@ -1137,7 +1181,7 @@ function CompSheet({ pw }) {
             <button onClick={() => downloadBlob(compsToCSV({ ...s, _ppsf: null, _price: purchasePrice(s), _saleYear: purchaseDate(s) }, data.comps), `comp-sheet-${(s.address || "subject").replace(/[^a-z0-9]+/gi, "-")}.csv`, "text/csv")}
               className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>
             <button onClick={() => {
-              const html = onePagerHTML(s, data.comps, data.stats, { radius, lookback, assetType }, rent.state === "done" ? rent.text : "");
+              const html = onePagerHTML(s, data.comps, data.stats, { radius, lookback, assetType }, rent.state === "done" ? rent.text : "", siteHighlights(s), notes);
               const w = window.open("", "_blank");
               if (!w) { setError("Allow pop-ups for this site to open the one-pager."); return; }
               w.document.open(); w.document.write(html); w.document.close();
@@ -1154,11 +1198,8 @@ function CompSheet({ pw }) {
       {/* The tear sheet */}
       {data && (
         <div id="compsheet" style={{ marginTop: 18, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 24, color: C.ivory }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: `2px solid ${C.gold}`, paddingBottom: 10 }}>
-            <div>
-              <div className="serif" style={{ fontSize: 22, fontWeight: 600, letterSpacing: "0.03em" }}>FRONTAGE<span style={{ color: C.gold }}>.</span></div>
-              <div className="mono" style={{ fontSize: 9.5, color: C.gold, letterSpacing: "0.2em", marginTop: 3 }}>RETAIL COMPARABLE ANALYSIS</div>
-            </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: `2px solid ${C.ivory}`, paddingBottom: 10 }}>
+            <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.01em" }}>Retail Comparable Analysis</div>
             <div className="mono" style={{ fontSize: 10, color: C.muted, textAlign: "right" }}>{new Date().toLocaleDateString()}<br />{data.comps.length} comps · {radius} mi · ≤{lookback}y</div>
           </div>
 
@@ -1180,6 +1221,16 @@ function CompSheet({ pw }) {
               {kv("Implied value", st.implied != null ? `${fmtAmount(Math.round(st.implied))}` : "—")}
             </div>
           </div>
+
+          {/* Investment highlights (auto from PLUTO attributes) */}
+          {siteHighlights(s).length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", marginBottom: 8 }}>INVESTMENT HIGHLIGHTS</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {siteHighlights(s).map((t, i) => <li key={i} style={{ fontSize: 12.5, lineHeight: 1.6, marginBottom: 3 }}>{t}</li>)}
+              </ul>
+            </div>
+          )}
 
           {/* Stats band */}
           <div style={{ display: "flex", gap: 0, marginTop: 18, border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden" }}>
@@ -1216,6 +1267,16 @@ function CompSheet({ pw }) {
               </tbody>
             </table>
           )}
+
+          {/* Notes / investment thesis — editable, persisted, and printed */}
+          <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "20px 0 8px" }}>NOTES · INVESTMENT THESIS</div>
+          <textarea className="no-print" value={notes} onChange={(e) => updateNotes(e.target.value)} rows={Math.max(3, notes.split("\n").length)}
+            placeholder="Why is this site attractive? Add your thesis, or click ✦ Draft to have Claude propose one from the property's attributes…"
+            style={{ width: "100%", resize: "vertical", fontFamily: "Archivo, sans-serif", fontSize: 12.5, lineHeight: 1.6, color: C.ivory, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px" }} />
+          <div className="no-print" style={{ marginTop: 6 }}>
+            <button onClick={draftThesis} disabled={drafting} style={{ cursor: drafting ? "default" : "pointer", fontSize: 11.5, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: drafting ? 0.5 : 1 }}>{drafting ? "▸ drafting…" : "✦ Draft thesis"}</button>
+          </div>
+          {notes.trim() && <div className="cs-print-only" style={{ fontSize: 12.5, lineHeight: 1.6, whiteSpace: "pre-wrap", marginTop: 4 }}>{notes}</div>}
 
           {/* Rent comps */}
           <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "20px 0 8px" }}>RENT COMPARABLES <span style={{ color: C.muted }}>(asking · corridor)</span></div>

@@ -329,8 +329,8 @@ export default function App() {
                 : "Source owners & deals from NYC public records — ACRIS · DOB · PLUTO."}
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              {/* Hidden tabs (re-add the entry to restore; components + api endpoints left intact): Lease Radar (2026-06-17), NDA Review (2026-06-22, 60s timeout), Skip Trace standalone tab (2026-06-22, not needed — ContactReveal still lives in the dossier). */}
-              {[["agent", "✦ AGENT"], ["screener", "SCREENER"], ["sourcing", "SOURCING"], ["comps", "COMP SHEET"]].map(([v, lab]) => (
+              {/* Hidden tabs (re-add the entry to restore; components + api endpoints left intact): Lease Radar (2026-06-17), NDA Review (2026-06-22, 60s timeout), Skip Trace standalone (2026-06-22, in dossier), Screener (2026-06-22, OM grading now lives in Scout via grade_offering_memo; ⚙ GRADING CRITERIA editor moved to the Agent view). */}
+              {[["agent", "✦ AGENT"], ["sourcing", "SOURCING"], ["comps", "COMP SHEET"]].map(([v, lab]) => (
                 <button key={v} onClick={() => setView(v)} className="mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "6px 13px", borderRadius: 7, border: `1px solid ${view === v ? C.gold : C.line}`, background: view === v ? C.goldSoft : "transparent", color: view === v ? C.gold : C.muted }}>
                   {lab}
@@ -339,7 +339,7 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-            {view === "screener" && (
+            {(view === "screener" || view === "agent") && (
               <button onClick={() => setShowSettings((s) => !s)} className="mono lift"
                 style={{ cursor: "pointer", fontSize: 12, padding: "7px 14px", borderRadius: 7, border: `1px solid ${showSettings ? C.gold : C.line}`, background: showSettings ? C.goldSoft : C.panel, color: showSettings ? C.gold : C.ivory }}>
                 ⚙ GRADING CRITERIA
@@ -351,7 +351,10 @@ export default function App() {
           </div>
         </div>
 
-        {view === "agent" && <AgentChat pw={pw} />}
+        {view === "agent" && <>
+          {showSettings && <Settings config={config} setConfig={setConfig} presets={presets} setPresets={setPresets} onClose={() => setShowSettings(false)} />}
+          <AgentChat pw={pw} config={config} />
+        </>}
 
         {view === "comps" && <CompSheet pw={pw} />}
 
@@ -730,6 +733,7 @@ const TOOL_ROUTES = {
   sales_comps: { url: "/api/comps", label: "Pulling sale comps", body: (a) => ({ borough: a.borough, block: a.block }) },
   web_research: { url: "/api/research", label: "Researching owner", body: (a) => ({ mode: "web", name: a.name, address: a.address, borough: a.borough }) },
   web_search: { url: "/api/research", label: "Searching the web", body: (a) => ({ mode: "web", query: a.query }) },
+  grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
   reveal_contact: { url: "/api/skiptrace", label: "Revealing contact", paid: true, body: (a) => ({ name: a.name, entity_type: a.entity_type, contact_address: a.contact_address, city: a.city, state: a.state, zip: a.zip, address: a.address, borough: a.borough }) },
 };
 
@@ -774,13 +778,23 @@ const AGENT_EXAMPLES = [
   "Scout SoHo for trophy retail with maturing debt or tax liens and rank the best targets",
 ];
 
-function AgentChat({ pw }) {
+function AgentChat({ pw, config }) {
   const [log, setLog] = useState([]);        // render transcript
   const [convo, setConvo] = useState([]);    // raw Anthropic-format messages
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [attachedPdf, setAttachedPdf] = useState(null); // { name, data } — an offering memo to grade
   const idRef = useRef(0);
   const scrollRef = useRef(null);
+  const fileRef = useRef(null);
+
+  const onAttach = (f) => {
+    if (!f) return;
+    if (f.type !== "application/pdf") { setLog((l) => [...l, { kind: "error", text: "Please attach a PDF (offering memorandum)." }]); return; }
+    const reader = new FileReader();
+    reader.onload = () => setAttachedPdf({ name: f.name, data: reader.result.split(",")[1] });
+    reader.readAsDataURL(f);
+  };
 
   useEffect(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, [log, busy]);
 
@@ -792,8 +806,18 @@ function AgentChat({ pw }) {
   const updateTool = (id, status, detail) => setLog((l) => l.map((e) => (e.id === id ? { ...e, status, detail } : e)));
 
   const runTool = async (name, inputArgs) => {
+    // Offering-memo grading: feed the attached PDF (or pasted text) + the firm's active
+    // mandate to the screener endpoint. Handled here because it isn't a simple body map.
+    if (name === "grade_offering_memo") {
+      let body;
+      if (attachedPdf) body = { password: pw, mode: "pdf", pdfData: attachedPdf.data, config };
+      else if (inputArgs.memo_text) body = { password: pw, mode: "text", memoText: inputArgs.memo_text, config };
+      else return { forModel: { error: "No offering memo provided — ask the user to attach the OM PDF (📎) or paste its text." }, uiSummary: "no OM" };
+      const data = await postJSON("/api/screen", body);
+      return { forModel: data, uiSummary: attachedPdf ? `graded ${attachedPdf.name}` : "graded OM" };
+    }
     const route = TOOL_ROUTES[name];
-    if (!route) return { forModel: { error: `Unknown tool ${name}` }, uiSummary: "unknown tool" };
+    if (!route || !route.url) return { forModel: { error: `Unknown tool ${name}` }, uiSummary: "unknown tool" };
     if (route.paid) {
       const ok = typeof window !== "undefined" && window.confirm(`This runs a PAID skip trace (~$0.10, billed only on a match) for ${inputArgs.name || "this owner"}. Proceed?`);
       if (!ok) return { forModel: { declined: true, note: "User declined the paid skip trace." }, uiSummary: "declined" };
@@ -834,16 +858,18 @@ function AgentChat({ pw }) {
   };
 
   const send = async (preset) => {
-    const text = (preset ?? input).trim();
+    let text = (preset ?? input).trim();
+    if (!text && attachedPdf) text = "Grade the attached offering memorandum against our buy-box mandate.";
     if (!text || busy) return;
     setInput("");
-    const messages = [...convo, { role: "user", content: [{ type: "text", text }] }];
+    const note = attachedPdf ? `\n\n[The user has attached an offering memorandum PDF: ${attachedPdf.name}. Use grade_offering_memo to grade it.]` : "";
+    const messages = [...convo, { role: "user", content: [{ type: "text", text: text + note }] }];
     setConvo(messages);
-    setLog((l) => [...l, { kind: "user", text }]);
+    setLog((l) => [...l, { kind: "user", text: attachedPdf ? `${text}  📎 ${attachedPdf.name}` : text }]);
     setBusy(true);
     try { await runLoop(messages); }
     catch (e) { setLog((l) => [...l, { kind: "error", text: e.message }]); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setAttachedPdf(null); }
   };
 
   const reset = () => { setLog([]); setConvo([]); };
@@ -854,7 +880,7 @@ function AgentChat({ pw }) {
         {log.length === 0 && !busy && (
           <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
             <div style={{ color: C.ivory, fontWeight: 600, marginBottom: 8 }}>Hi — I'm Scout. ✦</div>
-            Ask me to source owners, read a property, check distress, map a portfolio, or research who's behind an LLC. I'll run the right engines and give you the read. Try:
+            Ask me to source owners, read a property, check distress, map a portfolio, research who's behind an LLC, or grade an offering memo (📎 attach the PDF). I'll run the right engines and give you the read. Try:
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
               {AGENT_EXAMPLES.map((ex) => (
                 <button key={ex} onClick={() => send(ex)} className="lift" style={{ textAlign: "left", cursor: "pointer", fontSize: 12.5, padding: "10px 13px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.ink, color: C.ivory }}>{ex}</button>
@@ -889,18 +915,27 @@ function AgentChat({ pw }) {
         {busy && <div className="mono" style={{ fontSize: 11, color: C.gold, marginTop: 10 }}>▸ Scout is working…</div>}
       </div>
 
+      {attachedPdf && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 12, color: C.ivory, background: C.goldSoft, border: `1px solid ${C.gold}40`, borderRadius: 8, padding: "7px 11px", width: "fit-content" }}>
+          📎 {attachedPdf.name} <span style={{ color: C.muted }}>· offering memo to grade</span>
+          <span onClick={() => setAttachedPdf(null)} style={{ cursor: "pointer", color: C.muted, marginLeft: 4 }}>✕</span>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <input ref={fileRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => { onAttach(e.target.files[0]); e.target.value = ""; }} />
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={busy} title="Attach an offering memorandum PDF to grade"
+          className="mono lift" style={{ cursor: busy ? "default" : "pointer", fontSize: 14, padding: "0 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory }}>📎</button>
         <input
           value={input} onChange={(e) => setInput(e.target.value)} disabled={busy}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder="Ask Scout to source, screen, or research…"
+          placeholder="Ask Scout to source, screen, research, or grade an attached OM…"
           style={{ flex: 1, fontSize: 14, padding: "12px 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory }} />
-        <button onClick={() => send()} disabled={busy || !input.trim()} className="mono lift"
-          style={{ cursor: busy || !input.trim() ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 9, border: `1px solid ${C.gold}`, background: busy || !input.trim() ? C.panel : C.goldSoft, color: C.gold, opacity: busy || !input.trim() ? 0.5 : 1 }}>SEND</button>
+        <button onClick={() => send()} disabled={busy || (!input.trim() && !attachedPdf)} className="mono lift"
+          style={{ cursor: busy || (!input.trim() && !attachedPdf) ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 9, border: `1px solid ${C.gold}`, background: busy || (!input.trim() && !attachedPdf) ? C.panel : C.goldSoft, color: C.gold, opacity: busy || (!input.trim() && !attachedPdf) ? 0.5 : 1 }}>SEND</button>
         {log.length > 0 && <button onClick={reset} disabled={busy} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "0 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: "transparent", color: C.muted }}>NEW</button>}
       </div>
       <div style={{ fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>
-        Scout runs your live engines (ACRIS · PLUTO · DOB · HPD · NY registry · foot traffic · AI research). Contact reveals are a paid skip trace and always ask first.
+        Scout runs your live engines (ACRIS · PLUTO · DOB · HPD · NY registry · foot traffic · AI research) and grades offering memos against your buy-box (📎 attach a PDF · ⚙ edit criteria above). Contact reveals are a paid skip trace and always ask first.
       </div>
     </div>
   );

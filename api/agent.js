@@ -129,6 +129,19 @@ const TOOLS = [
     },
   },
   {
+    name: "grade_offering_memo",
+    description:
+      "Underwrite & grade an OFFERING MEMORANDUM (OM) against the firm's buy-box mandate. Extracts the financials and tenant " +
+      "roster, scores each criterion, and returns a Pursue / Watch / Pass read. Use when the user wants a deal screened or an OM " +
+      "graded. The user can ATTACH the OM as a PDF (preferred) — if so you don't need memo_text; otherwise pass the pasted text.",
+    input_schema: {
+      type: "object",
+      properties: {
+        memo_text: { type: "string", description: "The offering memorandum text, if pasted. Omit when a PDF is attached." },
+      },
+    },
+  },
+  {
     name: "reveal_contact",
     description:
       "PAID skip trace (~$0.10 per match, billed only on a hit) — returns the owner's phone numbers + emails. " +
@@ -170,6 +183,9 @@ HOW TO REASON ABOUT MOTIVATION (the firm's wedge = finding off-market motivated 
 - For INSTITUTIONAL / named owners (REITs, developers, management cos): use web_research to identify the decision-maker and acquisitions/dispositions contact.
 - For anonymous single-asset LLCs: use property_intel to surface named HPD officers, then hidden_portfolio to map the human's other buildings.
 
+DEAL SCREENING (offering memos)
+- If the user attaches an offering memorandum PDF (or pastes one) and wants it underwritten/graded, call grade_offering_memo. It scores the deal against the firm's saved buy-box and returns extracted financials, the tenant roster, per-criterion scores, and a Pursue/Watch/Pass recommendation. Lead with the recommendation and the few drivers that moved it; flag any missing/low-confidence figures rather than glossing them.
+
 CONTACTS — COST DISCIPLINE
 - reveal_contact is a PAID skip trace (~$0.10 per match). Call it ONLY when the user explicitly asks to get an owner's phone/contact for a specific property, and one at a time — never speculatively or across a whole list. When you do, say plainly it's a paid lookup. For institutional owners prefer web_research (free) first.
 
@@ -191,7 +207,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v3-owner" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v4-screener" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

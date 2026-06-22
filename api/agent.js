@@ -116,19 +116,20 @@ const TOOLS = [
   {
     name: "search_ct_properties",
     description:
-      "Source properties in CONNECTICUT towns (default Greenwich) from CT's public real-estate sale records. Returns address, " +
-      "SALE PRICE, assessed value, sale/assessment ratio, property type, sale date, and lat/lon — filterable by type, price, " +
-      "year, and street. Use this for Greenwich/CT sourcing (the NYC tools don't apply outside the city). NOTE: this source has " +
-      "NO owner names or building SF — once you have a property, use web_research to identify the owner and reach them. " +
-      "Commercial/retail trades are sparse in CT (a handful a year), so don't over-filter.",
+      "Source properties in CONNECTICUT towns (default Greenwich) from CT's statewide Parcel + assessor (CAMA) data. Returns the " +
+      "OWNER of record + mailing address (absentee owners flagged), property address, use, zoning, assessed value, building SF, " +
+      "frontage, year built, and latest sale (price/date/grantee). Filter by type, assessed-value range, sold-since year, min SF, " +
+      "and street. Use for Greenwich/CT sourcing (NYC tools don't apply outside the city). For an owner LLC, follow with " +
+      "ct_entity_lookup (principals) and/or web_research (contacts).",
     input_schema: {
       type: "object",
       properties: {
         town: { type: "string", description: "CT town name, e.g. 'Greenwich' (default), 'Darien', 'Westport'." },
-        propertyType: { type: "string", enum: ["any", "commercial", "apartments", "industrial", "single_family", "residential", "condo", "vacant"], description: "Property type filter. Use 'commercial' for retail/office (CT lumps retail under Commercial)." },
-        minPrice: { type: "number", description: "Minimum sale price." },
-        maxPrice: { type: "number", description: "Maximum sale price." },
-        sinceYear: { type: "number", description: "Only sales from this grand-list year onward, e.g. 2020." },
+        propertyType: { type: "string", enum: ["any", "commercial", "apartments", "industrial", "single_family", "residential", "condo", "vacant"], description: "Use filter. 'commercial' covers retail/office." },
+        minPrice: { type: "number", description: "Minimum ASSESSED value." },
+        maxPrice: { type: "number", description: "Maximum ASSESSED value." },
+        minSqft: { type: "number", description: "Minimum building square footage." },
+        sinceYear: { type: "number", description: "Only properties whose latest sale was this year or later." },
         address: { type: "string", description: "Filter to a street, e.g. 'GREENWICH AVENUE'." },
       },
     },
@@ -207,7 +208,7 @@ WHAT YOU DO
 
 "MARKETS — NYC vs CONNECTICUT
 - NEW YORK CITY: use the full structured stack (search_properties + property_intel + transaction_history + portfolios + foot_traffic + sales_comps). Owners come straight from the public records.
-- GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there. Use search_ct_properties for sale records (price, assessed value, type, location) — it has NO owner names or building SF, so use web_research to identify the owner LLC. Once you have an entity/LLC name, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations), so it's the fast way to find the real people behind a CT owner before reaching for paid web research. CT commercial trades are sparse, so keep filters loose. For any other US market, lean on web_search / web_research entirely.
+- GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there, but CT's statewide parcel+assessor data does. Use search_ct_properties — it returns the OWNER of record + mailing (absentee flagged), building SF, value, and latest sale. For an owner LLC, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations) — then web_research for contacts. The data has owners, so you rarely need paid web research just to find who owns it. CT commercial inventory is modest, so keep filters loose. For any other US market, lean on web_search / web_research entirely.
 
 "WHO OWNS THIS + HOW TO REACH THEM" (a top use case — given an address, find the owner, their portfolio, and institutional contacts on the web)
 - NYC address: get the owner of record cheaply first via search_properties (free public records), then web_research to unmask the parent/management firm + principals, map the portfolio, and pull publicly-listed institutional contacts (main/leasing/acquisitions lines and emails) from the company's own website. Add owner_portfolio / hidden_portfolio to widen the holdings picture.
@@ -246,7 +247,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v7-ctentity" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v8-ctcama" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

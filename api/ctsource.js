@@ -1,101 +1,95 @@
-// FRONTAGE — Connecticut sourcing (Greenwich and other CT towns).
+// FRONTAGE — Connecticut sourcing (Greenwich + any CT town), now on the STATEWIDE
+// PARCEL + CAMA dataset (data.ct.gov) — Connecticut's equivalent of NYC's PLUTO.
 //
-// NYC's engines (ACRIS/PLUTO/DOB) don't exist outside the city, so this is the CT
-// equivalent built on Connecticut's FREE open data: the statewide "Real Estate Sales"
-// dataset on data.ct.gov (Socrata, no key). For a town (default Greenwich) it returns
-// properties that have traded — address, SALE PRICE, assessed value, sale/assessment
-// ratio, property type, sale date, and lat/lon — filterable by type, price, and year.
-//
-// IMPORTANT: this dataset has NO owner names or building SF (CT doesn't publish those
-// freely). Owner of record + contacts come from Scout's web research (web_research),
-// which is exactly the agreed combo for thin-data markets. Password-gated like the rest.
+// Unlike the sales-only feed, CAMA gives, per parcel: OWNER of record + mailing address
+// (so absentee owners surface), property address, use/zoning, assessed value, building
+// square footage, frontage, year built, units, and the most recent sale (price + date +
+// grantee). That's near-NYC parity for sourcing. Password-gated, no key.
 
 const CT_BASE = "https://data.ct.gov/resource";
-const CT_SALES = process.env.CT_SALES_DATASET || "5mzw-sjtu"; // Real Estate Sales (statewide)
+const CT_CAMA = process.env.CT_CAMA_DATASET || "rny9-6ak2"; // 2025 CT Parcel + CAMA
 
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
 const toNum = (v) => { if (v == null || v === "") return null; const n = Number(String(v).replace(/[$,]/g, "")); return Number.isFinite(n) ? n : null; };
+const addr = (parts) => parts.map(clean).filter(Boolean).join(", ");
 
 async function fetchSocrata(dataset, params) {
   const token = process.env.SOCRATA_APP_TOKEN;
-  const qs = new URLSearchParams(params);
-  const r = await fetch(`${CT_BASE}/${dataset}.json?${qs}`, token ? { headers: { "X-App-Token": token } } : {});
+  const r = await fetch(`${CT_BASE}/${dataset}.json?${new URLSearchParams(params)}`, token ? { headers: { "X-App-Token": token } } : {});
   if (!r.ok) return [];
   return r.json().catch(() => []);
 }
 
-// CT property types in the dataset: Single Family, Residential, Condo, Two/Three/Four
-// Family, Commercial, Apartments, Vacant Land, Industrial. Map a friendly request.
-const TYPE_MAP = {
-  any: null, commercial: "Commercial", retail: "Commercial", office: "Commercial",
-  apartments: "Apartments", multifamily: "Apartments", industrial: "Industrial",
-  single_family: "Single Family", residential: "Residential", condo: "Condo", vacant: "Vacant Land",
+// Friendly type -> a token to LIKE-match against CAMA's state_use_description.
+const USE_PATTERN = {
+  any: null, commercial: "COMMERCIAL", retail: "RETAIL", office: "OFFICE",
+  apartments: "APARTMENT", multifamily: "APARTMENT", industrial: "INDUSTRIAL",
+  condo: "CONDOMINIUM", single_family: "SINGLE", residential: "RESIDENTIAL", vacant: "VACANT",
 };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, town, propertyType, minPrice, maxPrice, sinceYear, address, limit, check, debug } = req.body || {};
+    const { password, town, propertyType, minPrice, maxPrice, sinceYear, address, minSqft, limit, check, debug } = req.body || {};
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "ctsource-v1", dataset: CT_SALES });
+    if (debug) return res.status(200).json({ ok: true, build: "ctsource-v2-cama", dataset: CT_CAMA });
 
     const townName = clean(town) || "Greenwich";
-    const where = [`upper(town)='${townName.toUpperCase().replace(/'/g, "''")}'`];
+    const where = [`upper(property_city)='${townName.toUpperCase().replace(/'/g, "''")}'`];
 
     const typeKey = clean(propertyType).toLowerCase().replace(/[\s/-]+/g, "_");
-    const mapped = typeKey in TYPE_MAP ? TYPE_MAP[typeKey] : (propertyType ? clean(propertyType) : null);
-    if (mapped) where.push(`propertytype='${mapped.replace(/'/g, "''")}'`);
+    const pat = typeKey in USE_PATTERN ? USE_PATTERN[typeKey] : (propertyType ? clean(propertyType).toUpperCase() : null);
+    if (pat) where.push(`upper(state_use_description) like '%${pat.replace(/'/g, "''")}%'`);
+    if (address) where.push(`upper(location) like '%${clean(address).toUpperCase().replace(/'/g, "''")}%'`);
 
-    if (sinceYear) where.push(`listyear>='${Number(sinceYear)}'`);
-    if (address) where.push(`upper(address) like '%${clean(address).toUpperCase().replace(/'/g, "''")}%'`);
-
-    // Fetch newest first; price-filter in JS (saleamount is stored as text in places, so a
-    // numeric SoQL comparison isn't reliable — same lesson as ACRIS document_amt).
-    const rows = await fetchSocrata(CT_SALES, {
+    // Biggest assessed value first (trophy-friendly); price/SF/year filtered in JS since
+    // CAMA stores numbers as text and dates as M/D/YYYY strings.
+    const rows = await fetchSocrata(CT_CAMA, {
       $where: where.join(" AND "),
-      $order: "daterecorded DESC",
+      $order: "assessed_total DESC",
       $limit: 2000,
     });
 
-    const lo = toNum(minPrice), hi = toNum(maxPrice);
+    const lo = toNum(minPrice), hi = toNum(maxPrice), minSf = toNum(minSqft);
+    const yr = toNum(sinceYear);
     const cap = Math.min(Number(limit) || 100, 500);
-    const properties = [];
-    const seen = new Set();
+    const out = [];
     for (const r of rows) {
-      const price = toNum(r.saleamount);
-      if (lo != null && (price == null || price < lo)) continue;
-      if (hi != null && (price == null || price > hi)) continue;
-      const addr = clean(r.address);
-      const dt = clean(r.daterecorded).slice(0, 10);
-      const key = `${addr}|${dt}`;
-      if (seen.has(key)) continue; // de-dupe re-recorded sales
-      seen.add(key);
-      const coords = (r.geo_coordinates && r.geo_coordinates.coordinates) || null;
-      properties.push({
-        address: addr,
-        town: clean(r.town),
-        sale_amount: price,
-        assessed_value: toNum(r.assessedvalue),
-        sales_ratio: toNum(r.salesratio),
-        sale_date: dt,
-        list_year: clean(r.listyear),
-        property_type: clean(r.propertytype),
-        residential_type: clean(r.residentialtype) || "",
-        lat: coords ? coords[1] : null,
-        lon: coords ? coords[0] : null,
-        maps_url: coords ? `https://www.google.com/maps/search/?api=1&query=${coords[1]},${coords[0]}` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr + ", " + clean(r.town) + " CT")}`,
+      const assessed = toNum(r.assessed_total);
+      if (lo != null && (assessed == null || assessed < lo)) continue;
+      if (hi != null && (assessed == null || assessed > hi)) continue;
+      const sqft = toNum(r.gross_area_of_primary_building);
+      if (minSf != null && (sqft == null || sqft < minSf)) continue;
+      const saleYear = toNum(String(r.sale_date || "").split("/").pop());
+      if (yr != null && (saleYear == null || saleYear < yr)) continue;
+
+      const mState = clean(r.mailing_state).toUpperCase();
+      const mCity = clean(r.mailing_city).toUpperCase();
+      const absentee = mState && mState !== "CT" ? "out-of-state" : (mCity && mCity !== townName.toUpperCase() ? "out-of-area" : null);
+      const property = clean(r.location);
+      out.push({
+        owner: clean(r.owner), co_owner: clean(r.co_owner),
+        mailing: addr([r.mailing_address, r.mailing_city, r.mailing_state, r.mailing_zip]),
+        mailing_city: clean(r.mailing_city), mailing_state: mState, absentee,
+        address: property, town: clean(r.property_city) || townName,
+        use: clean(r.state_use_description), zone: clean(r.zone_description) || clean(r.zone),
+        assessed_value: assessed, appraised_value: toNum(r.appraised_total),
+        building_sqft: sqft, land_acres: toNum(r.land_acres), frontage_ft: toNum(r.parcel_frontage),
+        year_built: toNum(r.ayb), stories: toNum(r.stories), units: toNum(r.number_of_units),
+        sale_price: toNum(r.sale_price), sale_date: clean(r.sale_date), sale_grantee: clean(r.sale_grantee_name),
+        cama_link: clean(r.cama_site_link) || null,
+        maps_url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(property + ", " + townName + " CT")}`,
       });
-      if (properties.length >= cap) break;
+      if (out.length >= cap) break;
     }
 
     return res.status(200).json({
-      count: properties.length,
-      town: townName,
-      note: "Connecticut public sale records (data.ct.gov). No owner name or building SF in this source — identify owners via web research.",
-      properties,
+      count: out.length, town: townName,
+      note: "Connecticut Parcel + CAMA assessor data (data.ct.gov) — owner of record, mailing, building SF, value, and latest sale. Owner LLCs can be unmasked with the CT entity lookup; reach the decision-maker via the AI deep dive.",
+      properties: out,
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "ctsource" });

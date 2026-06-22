@@ -754,7 +754,7 @@ const TOOL_ROUTES = {
   sales_comps: { url: "/api/comps", label: "Pulling sale comps", body: (a) => ({ borough: a.borough, block: a.block }) },
   web_research: { url: "/api/research", label: "Researching owner", body: (a) => ({ mode: "web", name: a.name, address: a.address, borough: a.borough }) },
   web_search: { url: "/api/research", label: "Searching the web", body: (a) => ({ mode: "web", query: a.query }) },
-  search_ct_properties: { url: "/api/ctsource", label: "Searching Greenwich / CT", body: (a) => ({ town: a.town || "Greenwich", propertyType: a.propertyType, minPrice: a.minPrice, maxPrice: a.maxPrice, sinceYear: a.sinceYear, address: a.address }) },
+  search_ct_properties: { url: "/api/ctsource", label: "Searching Greenwich / CT", body: (a) => ({ town: a.town || "Greenwich", propertyType: a.propertyType, minPrice: a.minPrice, maxPrice: a.maxPrice, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
   ct_entity_lookup: { url: "/api/ctentity", label: "CT entity lookup", body: (a) => ({ name: a.name }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
   reveal_contact: { url: "/api/skiptrace", label: "Revealing contact", paid: true, body: (a) => ({ name: a.name, entity_type: a.entity_type, contact_address: a.contact_address, city: a.city, state: a.state, zip: a.zip, address: a.address, borough: a.borough }) },
@@ -1802,7 +1802,7 @@ const CT_TYPE_OPTIONS = [
 ];
 function ctCSV(rows) {
   const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
-  const cols = [["Address", (r) => r.address], ["Town", (r) => r.town], ["Type", (r) => r.property_type], ["Residential type", (r) => r.residential_type], ["Sale price", (r) => r.sale_amount], ["Assessed value", (r) => r.assessed_value], ["Sale/assess ratio", (r) => r.sales_ratio], ["Sale date", (r) => r.sale_date], ["Lat", (r) => r.lat], ["Lon", (r) => r.lon]];
+  const cols = [["Owner", (r) => r.owner], ["Co-owner", (r) => r.co_owner], ["Mailing address", (r) => r.mailing], ["Absentee", (r) => r.absentee || ""], ["Property address", (r) => r.address], ["Town", (r) => r.town], ["Use", (r) => r.use], ["Zone", (r) => r.zone], ["Assessed value", (r) => r.assessed_value], ["Building SF", (r) => r.building_sqft], ["Frontage ft", (r) => r.frontage_ft], ["Year built", (r) => r.year_built], ["Units", (r) => r.units], ["Last sale price", (r) => r.sale_price], ["Last sale date", (r) => r.sale_date]];
   return cols.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => cols.map((c) => esc(c[1](r))).join(",")).join("\n");
 }
 function GreenwichSourcing({ pw }) {
@@ -1810,7 +1810,7 @@ function GreenwichSourcing({ pw }) {
   const [propertyType, setPropertyType] = useState("commercial");
   const [minPrice, setMinPrice] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
-  const [sinceYear, setSinceYear] = useState("2020");
+  const [sinceYear, setSinceYear] = useState("");
   const [streetq, setStreetq] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1846,9 +1846,9 @@ function GreenwichSourcing({ pw }) {
           <label><div className="mono" style={labelStyle}>TOWN</div><input value={town} onChange={(e) => setTown(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="Greenwich" /></label>
           <label><div className="mono" style={labelStyle}>TYPE</div><select value={propertyType} onChange={(e) => setPropertyType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{CT_TYPE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>STREET (optional)</div><input value={streetq} onChange={(e) => setStreetq(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="e.g. GREENWICH AVENUE" /></label>
-          <label><div className="mono" style={labelStyle}>MIN PRICE</div><input type="number" value={minPrice} onChange={(e) => setMinPrice(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="1000000" /></label>
-          <label><div className="mono" style={labelStyle}>MAX PRICE</div><input type="number" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
-          <label><div className="mono" style={labelStyle}>SOLD SINCE (YEAR)</div><input type="number" value={sinceYear} onChange={(e) => setSinceYear(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="2020" /></label>
+          <label><div className="mono" style={labelStyle}>MIN ASSESSED</div><input type="number" value={minPrice} onChange={(e) => setMinPrice(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="1000000" /></label>
+          <label><div className="mono" style={labelStyle}>MAX ASSESSED</div><input type="number" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
+          <label><div className="mono" style={labelStyle}>SOLD SINCE (YEAR)</div><input type="number" value={sinceYear} onChange={(e) => setSinceYear(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
           <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "SEARCHING…" : "◎ SOURCE PROPERTIES"}</button>
@@ -1856,7 +1856,7 @@ function GreenwichSourcing({ pw }) {
         </div>
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
-          Connecticut public sale records (data.ct.gov) — price, assessed value, type, date, location. CT doesn't publish owner names, so use <strong style={{ color: C.ivory }}>▸ AI deep dive</strong> on a property to research the owner &amp; how to reach them. CT commercial trades are sparse — keep filters loose.
+          Connecticut Parcel + assessor data (data.ct.gov) — <strong style={{ color: C.ivory }}>owner of record + mailing</strong> (absentee owners flagged), building SF, assessed value, year built, and latest sale. For an owner LLC, use the <strong style={{ color: C.ivory }}>CT Entity Lookup</strong> below for its principals, or <strong style={{ color: C.ivory }}>▸ AI deep dive</strong> for contacts. Defaults to commercial — set Type to "Any" to widen.
         </div>
       </div>
 
@@ -1899,22 +1899,28 @@ function GreenwichSourcing({ pw }) {
             <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>
-                  {["Address", "Type", "Sale price", "Assessed", "Ratio", "Sold", ""].map((h, i) => <th key={h} style={{ textAlign: i >= 2 && i <= 3 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}
+                  {["Owner", "Property", "Use", "Assessed", "Bldg SF", "Last sale", ""].map((h, i) => <th key={h} style={{ textAlign: i >= 3 && i <= 4 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}
                 </tr></thead>
                 <tbody>
                   {props.map((p, i) => (<React.Fragment key={i}>
                     <tr style={{ borderBottom: `1px solid ${C.line}` }}>
-                      <td style={{ padding: "9px 12px", fontSize: 13 }}><a href={p.maps_url} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{p.address} ↗</a></td>
-                      <td style={{ padding: "9px 12px", fontSize: 12.5, color: C.muted }}>{p.property_type}{p.residential_type ? ` · ${p.residential_type}` : ""}</td>
-                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right", fontWeight: 700 }}>{p.sale_amount ? fmtAmount(p.sale_amount) : "—"}</td>
-                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right", color: C.muted }}>{p.assessed_value ? fmtAmount(p.assessed_value) : "—"}</td>
-                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12, color: C.muted }}>{p.sales_ratio != null ? Number(p.sales_ratio).toFixed(2) : "—"}</td>
-                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>{p.sale_date}</td>
+                      <td style={{ padding: "9px 12px", fontSize: 13, maxWidth: 230 }}>
+                        <div style={{ fontWeight: 700, color: C.ivory }}>{p.owner || "—"}{p.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber, whiteSpace: "nowrap" }}>{p.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}</div>
+                        {p.mailing && <div style={{ color: C.muted, fontSize: 11, marginTop: 1 }}>{p.mailing}</div>}
+                      </td>
+                      <td style={{ padding: "9px 12px", fontSize: 12.5 }}><a href={p.maps_url} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{p.address} ↗</a></td>
+                      <td style={{ padding: "9px 12px", fontSize: 12, color: C.muted }}>{p.use}{p.year_built ? ` · ${p.year_built}` : ""}</td>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right" }}>{p.assessed_value ? fmtAmount(p.assessed_value) : "—"}</td>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right", color: C.muted }}>{p.building_sqft ? Number(p.building_sqft).toLocaleString() : "—"}</td>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>{p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_date ? ` · ${String(p.sale_date).split("/").pop()}` : ""}` : "—"}</td>
                       <td style={{ padding: "9px 12px" }}><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ AI deep dive"}</button></td>
                     </tr>
                     {openIdx === i && (
                       <tr><td colSpan={7} style={{ padding: "0 12px 16px", background: C.ink }}>
-                        <ResearchBrief r={{ name: "", entity_type: "", address: p.address, borough: `${p.town}, CT`, contact_address: "", city: p.town, state: "CT", last_sale_price: p.sale_amount, last_sale_date: p.sale_date, years_owned: null }} pw={pw} />
+                        {p.owner && /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|HOLDINGS|REALTY|PROPERTIES)\b/i.test(p.owner) && (
+                          <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 2px" }}>Tip: this owner looks like an entity — use the <strong style={{ color: C.ivory }}>CT Entity Lookup</strong> above on “{p.owner}” to get its principals, then the AI deep dive for contacts.</div>
+                        )}
+                        <ResearchBrief r={{ name: p.owner || "", entity_type: "", address: p.address, borough: `${p.town}, CT`, contact_address: p.mailing || "", city: p.mailing_city || p.town, state: p.mailing_state || "CT", last_sale_price: p.sale_price, last_sale_date: p.sale_date, years_owned: null }} pw={pw} />
                       </td></tr>
                     )}
                   </React.Fragment>))}
@@ -1927,7 +1933,7 @@ function GreenwichSourcing({ pw }) {
 
       {!props && !loading && (
         <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
-          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>Greenwich sourcing.</span> Structured sale records are the bread and butter — find what's traded by type, price, and street. Then run the <strong style={{ color: C.ivory }}>AI deep dive</strong> on the ones you like to uncover the owner and how to reach them (CT doesn't publish owners, so that's where Scout's web research comes in).
+          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>Greenwich sourcing.</span> Connecticut's statewide parcel + assessor data is the bread and butter — owner of record, mailing (absentee flagged), building SF, value, and last sale, filtered by use, value, and street. For the ones you like: <strong style={{ color: C.ivory }}>CT Entity Lookup</strong> for an LLC's principals, then the <strong style={{ color: C.ivory }}>AI deep dive</strong> for contacts.
         </div>
       )}
     </>

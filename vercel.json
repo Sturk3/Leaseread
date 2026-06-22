@@ -19,7 +19,7 @@
       "maxDuration": 30
     },
     "api/research.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "api/nda.js": {
       "maxDuration": 60

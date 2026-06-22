@@ -74,7 +74,7 @@ export default async function handler(req, res) {
     }
     // Zero-cost deploy/version probe (no Anthropic call). liveWeb reflects the env gate.
     if (req.body && req.body.debug) {
-      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, liveWeb: !!process.env.RESEARCH_LIVE_WEB, build: "v7-scraper" });
+      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, liveWeb: !!process.env.RESEARCH_LIVE_WEB, build: "v8-pro" });
     }
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });

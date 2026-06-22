@@ -561,6 +561,22 @@ async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
     if (!latestByKey[key] || (date || "") > (latestByKey[key].date || "")) latestByKey[key] = { id, date };
   }
 
+  // 3b. How many DISTINCT lots does each latest deed actually convey (across all of
+  // ACRIS, not just our result set)? A deed conveying multiple lots is a PORTFOLIO /
+  // bulk sale — its document_amt is the whole-portfolio price, NOT this one lot's price.
+  // Using it per-lot is what makes a small building look like it sold for $200M. So we
+  // query Legals by the latest document_ids and count lots; multi-lot deeds get no price.
+  const docTotalLots = {};
+  const latestIds = [...new Set(Object.values(latestByKey).map((v) => v.id))];
+  for (const wave of chunk(chunk(latestIds, 75), 6)) {
+    const res = await Promise.all(wave.map((b) =>
+      fetchSocrata(ACRIS_LEGALS, { where: `document_id in (${sodaQuote(b)})`, select: "document_id,block,lot", limit: 5000, appToken }).catch(() => [])));
+    for (const rows of res) for (const r of rows) {
+      const id = clean(r.document_id);
+      (docTotalLots[id] = docTotalLots[id] || new Set()).add(`${r.block}|${r.lot}`);
+    }
+  }
+
   // 4. grantee (buyer) mailing address on each latest deed
   const granteeByDoc = {};
   const latestDocs = [...new Set(Object.values(latestByKey).map((v) => v.id))];
@@ -578,7 +594,16 @@ async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
     const key = keyOf(code, d.block, d.lot);
     dealKey[d.deal_id] = key;
     const v = latestByKey[key];
-    if (v) { d.last_sale_date = v.date || ""; d.last_sale_price = deedAmt[v.id] ?? null; }
+    if (v) {
+      // Single-lot deed → trust its amount as this property's sale price. Multi-lot
+      // (portfolio) deed → the amount is the whole-bundle price, so leave price null
+      // (we still keep the date) rather than report a wildly inflated per-lot figure.
+      const lots = docTotalLots[v.id];
+      const portfolio = lots && lots.size > 1;
+      d.last_sale_date = v.date || "";
+      d.last_sale_price = portfolio ? null : (deedAmt[v.id] ?? null);
+      d.portfolio_sale = !!portfolio;
+    }
   }
   for (const c of contacts) {
     if (c.source !== "pluto") continue;

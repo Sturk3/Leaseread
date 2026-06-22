@@ -74,7 +74,7 @@ export default async function handler(req, res) {
     }
     // Zero-cost deploy/version probe (no Anthropic call). liveWeb reflects the env gate.
     if (req.body && req.body.debug) {
-      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, liveWeb: !!process.env.RESEARCH_LIVE_WEB, build: "v8-pro" });
+      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, liveWeb: process.env.RESEARCH_LIVE_WEB !== "0", build: "v9-live" });
     }
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
@@ -87,8 +87,12 @@ export default async function handler(req, res) {
     // transparently fall back to knowledge mode and Hobby's 60s never times out.
     // ACTIVATION (once on Pro): set RESEARCH_LIVE_WEB=1 + raise research.js maxDuration to
     // 300 in vercel.json + redeploy. No other code change needed.
+    // Live web is now ON by default (the project is on Vercel Pro, so research.js has the
+    // 300s timeout web search needs). To turn it back OFF — e.g. if you downgrade to Hobby
+    // — set env RESEARCH_LIVE_WEB=0 (and drop research.js maxDuration back to 60 in
+    // vercel.json, which Hobby requires).
     const wantWeb = (req.body.mode || "web") !== "knowledge";
-    const useWeb = wantWeb && !!process.env.RESEARCH_LIVE_WEB;
+    const useWeb = wantWeb && process.env.RESEARCH_LIVE_WEB !== "0";
 
     let userText, systemPrompt;
     if (freeQuery) {

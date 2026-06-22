@@ -134,6 +134,18 @@ const TOOLS = [
     },
   },
   {
+    name: "ct_entity_lookup",
+    description:
+      "Look up a Connecticut business entity / LLC in CT's public Business Registry. Returns the entity's status + " +
+      "registration, its registered agent, and — unlike NY — its PRINCIPALS with names and locations. Use this for " +
+      "Greenwich/CT to unmask the real people behind an owner LLC once you know the entity name (FREE, no web search needed).",
+    input_schema: {
+      type: "object",
+      properties: { name: { type: "string", description: "Entity / LLC name, e.g. 'THAGRAND CAPITAL LLC'." } },
+      required: ["name"],
+    },
+  },
+  {
     name: "web_search",
     description:
       "General web search — like a normal assistant with live web access. Pass ANY natural-language question or research " +
@@ -195,7 +207,7 @@ WHAT YOU DO
 
 "MARKETS — NYC vs CONNECTICUT
 - NEW YORK CITY: use the full structured stack (search_properties + property_intel + transaction_history + portfolios + foot_traffic + sales_comps). Owners come straight from the public records.
-- GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there. Use search_ct_properties for sale records (price, assessed value, type, location) — but it has NO owner names or building SF, so once you find a property, use web_research to identify the owner and how to reach them. CT commercial/retail trades are sparse, so keep filters loose and lean on web_research for depth. For any other US market, lean on web_search / web_research entirely.
+- GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there. Use search_ct_properties for sale records (price, assessed value, type, location) — it has NO owner names or building SF, so use web_research to identify the owner LLC. Once you have an entity/LLC name, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations), so it's the fast way to find the real people behind a CT owner before reaching for paid web research. CT commercial trades are sparse, so keep filters loose. For any other US market, lean on web_search / web_research entirely.
 
 "WHO OWNS THIS + HOW TO REACH THEM" (a top use case — given an address, find the owner, their portfolio, and institutional contacts on the web)
 - NYC address: get the owner of record cheaply first via search_properties (free public records), then web_research to unmask the parent/management firm + principals, map the portfolio, and pull publicly-listed institutional contacts (main/leasing/acquisitions lines and emails) from the company's own website. Add owner_portfolio / hidden_portfolio to widen the holdings picture.
@@ -234,7 +246,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v6-cache" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v7-ctentity" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

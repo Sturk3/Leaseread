@@ -38,6 +38,9 @@
     },
     "api/ctsource.js": {
       "maxDuration": 30
+    },
+    "api/ctentity.js": {
+      "maxDuration": 30
     }
   }
 }

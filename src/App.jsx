@@ -755,6 +755,7 @@ const TOOL_ROUTES = {
   web_research: { url: "/api/research", label: "Researching owner", body: (a) => ({ mode: "web", name: a.name, address: a.address, borough: a.borough }) },
   web_search: { url: "/api/research", label: "Searching the web", body: (a) => ({ mode: "web", query: a.query }) },
   search_ct_properties: { url: "/api/ctsource", label: "Searching Greenwich / CT", body: (a) => ({ town: a.town || "Greenwich", propertyType: a.propertyType, minPrice: a.minPrice, maxPrice: a.maxPrice, sinceYear: a.sinceYear, address: a.address }) },
+  ct_entity_lookup: { url: "/api/ctentity", label: "CT entity lookup", body: (a) => ({ name: a.name }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
   reveal_contact: { url: "/api/skiptrace", label: "Revealing contact", paid: true, body: (a) => ({ name: a.name, entity_type: a.entity_type, contact_address: a.contact_address, city: a.city, state: a.state, zip: a.zip, address: a.address, borough: a.borough }) },
 };
@@ -1815,6 +1816,11 @@ function GreenwichSourcing({ pw }) {
   const [error, setError] = useState("");
   const [props, setProps] = useState(null);
   const [openIdx, setOpenIdx] = useState(null);
+  // CT entity (LLC) lookup — who's behind an owner LLC, from CT's business registry.
+  const [entQ, setEntQ] = useState("");
+  const [entLoading, setEntLoading] = useState(false);
+  const [entError, setEntError] = useState("");
+  const [entRes, setEntRes] = useState(null);
 
   const run = async () => {
     setError(""); setProps(null); setOpenIdx(null); setLoading(true);
@@ -1823,6 +1829,14 @@ function GreenwichSourcing({ pw }) {
       setProps(d.properties || []);
     } catch (e) { setError(e.message || "Greenwich sourcing failed."); }
     finally { setLoading(false); }
+  };
+
+  const entRun = async () => {
+    if (!entQ.trim()) return;
+    setEntError(""); setEntRes(null); setEntLoading(true);
+    try { const d = await postJSON("/api/ctentity", { password: pw, name: entQ }); setEntRes(d.entities || []); }
+    catch (e) { setEntError(e.message || "Entity lookup failed."); }
+    finally { setEntLoading(false); }
   };
 
   return (
@@ -1844,6 +1858,38 @@ function GreenwichSourcing({ pw }) {
         <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
           Connecticut public sale records (data.ct.gov) — price, assessed value, type, date, location. CT doesn't publish owner names, so use <strong style={{ color: C.ivory }}>▸ AI deep dive</strong> on a property to research the owner &amp; how to reach them. CT commercial trades are sparse — keep filters loose.
         </div>
+      </div>
+
+      {/* CT entity lookup — who's behind an LLC (CT discloses principals) */}
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, marginTop: 14 }}>
+        <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>CT ENTITY LOOKUP — WHO'S BEHIND AN LLC</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={entQ} onChange={(e) => setEntQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") entRun(); }} placeholder="LLC / company name, e.g. THAGRAND CAPITAL LLC" style={{ ...fieldStyle, flex: 1 }} />
+          <button onClick={entRun} disabled={entLoading} className="mono lift" style={{ cursor: entLoading ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: entLoading ? 0.5 : 1 }}>{entLoading ? "…" : "SEARCH"}</button>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
+          CT's business registry — entity status, registered agent, and (unlike NY) the actual <strong style={{ color: C.ivory }}>principals</strong> with their locations. Search the owner LLC you found via the AI deep dive. Free, no web search.
+        </div>
+        {entError && <div style={{ marginTop: 10, fontSize: 12.5, color: C.red }}>{entError}</div>}
+        {entRes && (
+          <div style={{ marginTop: 12 }}>
+            {entRes.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No CT entity matched “{entQ}”.</div> : entRes.slice(0, 8).map((e, i) => (
+              <div key={i} style={{ borderTop: `1px solid ${C.line}`, padding: "10px 0" }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700 }}>{e.name}<span className="mono" style={{ fontSize: 9.5, padding: "1px 7px", borderRadius: 5, background: e.status === "Active" ? "rgba(31,157,99,0.12)" : C.goldSoft, color: e.status === "Active" ? C.green : C.muted, marginLeft: 8 }}>{e.status || "—"}</span></div>
+                {[e.registered && `Registered ${e.registered}`, e.account_number && `Acct ${e.account_number}`, e.mailing_address].filter(Boolean).length > 0 && (
+                  <div style={{ color: C.muted, fontSize: 11.5, marginTop: 2 }}>{[e.registered && `Registered ${e.registered}`, e.account_number && `Acct ${e.account_number}`, e.mailing_address].filter(Boolean).join(" · ")}</div>
+                )}
+                {e.agent && <div style={{ fontSize: 12, marginTop: 4 }}><span style={{ color: C.muted }}>Agent: </span>{e.agent.name}{e.agent.address ? ` — ${e.agent.address}` : ""}</div>}
+                {e.principals.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <span className="mono" style={{ fontSize: 9.5, color: C.gold, letterSpacing: "0.12em" }}>PRINCIPALS</span>
+                    {e.principals.map((p, j) => (<div key={j} style={{ fontSize: 12.5, marginTop: 2 }}>{p.name}{p.residence_location ? <span style={{ color: C.muted }}> · {p.residence_location}</span> : ""}</div>))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {props && (

@@ -283,6 +283,17 @@ function devFields(row) {
     retail_sqft: toNum(row.retailarea) || null,
     bldg_sqft: toNum(row.bldgarea) || null,
     lot_sqft: lotarea || null,
+    // Floor-area breakdown. NYC public data has NO per-FLOOR square footage; PLUTO
+    // instead splits the building's total floor area by USE. Surface that split plus an
+    // average SF/floor (total ÷ floors) — the closest available to "SF by floor".
+    office_sqft: toNum(row.officearea) || null,
+    res_sqft: toNum(row.resarea) || null,
+    commercial_sqft: toNum(row.comarea) || null,
+    garage_sqft: toNum(row.garagearea) || null,
+    storage_sqft: toNum(row.strgearea) || toNum(row.storagearea) || null,
+    factory_sqft: toNum(row.factryarea) || null,
+    other_sqft: toNum(row.otherarea) || null,
+    avg_floor_sqft: (toNum(row.bldgarea) && toNum(row.numfloors)) ? Math.round(toNum(row.bldgarea) / toNum(row.numfloors)) : null,
     // Trophy-retail fundamentals (all from PLUTO, no extra call):
     //  frontage = linear feet on the street (THE high-street value driver),
     //  commercial overlay = whether retail is permitted, special district = signage/
@@ -483,6 +494,9 @@ function buildLeads(deals, contacts) {
       built_far: d.built_far ?? null, max_far: d.max_far ?? null,
       buildable_sqft: d.buildable_sqft ?? null, underbuilt: d.underbuilt || false,
       retail_sqft: d.retail_sqft ?? null, bldg_sqft: d.bldg_sqft ?? null, lot_sqft: d.lot_sqft ?? null,
+      office_sqft: d.office_sqft ?? null, res_sqft: d.res_sqft ?? null, commercial_sqft: d.commercial_sqft ?? null,
+      garage_sqft: d.garage_sqft ?? null, storage_sqft: d.storage_sqft ?? null, factory_sqft: d.factory_sqft ?? null,
+      other_sqft: d.other_sqft ?? null, avg_floor_sqft: d.avg_floor_sqft ?? null,
       frontage_ft: d.frontage_ft ?? null, num_floors: d.num_floors ?? null, zoning: d.zoning ?? null,
       overlay: d.overlay ?? null, special_district: d.special_district ?? null, landmark: d.landmark ?? null, hist_district: d.hist_district ?? null,
       lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null, pinned: d.pinned || false,

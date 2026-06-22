@@ -1877,7 +1877,7 @@ function LeadRow({ r, last, statusEditor, pw, colSpan, saved, onToggleSave }) {
             <span onClick={() => onToggleSave(r.deal_id)} title={isSaved ? "Saved — click to remove" : "Save to your list"}
               style={{ cursor: "pointer", marginRight: 6, color: isSaved ? C.gold : C.muted, fontSize: 15, userSelect: "none" }}>{isSaved ? "★" : "☆"}</span>
           )}
-          {r.name}
+          <span style={{ fontSize: 15, fontWeight: 700, color: C.ivory, letterSpacing: "0.01em" }}>{r.name || "—"}</span>
           {(r.tax_lien || r.portfolio_count > 1 || r.underbuilt) && (
             <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {r.tax_lien && <span className="mono" style={{ fontSize: 9.5, padding: "1px 6px", borderRadius: 5, background: "rgba(209,74,60,0.12)", color: C.red, whiteSpace: "nowrap" }}>⚑ TAX LIEN</span>}
@@ -2492,6 +2492,24 @@ function PropertyDetail({ r, pw }) {
             <div style={{ color: C.ivory }}>{r.retail_sqft ? `${Number(r.retail_sqft).toLocaleString()} SF` : <span style={{ color: C.muted }}>none recorded</span>}</div>
             <div style={{ color: C.muted }}>Building SF</div>
             <div style={{ color: C.ivory }}>{r.bldg_sqft ? `${Number(r.bldg_sqft).toLocaleString()} SF` : "—"}{r.lot_sqft ? <span style={{ color: C.muted }}> · lot {Number(r.lot_sqft).toLocaleString()} SF</span> : null}</div>
+            {(() => {
+              // Floor-area breakdown by USE (PLUTO has no per-floor SF). Show the non-overlapping
+              // use buckets that are present, plus an average SF/floor (total ÷ floors).
+              const parts = [
+                ["retail", r.retail_sqft], ["office", r.office_sqft], ["residential", r.res_sqft],
+                ["garage", r.garage_sqft], ["storage", r.storage_sqft], ["factory", r.factory_sqft], ["other", r.other_sqft],
+              ].filter(([, sf]) => Number(sf) > 0);
+              if (!parts.length && !r.avg_floor_sqft) return null;
+              return (<>
+                <div style={{ color: C.muted }}>Floor area</div>
+                <div style={{ color: C.ivory }}>
+                  {parts.length ? parts.map(([lab, sf], i) => (
+                    <span key={lab}>{i ? <span style={{ color: C.muted }}> · </span> : null}{Number(sf).toLocaleString()} <span style={{ color: C.muted }}>{lab}</span></span>
+                  )) : <span style={{ color: C.muted }}>not split by use</span>}
+                  {r.avg_floor_sqft ? <span style={{ color: C.muted }}> · ~{Number(r.avg_floor_sqft).toLocaleString()} SF/floor avg</span> : null}
+                </div>
+              </>);
+            })()}
             <div style={{ color: C.muted }}>Assessed value</div>
             <div style={{ color: C.ivory }}>{assessedValue(r) != null ? fmtAmount(assessedValue(r)) : "—"} <span style={{ color: C.muted, fontSize: 11 }}>(City tax assessment)</span></div>
             <div style={{ color: C.muted }}>Purchase price</div>

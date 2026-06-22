@@ -88,8 +88,8 @@ function gradeFrom(result, config) {
 }
 
 const C = {
-  ink: "#f4f4fb", panel: "#ffffff", panel2: "#eceaf7", line: "#e5e3f1",
-  ivory: "#1b1930", muted: "#6c6982", gold: "#6a5cf6", goldSoft: "rgba(106,92,246,0.10)",
+  ink: "#f3f6fd", panel: "#ffffff", panel2: "#e7eef9", line: "#dfe7f3",
+  ivory: "#161b2c", muted: "#606b82", gold: "#2f64e8", goldSoft: "rgba(47,100,232,0.10)",
   green: "#1f9d63", amber: "#b7791f", red: "#d14a3c",
 };
 
@@ -301,13 +301,13 @@ export default function App() {
         .lift:hover { transform: translateY(-1px); border-color: ${C.gold}; }
         input[type=range] { accent-color: ${C.gold}; }
         .addr-opt:hover { background: ${C.goldSoft}; color: ${C.gold}; }
-        .rail-item { position:relative; display:flex; align-items:center; gap:11px; padding:11px 14px; border-radius:9px; font-family:'Hanken Grotesk',sans-serif; font-size:11px; font-weight:400; letter-spacing:1.5px; text-transform:uppercase; color:#B4AEC4; cursor:pointer; border:1px solid transparent; transition:background .2s,color .2s,box-shadow .2s; background:none; width:100%; text-align:left; }
-        .rail-item .ic { width:16px; text-align:center; color:#6E6883; font-size:13px; transition:color .2s; }
-        .rail-item:hover { background:rgba(255,255,255,.05); color:#F4F2FB; }
-        .rail-item:hover .ic { color:#B4AEC4; }
-        .rail-item.active { background:linear-gradient(90deg,rgba(157,139,245,.18),rgba(157,139,245,.07)); color:#D7CDFB; border-color:rgba(157,139,245,.28); box-shadow:0 10px 30px -16px rgba(157,139,245,.9); }
-        .rail-item.active .ic { color:#B6A4FA; }
-        .rail-item.active::before { content:""; position:absolute; left:0; top:50%; transform:translateY(-50%); width:2px; height:18px; border-radius:2px; background:#9D8BF5; box-shadow:0 0 10px rgba(157,139,245,.9); }
+        .rail-item { position:relative; display:flex; align-items:center; gap:11px; padding:11px 14px; border-radius:9px; font-family:'Hanken Grotesk',sans-serif; font-size:11px; font-weight:400; letter-spacing:1.5px; text-transform:uppercase; color:#AAB4CC; cursor:pointer; border:1px solid transparent; transition:background .2s,color .2s,box-shadow .2s; background:none; width:100%; text-align:left; }
+        .rail-item .ic { width:16px; text-align:center; color:#666f88; font-size:13px; transition:color .2s; }
+        .rail-item:hover { background:rgba(255,255,255,.05); color:#F1F4FB; }
+        .rail-item:hover .ic { color:#AAB4CC; }
+        .rail-item.active { background:linear-gradient(90deg,rgba(96,148,250,.18),rgba(96,148,250,.07)); color:#CCDAFB; border-color:rgba(96,148,250,.28); box-shadow:0 10px 30px -16px rgba(96,148,250,.9); }
+        .rail-item.active .ic { color:#94B4FB; }
+        .rail-item.active::before { content:""; position:absolute; left:0; top:50%; transform:translateY(-50%); width:2px; height:18px; border-radius:2px; background:#7BA0F8; box-shadow:0 0 10px rgba(96,148,250,.9); }
         @media (max-width:820px){
           .app-shell{ flex-direction:column !important; height:auto !important; min-height:100vh; overflow:auto !important; }
           .rail-wrap{ width:100% !important; flex:none !important; flex-direction:row !important; align-items:center !important; padding:14px 16px !important; gap:16px; overflow-x:auto; }
@@ -321,13 +321,13 @@ export default function App() {
       `}</style>
 
       {/* LUXURY SIDEBAR */}
-      <aside className="rail-wrap" style={{ width: 268, flex: "0 0 268px", background: "radial-gradient(120% 60% at 50% -10%, rgba(157,139,245,.14), transparent 60%), linear-gradient(180deg,#1B1827 0%,#141019 60%,#100D16 100%)", borderRight: "1px solid rgba(255,255,255,.06)", display: "flex", flexDirection: "column", padding: "40px 0 28px" }}>
+      <aside className="rail-wrap" style={{ width: 268, flex: "0 0 268px", background: "radial-gradient(120% 60% at 50% -10%, rgba(96,148,250,.14), transparent 60%), linear-gradient(180deg,#16192a 0%,#11131e 60%,#0c0e16 100%)", borderRight: "1px solid rgba(255,255,255,.06)", display: "flex", flexDirection: "column", padding: "40px 0 28px" }}>
         <div className="rail-brand" style={{ padding: "0 30px 28px", borderBottom: "1px solid rgba(255,255,255,.07)" }}>
-          <div style={{ fontFamily: "'Bricolage Grotesque', sans-serif", fontWeight: 600, fontSize: 31, letterSpacing: "-.5px", lineHeight: 1, color: "#F4F2FB" }}>FRONTAGE<span style={{ color: "#9D8BF5", textShadow: "0 0 16px rgba(157,139,245,.75)" }}>.</span></div>
-          <div className="rail-eyebrow" style={{ fontSize: 9.5, letterSpacing: "2.8px", textTransform: "uppercase", color: "#8E879F", marginTop: 12 }}>Trophy Retail Acquisitions</div>
+          <div style={{ fontFamily: "'Bricolage Grotesque', sans-serif", fontWeight: 600, fontSize: 31, letterSpacing: "-.5px", lineHeight: 1, color: "#F1F4FB" }}>FRONTAGE<span style={{ color: "#7BA0F8", textShadow: "0 0 16px rgba(96,148,250,.75)" }}>.</span></div>
+          <div className="rail-eyebrow" style={{ fontSize: 9.5, letterSpacing: "2.8px", textTransform: "uppercase", color: "#838DA6", marginTop: 12 }}>Trophy Retail Acquisitions</div>
         </div>
         <nav className="rail-nav" style={{ padding: "28px 18px", display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
-          <div className="rail-label" style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2.4px", textTransform: "uppercase", color: "#5E586E", padding: "4px 14px 12px" }}>Engines</div>
+          <div className="rail-label" style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2.4px", textTransform: "uppercase", color: "#555f76", padding: "4px 14px 12px" }}>Engines</div>
           {[["agent", "Agent", "✦"], ["sourcing", "Sourcing", "◎"], ["comps", "Comp Sheet", "≣"]].map(([v, lab, ic]) => (
             <button key={v} onClick={() => setView(v)} className={view === v ? "rail-item active" : "rail-item"}>
               <span className="ic">{ic}</span> {lab}
@@ -335,7 +335,7 @@ export default function App() {
           ))}
         </nav>
         <div className="rail-foot" style={{ padding: "20px 30px 0", borderTop: "1px solid rgba(255,255,255,.07)" }}>
-          <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2px", textTransform: "uppercase", color: "#9D8BF5", lineHeight: 1.8 }}>Powered by Claude<span style={{ color: "#5E586E", display: "block", letterSpacing: "1.6px", fontWeight: 400 }}>Scout · orchestrator</span></div>
+          <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2px", textTransform: "uppercase", color: "#7BA0F8", lineHeight: 1.8 }}>Powered by Claude<span style={{ color: "#555f76", display: "block", letterSpacing: "1.6px", fontWeight: 400 }}>Scout · orchestrator</span></div>
         </div>
       </aside>
 

@@ -314,7 +314,9 @@ export default function App() {
               TROPHY RETAIL ACQUISITIONS
             </div>
             <div style={{ color: C.muted, fontSize: 13, marginTop: 6 }}>
-              {view === "screener"
+              {view === "agent"
+                ? "Just ask. Scout runs the right engines — sourcing, intel, contacts, research — and hands back the read."
+                : view === "screener"
                 ? "Underwrite high-street flagship assets against your mandate."
                 : view === "radar"
                 ? "Scan a corridor for leases estimated to be coming available — off-market, before they list."
@@ -326,7 +328,7 @@ export default function App() {
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               {/* Lease Radar deactivated 2026-06-17 (not needed right now) — re-add ["radar", "LEASE RADAR"] to restore. Component + api/leasescan.js left intact. */}
-              {[["screener", "SCREENER"], ["sourcing", "SOURCING"], ["skiptrace", "SKIP TRACE"], ["nda", "NDA REVIEW"]].map(([v, lab]) => (
+              {[["agent", "✦ AGENT"], ["screener", "SCREENER"], ["sourcing", "SOURCING"], ["skiptrace", "SKIP TRACE"], ["nda", "NDA REVIEW"]].map(([v, lab]) => (
                 <button key={v} onClick={() => setView(v)} className="mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "6px 13px", borderRadius: 7, border: `1px solid ${view === v ? C.gold : C.line}`, background: view === v ? C.goldSoft : "transparent", color: view === v ? C.gold : C.muted }}>
                   {lab}
@@ -342,10 +344,12 @@ export default function App() {
               </button>
             )}
             <div className="mono" style={{ fontSize: 11, color: C.gold, textAlign: "right", lineHeight: 1.5 }}>
-              POWERED BY CLAUDE<br /><span style={{ color: C.muted }}>{view === "screener" ? `mandate · ${config.name}` : view === "nda" ? "NDA playbook" : "ACRIS · DOB"}</span>
+              POWERED BY CLAUDE<br /><span style={{ color: C.muted }}>{view === "agent" ? "Scout · orchestrator" : view === "screener" ? `mandate · ${config.name}` : view === "nda" ? "NDA playbook" : "ACRIS · DOB"}</span>
             </div>
           </div>
         </div>
+
+        {view === "agent" && <AgentChat pw={pw} />}
 
         {view === "sourcing" && <Sourcing pw={pw} />}
 
@@ -701,6 +705,200 @@ async function postJSON(url, body) {
   if (!res.ok) throw new Error(data.error || `Server error (HTTP ${res.status}).`);
   if (data.error) throw new Error(data.error);
   return data;
+}
+
+// ── Engine 4: Scout, the orchestrating agent ────────────────────────────────────
+// A chat that turns plain-English asks into engine calls. The agent LOOP RUNS IN THE
+// BROWSER: /api/agent plans one step (a tool call, or the final written answer), the
+// browser runs that tool against the real endpoint, feeds the result back, and repeats
+// until Scout writes its answer. Keeping the loop client-side means each serverless
+// call is short (no 60s timeout) and every existing engine is reused untouched.
+
+// tool name -> how to run it. Each `body` returns the endpoint request body (the
+// password is injected by the caller). Field names mirror what each endpoint accepts.
+const TOOL_ROUTES = {
+  search_properties: { url: "/api/source", label: "Searching properties", body: (a) => ({ sources: ["pluto"], assetType: a.assetType || "retail", borough: a.borough, nearAddress: a.nearAddress, radiusMiles: a.radiusMiles || 0, limit: 50, minSqft: a.minSqft, minRetailSqft: a.minRetailSqft, minUnits: a.minUnits, builtAfter: a.builtAfter, builtBefore: a.builtBefore, devOnly: a.devOnly, minBuildable: a.minBuildable }) },
+  property_intel: { url: "/api/intel", label: "Pulling public records", body: (a) => ({ borough: a.borough, block: a.block, lot: a.lot, name: a.name }) },
+  transaction_history: { url: "/api/history", label: "Reading ACRIS history", body: (a) => ({ borough: a.borough, block: a.block, lot: a.lot }) },
+  owner_portfolio: { url: "/api/owner", label: "Mapping owner portfolio", body: (a) => ({ name: a.name }) },
+  hidden_portfolio: { url: "/api/portfolio", label: "Finding hidden portfolio", body: (a) => ({ name: a.name }) },
+  foot_traffic: { url: "/api/foottraffic", label: "Checking foot traffic", body: (a) => ({ lat: a.lat, lon: a.lon }) },
+  sales_comps: { url: "/api/comps", label: "Pulling sale comps", body: (a) => ({ borough: a.borough, block: a.block }) },
+  web_research: { url: "/api/research", label: "Researching owner", body: (a) => ({ mode: "knowledge", name: a.name, address: a.address, borough: a.borough }) },
+  reveal_contact: { url: "/api/skiptrace", label: "Revealing contact", paid: true, body: (a) => ({ name: a.name, entity_type: a.entity_type, contact_address: a.contact_address, city: a.city, state: a.state, zip: a.zip, address: a.address, borough: a.borough }) },
+};
+
+// Keep the model's view of a search result small (token + cost control): only the
+// fields it needs to reason and to drive follow-on tools.
+function pickLeadFields(r) {
+  return {
+    name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough,
+    block: r.block, lot: r.lot, lat: r.lat, lon: r.lon,
+    mailing: [r.contact_address, r.city, r.state, r.zip].filter(Boolean).join(", "),
+    contact_address: r.contact_address, city: r.city, state: r.state, zip: r.zip,
+    years_owned: r.years_owned, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price,
+    absentee: r.absentee || null, tax_lien: r.tax_lien || false, buildable_sqft: r.buildable_sqft || null,
+    retail_sqft: r.retail_sqft || null, portfolio_count: r.portfolio_count || null,
+    distance: r.distance ?? null,
+  };
+}
+
+const SPEND_KEY = "fr_skiptrace_spend_v1";
+function addSpend(amount) { try { const cur = Number(localStorage.getItem(SPEND_KEY)) || 0; localStorage.setItem(SPEND_KEY, String(cur + amount)); } catch { /* quota */ } }
+
+// Trim/summarize an endpoint's response into { forModel, uiSummary }.
+function shapeResult(name, data) {
+  if (name === "search_properties") {
+    const leads = (data.leads || []).slice(0, 25).map(pickLeadFields);
+    const n = leads.length;
+    return { forModel: { count: data.counts?.deals ?? n, center: data.center, leads }, uiSummary: `${n} propert${n === 1 ? "y" : "ies"}` };
+  }
+  if (name === "reveal_contact") {
+    if (data.noKey) return { forModel: data, uiSummary: "skip-trace not configured" };
+    const matched = data.matched || data.hit;
+    const cost = Number(data.cost) || 0;
+    if (matched && cost) addSpend(cost);
+    return { forModel: data, uiSummary: matched ? `contact found${cost ? ` ($${cost.toFixed(2)})` : ""}` : "no match" };
+  }
+  return { forModel: data, uiSummary: "done" };
+}
+
+const AGENT_EXAMPLES = [
+  "Find absentee retail owners within 0.25 mi of 120 5 AVENUE, Manhattan who've held 15+ years",
+  "Who owns 103 PRINCE STREET, Manhattan and what distress signals are on it?",
+  "Scout SoHo for trophy retail with maturing debt or tax liens and rank the best targets",
+];
+
+function AgentChat({ pw }) {
+  const [log, setLog] = useState([]);        // render transcript
+  const [convo, setConvo] = useState([]);    // raw Anthropic-format messages
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const idRef = useRef(0);
+  const scrollRef = useRef(null);
+
+  useEffect(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, [log, busy]);
+
+  const pushTool = (name) => {
+    const id = ++idRef.current;
+    setLog((l) => [...l, { kind: "tool", id, name, label: TOOL_ROUTES[name]?.label || name, status: "running" }]);
+    return id;
+  };
+  const updateTool = (id, status, detail) => setLog((l) => l.map((e) => (e.id === id ? { ...e, status, detail } : e)));
+
+  const runTool = async (name, inputArgs) => {
+    const route = TOOL_ROUTES[name];
+    if (!route) return { forModel: { error: `Unknown tool ${name}` }, uiSummary: "unknown tool" };
+    if (route.paid) {
+      const ok = typeof window !== "undefined" && window.confirm(`This runs a PAID skip trace (~$0.10, billed only on a match) for ${inputArgs.name || "this owner"}. Proceed?`);
+      if (!ok) return { forModel: { declined: true, note: "User declined the paid skip trace." }, uiSummary: "declined" };
+    }
+    const data = await postJSON(route.url, { password: pw, ...route.body(inputArgs) });
+    return shapeResult(name, data);
+  };
+
+  // One request = run the agent loop to completion (or the safety step cap).
+  const runLoop = async (messages) => {
+    for (let turn = 0; turn < 10; turn++) {
+      const data = await postJSON("/api/agent", { password: pw, messages });
+      const content = data.content || [];
+      const toolUses = [];
+      for (const block of content) {
+        if (block.type === "text" && block.text.trim()) setLog((l) => [...l, { kind: "assistant", text: block.text }]);
+        if (block.type === "tool_use") toolUses.push(block);
+      }
+      messages.push({ role: "assistant", content });           // must include tool_use blocks verbatim
+      if (data.stop_reason !== "tool_use" || !toolUses.length) { setConvo([...messages]); return; }
+
+      const results = [];
+      for (const tu of toolUses) {
+        const id = pushTool(tu.name);
+        try {
+          const out = await runTool(tu.name, tu.input || {});
+          updateTool(id, "done", out.uiSummary);
+          results.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out.forModel).slice(0, 14000) });
+        } catch (e) {
+          updateTool(id, "error", e.message);
+          results.push({ type: "tool_result", tool_use_id: tu.id, is_error: true, content: e.message });
+        }
+      }
+      messages.push({ role: "user", content: results });
+    }
+    setConvo([...messages]);
+    setLog((l) => [...l, { kind: "error", text: "Hit the step limit for one request. Ask me to continue if you need more." }]);
+  };
+
+  const send = async (preset) => {
+    const text = (preset ?? input).trim();
+    if (!text || busy) return;
+    setInput("");
+    const messages = [...convo, { role: "user", content: [{ type: "text", text }] }];
+    setConvo(messages);
+    setLog((l) => [...l, { kind: "user", text }]);
+    setBusy(true);
+    try { await runLoop(messages); }
+    catch (e) { setLog((l) => [...l, { kind: "error", text: e.message }]); }
+    finally { setBusy(false); }
+  };
+
+  const reset = () => { setLog([]); setConvo([]); };
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div ref={scrollRef} style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, minHeight: 360, maxHeight: 560, overflowY: "auto" }}>
+        {log.length === 0 && !busy && (
+          <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
+            <div style={{ color: C.ivory, fontWeight: 600, marginBottom: 8 }}>Hi — I'm Scout. ✦</div>
+            Ask me to source owners, read a property, check distress, map a portfolio, or research who's behind an LLC. I'll run the right engines and give you the read. Try:
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
+              {AGENT_EXAMPLES.map((ex) => (
+                <button key={ex} onClick={() => send(ex)} className="lift" style={{ textAlign: "left", cursor: "pointer", fontSize: 12.5, padding: "10px 13px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.ink, color: C.ivory }}>{ex}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        {log.map((e, i) => {
+          if (e.kind === "user") return (
+            <div key={i} style={{ display: "flex", justifyContent: "flex-end", margin: "12px 0" }}>
+              <div style={{ maxWidth: "82%", background: C.goldSoft, border: `1px solid ${C.gold}40`, color: C.ivory, fontSize: 13, lineHeight: 1.5, padding: "9px 13px", borderRadius: "12px 12px 3px 12px" }}>{e.text}</div>
+            </div>
+          );
+          if (e.kind === "assistant") return (
+            <div key={i} style={{ margin: "12px 0", maxWidth: "92%" }}>
+              <div className="mono" style={{ fontSize: 9.5, color: C.gold, letterSpacing: "0.18em", marginBottom: 5 }}>SCOUT</div>
+              <ResearchBriefBody text={e.text} />
+            </div>
+          );
+          if (e.kind === "tool") return (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0", fontSize: 11.5, color: C.muted }}>
+              <span className="mono" style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: e.status === "error" ? C.red : e.status === "done" ? C.green : C.gold }}>
+                {e.status === "running" ? "▸" : e.status === "error" ? "✕" : "✓"} {e.label}
+              </span>
+              {e.detail && <span style={{ color: e.status === "error" ? C.red : C.muted }}>{e.detail}</span>}
+            </div>
+          );
+          return (
+            <div key={i} style={{ margin: "10px 0", fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{e.text}</div>
+          );
+        })}
+        {busy && <div className="mono" style={{ fontSize: 11, color: C.gold, marginTop: 10 }}>▸ Scout is working…</div>}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <input
+          value={input} onChange={(e) => setInput(e.target.value)} disabled={busy}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+          placeholder="Ask Scout to source, screen, or research…"
+          style={{ flex: 1, fontSize: 14, padding: "12px 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory }} />
+        <button onClick={() => send()} disabled={busy || !input.trim()} className="mono lift"
+          style={{ cursor: busy || !input.trim() ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 9, border: `1px solid ${C.gold}`, background: busy || !input.trim() ? C.panel : C.goldSoft, color: C.gold, opacity: busy || !input.trim() ? 0.5 : 1 }}>SEND</button>
+        {log.length > 0 && <button onClick={reset} disabled={busy} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "0 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: "transparent", color: C.muted }}>NEW</button>}
+      </div>
+      <div style={{ fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>
+        Scout runs your live engines (ACRIS · PLUTO · DOB · HPD · NY registry · foot traffic · AI research). Contact reveals are a paid skip trace and always ask first.
+      </div>
+    </div>
+  );
 }
 
 // Saved properties + per-property notes, persisted in the browser (localStorage).

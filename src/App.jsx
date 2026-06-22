@@ -327,8 +327,8 @@ export default function App() {
                 : "Source owners & deals from NYC public records — ACRIS · DOB · PLUTO."}
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              {/* Lease Radar deactivated 2026-06-17 (not needed right now) — re-add ["radar", "LEASE RADAR"] to restore. Component + api/leasescan.js left intact. */}
-              {[["agent", "✦ AGENT"], ["screener", "SCREENER"], ["sourcing", "SOURCING"], ["skiptrace", "SKIP TRACE"], ["nda", "NDA REVIEW"]].map(([v, lab]) => (
+              {/* Lease Radar deactivated 2026-06-17, NDA Review hidden 2026-06-22 (times out on Hobby's 60s limit) — re-add ["radar","LEASE RADAR"] / ["nda","NDA REVIEW"] to restore. Components + api endpoints left intact. */}
+              {[["agent", "✦ AGENT"], ["screener", "SCREENER"], ["sourcing", "SOURCING"], ["skiptrace", "SKIP TRACE"]].map(([v, lab]) => (
                 <button key={v} onClick={() => setView(v)} className="mono"
                   style={{ cursor: "pointer", fontSize: 12, padding: "6px 13px", borderRadius: 7, border: `1px solid ${view === v ? C.gold : C.line}`, background: view === v ? C.goldSoft : "transparent", color: view === v ? C.gold : C.muted }}>
                   {lab}

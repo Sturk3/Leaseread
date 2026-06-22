@@ -35,6 +35,9 @@
     },
     "api/foottraffic.js": {
       "maxDuration": 30
+    },
+    "api/property.js": {
+      "maxDuration": 30
     }
   }
 }

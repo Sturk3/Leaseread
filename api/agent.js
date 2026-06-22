@@ -113,6 +113,22 @@ const TOOLS = [
     },
   },
   {
+    name: "property_data",
+    description:
+      "Nationwide property + owner record for any US address (works OUTSIDE NYC, where the ACRIS/PLUTO tools don't). " +
+      "Returns owner of record + mailing address, last sale date/price, assessed & market value, year built, building/lot " +
+      "size, and use. Use this when the property is outside New York City, or to corroborate/enrich an NYC owner. " +
+      "(Returns 'not configured' until a data-provider key is set.)",
+    input_schema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "Street address, e.g. '450 N Rodeo Dr'." },
+        city: { type: "string" }, state: { type: "string", description: "2-letter state, e.g. 'CA'." }, zip: { type: "string" },
+      },
+      required: ["address"],
+    },
+  },
+  {
     name: "web_search",
     description:
       "Open-ended web research / data scraper. Pass any natural-language research request and get back a synthesized, " +

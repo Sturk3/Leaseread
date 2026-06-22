@@ -45,36 +45,60 @@ If it IS a recognizable company / REIT / institutional owner / well-known develo
 Keep it under 250 words. Your knowledge has a cutoff and may be out of date — flag uncertainty rather than assert.`;
 }
 
+// Free-form web research ("the scraper"): Scout passes an arbitrary query and we run
+// live web search + synthesize. General-purpose but anchored to CRE acquisitions use.
+function buildSystemQuery() {
+  return `You are a real estate acquisitions research analyst for a firm that buys trophy / high-street RETAIL property (primarily New York City, expanding to other US markets). Use the web_search tool to answer the request below, then synthesize a tight, decision-useful brief for the deal team.
+
+Run focused searches (don't narrate them), then write ONLY the final answer in clean markdown — short bold headers, bullets, and a property/firm/person name in **bold**. Ground every claim in what you found and name the source inline (publication or site, with the URL when useful). When the request is about reaching an owner/decision-maker, surface only PUBLICLY-LISTED phones/emails/sites that literally appeared in results, each with its source — NEVER guess or pattern-construct a contact. If results are thin or unconfirmed, say so plainly. Never fabricate facts, numbers, or contacts. Be concise (under ~450 words unless the request clearly needs more).`;
+}
+// Knowledge-only fallback for free-form queries (used until live web is enabled).
+function buildSystemQueryKnowledge() {
+  return `You are a real estate acquisitions research analyst (trophy / high-street RETAIL). Answer the request below using ONLY your own knowledge — you have NO web access right now. Be useful but rigorously honest: state only what you actually know, flag that your knowledge has a cutoff and may be stale, and for anything that needs current/specific data (recent deals, listings, a specific small owner, live contacts) say plainly that live web research or skip tracing is required rather than guessing. NEVER fabricate facts, numbers, principals, or contacts. Concise markdown.`;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, name, entity_type, address, borough, contact_address, city, state, last_sale_date, last_sale_price, years_owned } = req.body || {};
+    const { password, query, name, entity_type, address, borough, contact_address, city, state, last_sale_date, last_sale_price, years_owned } = req.body || {};
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
     }
-    // Zero-cost deploy/version probe (no Anthropic call).
+    // Zero-cost deploy/version probe (no Anthropic call). liveWeb reflects the env gate.
     if (req.body && req.body.debug) {
-      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, build: "v6-web-ready" });
+      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, liveWeb: !!process.env.RESEARCH_LIVE_WEB, build: "v7-scraper" });
     }
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
     }
-    if (!name && !address) return res.status(400).json({ error: "Need an owner name or address to research." });
+    const freeQuery = typeof query === "string" ? query.trim() : "";
+    if (!freeQuery && !name && !address) return res.status(400).json({ error: "Need a query, owner name, or address to research." });
 
-    const facts = [
-      address ? `Property address: ${address}${borough ? `, ${borough}` : ""}, New York` : null,
-      name ? `Owner of record: ${name}${entity_type ? ` (${entity_type})` : ""}` : null,
-      contact_address ? `Owner mailing address: ${[contact_address, [city, state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}` : null,
-      last_sale_date ? `Last sale: ${String(last_sale_date).slice(0, 4)}${last_sale_price ? ` for $${Number(last_sale_price).toLocaleString()}` : ""}` : null,
-      years_owned != null ? `Years owned: ~${years_owned}` : null,
-    ].filter(Boolean).join("\n");
+    // Web mode is GATED behind the RESEARCH_LIVE_WEB env flag. Live web search needs
+    // ~minutes, which only fits Vercel Pro's 300s timeout — so until that flag is set we
+    // transparently fall back to knowledge mode and Hobby's 60s never times out.
+    // ACTIVATION (once on Pro): set RESEARCH_LIVE_WEB=1 + raise research.js maxDuration to
+    // 300 in vercel.json + redeploy. No other code change needed.
+    const wantWeb = (req.body.mode || "web") !== "knowledge";
+    const useWeb = wantWeb && !!process.env.RESEARCH_LIVE_WEB;
 
-    const userText = `Research this NYC retail property and its owner, then write the brief.\n\n${facts}`;
-
-    // mode "web" (default) = live web search; "knowledge" = Sonnet's own knowledge only
-    // (instant, but only reliable for well-known owners — see buildSystemKnowledge).
-    const useWeb = (req.body.mode || "web") !== "knowledge";
+    let userText, systemPrompt;
+    if (freeQuery) {
+      // The "scraper": an arbitrary research request from Scout (or any caller).
+      userText = freeQuery;
+      systemPrompt = useWeb ? buildSystemQuery() : buildSystemQueryKnowledge();
+    } else {
+      const facts = [
+        address ? `Property address: ${address}${borough ? `, ${borough}` : ""}, New York` : null,
+        name ? `Owner of record: ${name}${entity_type ? ` (${entity_type})` : ""}` : null,
+        contact_address ? `Owner mailing address: ${[contact_address, [city, state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}` : null,
+        last_sale_date ? `Last sale: ${String(last_sale_date).slice(0, 4)}${last_sale_price ? ` for $${Number(last_sale_price).toLocaleString()}` : ""}` : null,
+        years_owned != null ? `Years owned: ~${years_owned}` : null,
+      ].filter(Boolean).join("\n");
+      userText = `Research this NYC retail property and its owner, then write the brief.\n\n${facts}`;
+      systemPrompt = useWeb ? buildSystem() : buildSystemKnowledge();
+    }
 
     let messages = [{ role: "user", content: [{ type: "text", text: userText }] }];
     const parts = [];
@@ -94,8 +118,8 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: RESEARCH_MODEL,
-          max_tokens: 1500,
-          system: useWeb ? buildSystem() : buildSystemKnowledge(),
+          max_tokens: freeQuery ? 2200 : 1500,
+          system: systemPrompt,
           ...(useWeb ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_SEARCHES }] } : {}),
           messages,
         }),

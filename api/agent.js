@@ -113,6 +113,22 @@ const TOOLS = [
     },
   },
   {
+    name: "web_search",
+    description:
+      "Open-ended web research / data scraper. Pass any natural-language research request and get back a synthesized, " +
+      "sourced brief from the live web — recent sales or lease deals on a corridor, what a tenant/brand is doing, who just " +
+      "bought a building, market news, asking rents reported in articles, redevelopment plans, etc. Use this whenever the " +
+      "answer needs CURRENT public-web info the structured NYC datasets don't have. (Until live web is enabled it falls back " +
+      "to model knowledge and will say so.)",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The research request, as a clear natural-language question or instruction." },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "reveal_contact",
     description:
       "PAID skip trace (~$0.10 per match, billed only on a hit) — returns the owner's phone numbers + emails. " +

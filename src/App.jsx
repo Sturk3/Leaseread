@@ -724,7 +724,8 @@ const TOOL_ROUTES = {
   hidden_portfolio: { url: "/api/portfolio", label: "Finding hidden portfolio", body: (a) => ({ name: a.name }) },
   foot_traffic: { url: "/api/foottraffic", label: "Checking foot traffic", body: (a) => ({ lat: a.lat, lon: a.lon }) },
   sales_comps: { url: "/api/comps", label: "Pulling sale comps", body: (a) => ({ borough: a.borough, block: a.block }) },
-  web_research: { url: "/api/research", label: "Researching owner", body: (a) => ({ mode: "knowledge", name: a.name, address: a.address, borough: a.borough }) },
+  web_research: { url: "/api/research", label: "Researching owner", body: (a) => ({ mode: "web", name: a.name, address: a.address, borough: a.borough }) },
+  web_search: { url: "/api/research", label: "Searching the web", body: (a) => ({ mode: "web", query: a.query }) },
   reveal_contact: { url: "/api/skiptrace", label: "Revealing contact", paid: true, body: (a) => ({ name: a.name, entity_type: a.entity_type, contact_address: a.contact_address, city: a.city, state: a.state, zip: a.zip, address: a.address, borough: a.borough }) },
 };
 
@@ -2027,9 +2028,10 @@ function ResearchBrief({ r, pw }) {
   const run = async () => {
     setState("loading"); setErr("");
     try {
-      // Knowledge mode (instant). Live web search exceeds Vercel's 60s function limit
-      // on the current plan; flip to mode "web" once on a plan with a higher timeout.
-      const d = await postJSON("/api/research", { mode: "knowledge", password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned });
+      // Requests live web mode; api/research transparently downgrades to knowledge until
+      // the RESEARCH_LIVE_WEB env flag is set (needs Vercel Pro's 300s timeout). So this is
+      // safe on Hobby today and auto-upgrades to real web research the moment Pro is on.
+      const d = await postJSON("/api/research", { mode: "web", password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned });
       setBrief(d.brief || ""); setState("done");
     } catch (e) { setErr(e.message || "Research failed."); setState("error"); }
   };

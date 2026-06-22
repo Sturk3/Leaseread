@@ -1913,12 +1913,33 @@ function GreenwichSourcing({ pw }) {
                       <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right" }}>{p.assessed_value ? fmtAmount(p.assessed_value) : "—"}</td>
                       <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right", color: C.muted }}>{p.building_sqft ? Number(p.building_sqft).toLocaleString() : "—"}</td>
                       <td className="mono" style={{ padding: "9px 12px", fontSize: 12, color: C.muted, whiteSpace: "nowrap" }}>{p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_date ? ` · ${String(p.sale_date).split("/").pop()}` : ""}` : "—"}</td>
-                      <td style={{ padding: "9px 12px" }}><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ AI deep dive"}</button></td>
+                      <td style={{ padding: "9px 12px" }}><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ details"}</button></td>
                     </tr>
                     {openIdx === i && (
-                      <tr><td colSpan={7} style={{ padding: "0 12px 16px", background: C.ink }}>
+                      <tr><td colSpan={7} style={{ padding: "4px 14px 18px", background: C.ink }}>
+                        {/* CT assessor record (full CAMA) */}
+                        <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "10px 0 8px" }}>CT ASSESSOR RECORD</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: "6px 18px", fontSize: 12.5 }}>
+                          {[["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone],
+                            ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Appraised", p.appraised_value ? fmtAmount(p.appraised_value) : null],
+                            ["Building SF", p.building_sqft ? Number(p.building_sqft).toLocaleString() : null], ["Living SF", p.living_area ? Number(p.living_area).toLocaleString() : null],
+                            ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Lot acres", p.land_acres || null], ["Stories", p.stories || null], ["Units", p.units || null],
+                            ["Year built", p.year_built || null], ["Condition", p.condition], ["Grade", p.grade]]
+                            .filter(([, v]) => v != null && v !== "" && v !== 0).map(([k, v]) => (
+                              <div key={k}><span style={{ color: C.muted }}>{k}: </span><span style={{ color: C.ivory }}>{v}</span></div>
+                            ))}
+                        </div>
+                        {/* Sale history (current + prior from CAMA) */}
+                        {(p.sale_price || p.prior_sale_price) && (
+                          <div style={{ marginTop: 10, fontSize: 12.5 }}>
+                            <span className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.12em" }}>SALES</span>
+                            {p.sale_price ? <div style={{ marginTop: 3 }}>{fmtAmount(p.sale_price)}{p.sale_date ? ` · ${p.sale_date}` : ""}{p.sale_grantee ? <span style={{ color: C.muted }}> → {p.sale_grantee}</span> : ""}</div> : null}
+                            {p.prior_sale_price ? <div style={{ color: C.muted, marginTop: 2 }}>Prior: {fmtAmount(p.prior_sale_price)}{p.prior_sale_date ? ` · ${p.prior_sale_date}` : ""}</div> : null}
+                          </div>
+                        )}
+                        {p.cama_link && <div style={{ marginTop: 8, fontSize: 12 }}><a href={p.cama_link} target="_blank" rel="noreferrer" style={{ color: C.gold }}>Town assessor card ↗</a></div>}
                         {p.owner && /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|HOLDINGS|REALTY|PROPERTIES)\b/i.test(p.owner) && (
-                          <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 2px" }}>Tip: this owner looks like an entity — use the <strong style={{ color: C.ivory }}>CT Entity Lookup</strong> above on “{p.owner}” to get its principals, then the AI deep dive for contacts.</div>
+                          <div style={{ fontSize: 11.5, color: C.muted, padding: "10px 0 0" }}>Tip: entity owner — use the <strong style={{ color: C.ivory }}>CT Entity Lookup</strong> above on “{p.owner}” for its principals.</div>
                         )}
                         <ResearchBrief r={{ name: p.owner || "", entity_type: "", address: p.address, borough: `${p.town}, CT`, contact_address: p.mailing || "", city: p.mailing_city || p.town, state: p.mailing_state || "CT", last_sale_price: p.sale_price, last_sale_date: p.sale_date, years_owned: null }} pw={pw} />
                       </td></tr>

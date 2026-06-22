@@ -78,9 +78,11 @@ export default async function handler(req, res) {
         use: clean(r.state_use_description), zone: clean(r.zone_description) || clean(r.zone),
         assessed_value: assessed, appraised_value: toNum(r.appraised_total),
         building_sqft: sqft, land_acres: toNum(r.land_acres), frontage_ft: toNum(r.parcel_frontage),
-        year_built: toNum(r.ayb), stories: toNum(r.stories), units: toNum(r.number_of_units),
+        year_built: toNum(r.ayb), eff_year: toNum(r.eyb), stories: toNum(r.stories), units: toNum(r.number_of_units),
+        living_area: toNum(r.living_area), condition: clean(r.condition_description), grade: clean(r.grade_desc),
         sale_price: toNum(r.sale_price), sale_date: clean(r.sale_date), sale_grantee: clean(r.sale_grantee_name),
-        cama_link: clean(r.cama_site_link) || null,
+        prior_sale_price: toNum(r.prior_sale_price), prior_sale_date: clean(r.prior_sale_date),
+        cama_link: clean(r.cama_site_link) || null, photo: clean(r.building_photo) || null,
         maps_url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(property + ", " + townName + " CT")}`,
       });
       if (out.length >= cap) break;

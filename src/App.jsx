@@ -378,7 +378,7 @@ export default function App() {
 
         {view === "comps" && <CompSheet pw={pw} />}
 
-        {view === "sourcing" && <Sourcing pw={pw} />}
+        {view === "sourcing" && <UnifiedSourcing pw={pw} />}
 
         {view === "radar" && <LeaseRadar pw={pw} />}
 
@@ -2115,6 +2115,169 @@ function HamptonsSourcing({ pw }) {
       </div>
     )}
   </>);
+}
+
+// ── Unified sourcing — ONE search bar across NYC, Greenwich/CT, and the Hamptons ──
+// Type a NYC borough/address, a CT town, or a Hamptons town; the market is auto-detected
+// and routed to the right engine, with one results table. NYC rows keep the full dossier.
+const CT_TOWN_SET = new Set(["greenwich", "darien", "new canaan", "westport", "norwalk", "stamford", "wilton", "weston", "fairfield", "ridgefield", "cos cob", "old greenwich", "riverside", "rowayton"]);
+const HAMPTON_SET = new Set(["east hampton", "southampton", "shelter island", "sag harbor", "bridgehampton", "montauk", "amagansett", "water mill", "sagaponack", "wainscott", "westhampton", "westhampton beach", "quogue", "north haven", "springs", "noyac"]);
+const NYC_BORO_SET = { manhattan: "Manhattan", brooklyn: "Brooklyn", queens: "Queens", bronx: "Bronx", "staten island": "Staten Island", "new york": "Manhattan", nyc: "Manhattan" };
+const HAMLET_TOWN = { montauk: "East Hampton", amagansett: "East Hampton", wainscott: "East Hampton", springs: "East Hampton", "sag harbor": "East Hampton", bridgehampton: "Southampton", "water mill": "Southampton", sagaponack: "Southampton", westhampton: "Southampton", "westhampton beach": "Southampton", quogue: "Southampton", noyac: "Southampton", "north haven": "Southampton" };
+const UNIFIED_TYPES = [["retail", "Retail"], ["commercial", "Commercial / office"], ["multifamily", "Multifamily"], ["residential", "Residential"], ["industrial", "Industrial"], ["vacant", "Vacant / dev site"], ["any", "Any type"]];
+const TYPE_MAP_BY_MARKET = {
+  nyc: { retail: "retail", commercial: "office", multifamily: "multifamily", residential: "one_two_family", industrial: "industrial", vacant: "vacant", any: "any" },
+  ct: { retail: "commercial", commercial: "commercial", multifamily: "apartments", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
+  ny: { retail: "commercial", commercial: "commercial", multifamily: "commercial", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
+};
+const mapType = (t, m) => (TYPE_MAP_BY_MARKET[m] || {})[t] || "any";
+const titleCase = (s) => String(s || "").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+function unifiedDetect(loc, coords) {
+  if (coords) return { market: "nyc", kind: "address" };
+  const k = String(loc || "").trim().toLowerCase();
+  if (!k) return { market: null };
+  if (k in NYC_BORO_SET) return { market: "nyc", kind: "borough", borough: NYC_BORO_SET[k] };
+  if (CT_TOWN_SET.has(k)) return { market: "ct", town: titleCase(loc) };
+  if (HAMPTON_SET.has(k)) return { market: "ny", town: HAMLET_TOWN[k] || titleCase(loc) };
+  return { market: null };
+}
+function unifiedCSV(rows) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const cols = [["Market", (r) => r.marketLabel], ["Owner", (r) => r.owner], ["Mailing", (r) => r.mailing], ["Absentee", (r) => r.absentee || ""], ["Address", (r) => r.address], ["Use", (r) => r.use], ["Value", (r) => r.value]];
+  return cols.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => cols.map((c) => esc(c[1](r))).join(",")).join("\n");
+}
+const nycRow = (l) => ({ market: "nyc", marketLabel: "NYC", owner: l.name, address: l.address, use: l.doc_type ? `class ${l.doc_type}` : (l.retail_sqft ? "Retail" : ""), value: assessedValue(l) != null ? fmtAmount(assessedValue(l)) : "", absentee: l.absentee, mailing: mailing(l), mapsUrl: mapUrl(l), raw: l });
+const ctRow = (p) => ({ market: "ct", marketLabel: `${p.town}, CT`, owner: p.owner, address: p.address, use: p.use, value: p.assessed_value ? fmtAmount(p.assessed_value) : "", absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
+const nyRow = (p) => ({ market: "ny", marketLabel: `${p.town}, NY`, owner: p.owner, address: p.address, use: p.use, value: p.assessed_value ? fmtAmount(p.assessed_value) : "", absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
+
+function AssessorDetail({ p, ny }) {
+  const grid = ny
+    ? [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Town", p.town], ["County", p.county], ["Use", p.use], ["Class", p.property_class], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Market value", p.market_value ? fmtAmount(p.market_value) : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["School district", p.school_district]]
+    : [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Building SF", p.building_sqft ? Number(p.building_sqft).toLocaleString() : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Year built", p.year_built || null], ["Condition", p.condition], ["Grade", p.grade], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_date ? ` · ${p.sale_date}` : ""}` : null]];
+  return (
+    <div>
+      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "10px 0 8px" }}>{ny ? "NY" : "CT"} ASSESSOR RECORD</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: "6px 18px", fontSize: 12.5 }}>
+        {grid.filter(([, v]) => v != null && v !== "" && v !== 0).map(([k, v]) => (<div key={k}><span style={{ color: C.muted }}>{k}: </span><span style={{ color: C.ivory }}>{v}</span></div>))}
+      </div>
+    </div>
+  );
+}
+
+function UnifiedSourcing({ pw }) {
+  const [loc, setLoc] = useState("");
+  const [coords, setCoords] = useState(null);
+  const [type, setType] = useState("retail");
+  const [radius, setRadius] = useState("");
+  const [minValue, setMinValue] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [rows, setRows] = useState(null);
+  const [resolved, setResolved] = useState(null);
+  const [openIdx, setOpenIdx] = useState(null);
+
+  const run = async () => {
+    const det = unifiedDetect(loc, coords);
+    if (!det.market) { setError("Try a NYC borough or address (Manhattan · 120 5th Ave…), a CT town (Greenwich, Darien…), or a Hamptons town (East Hampton, Southampton…)."); return; }
+    setError(""); setRows(null); setOpenIdx(null); setLoading(true); setResolved(det);
+    try {
+      let out = [];
+      if (det.market === "nyc") {
+        if (det.kind === "address" && coords) {
+          const d = await postJSON("/api/source", { password: pw, sources: ["pluto"], assetType: mapType(type, "nyc"), radiusMiles: radius || "", centerLat: coords.lat, centerLon: coords.lon, pickedBbl: coords.bbl });
+          out = (d.leads || []).map(nycRow);
+        } else {
+          const d = await postJSON("/api/source", { password: pw, sources: ["acris", "dob", "pluto"], borough: det.borough, assetType: mapType(type, "nyc"), limit: 80 });
+          out = (d.leads || []).map(nycRow);
+        }
+      } else if (det.market === "ct") {
+        const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: mapType(type, "ct"), minPrice: minValue });
+        out = (d.properties || []).map(ctRow);
+      } else {
+        const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: mapType(type, "ny"), minValue });
+        out = (d.properties || []).map(nyRow);
+      }
+      setRows(out);
+    } catch (e) { setError(e.message || "Search failed."); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SEARCH ANY MARKET — NYC · GREENWICH/CT · HAMPTONS/NY</div>
+        <div style={{ display: "grid", gridTemplateColumns: "2.4fr 1fr 1fr 1fr", gap: 12, alignItems: "end" }}>
+          <label>
+            <div className="mono" style={labelStyle}>WHERE — borough · town · or NYC address</div>
+            <div style={{ marginTop: 4 }}>
+              <AddressAutocomplete value={loc}
+                onChange={(t) => { setLoc(t); setCoords(null); }}
+                onPick={(label, lat, lon, bbl) => { setLoc(label); setCoords({ lat, lon, bbl }); }}
+                placeholder="Greenwich · East Hampton · Manhattan · 120 5th Ave…" style={{ ...fieldStyle, width: "100%" }} />
+            </div>
+          </label>
+          <label><div className="mono" style={labelStyle}>TYPE</div><select value={type} onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{UNIFIED_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+          <label><div className="mono" style={labelStyle}>RADIUS (NYC addr)</div><select value={radius} onChange={(e) => setRadius(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["", "off · just it"], ["0.1", "0.1 mi"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+          <label><div className="mono" style={labelStyle}>MIN VALUE</div><input type="number" value={minValue} onChange={(e) => setMinValue(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 20px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "SEARCHING…" : "◎ SEARCH"}</button>
+          {rows && rows.length > 0 && <button onClick={() => downloadBlob(unifiedCSV(rows), `frontage_${(resolved && resolved.market) || "search"}_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
+          {resolved && <span style={{ fontSize: 11.5, color: C.muted }}>Market: <strong style={{ color: C.gold }}>{resolved.market === "nyc" ? (resolved.borough || "New York City") : resolved.town + (resolved.market === "ct" ? ", CT" : ", NY")}</strong></span>}
+        </div>
+        {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
+        <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
+          One bar, three markets. <strong style={{ color: C.ivory }}>NYC</strong> (full owner + dossier of 21 datasets), <strong style={{ color: C.ivory }}>Greenwich/CT</strong> (owner + assessor + entity principals), <strong style={{ color: C.ivory }}>Hamptons/NY</strong> (owner + assessor). Type a place and we route automatically; click <strong style={{ color: C.ivory }}>▸ details</strong> on a row for the full record + AI deep dive.
+        </div>
+      </div>
+
+      {rows && (
+        <div style={{ marginTop: 18 }}>
+          <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>{rows.length} PROPERT{rows.length === 1 ? "Y" : "IES"}</div>
+          {rows.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No properties matched. Try a different type or location.</div> : (
+            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>
+                  {["Owner", "Property", "Use", "Value", ""].map((h, i) => <th key={h} style={{ textAlign: i === 3 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {rows.map((r, i) => (<React.Fragment key={i}>
+                    <tr style={{ borderBottom: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "9px 12px", fontSize: 13, maxWidth: 240 }}>
+                        <div style={{ fontWeight: 700, color: C.ivory }}>{r.owner || "—"}{r.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber, whiteSpace: "nowrap" }}>{r.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}</div>
+                        {r.mailing && <div style={{ color: C.muted, fontSize: 11, marginTop: 1 }}>{r.mailing}</div>}
+                      </td>
+                      <td style={{ padding: "9px 12px", fontSize: 12.5 }}><a href={r.mapsUrl} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{r.address || "—"} ↗</a></td>
+                      <td style={{ padding: "9px 12px", fontSize: 12, color: C.muted }}>{r.use}</td>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right" }}>{r.value || "—"}</td>
+                      <td style={{ padding: "9px 12px" }}><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ details"}</button></td>
+                    </tr>
+                    {openIdx === i && (
+                      <tr><td colSpan={5} style={{ padding: r.market === "nyc" ? "0" : "4px 14px 18px", background: C.ink }}>
+                        {r.market === "nyc" ? <PropertyDetail r={r.raw} pw={pw} /> : (<>
+                          <AssessorDetail p={r.raw} ny={r.market === "ny"} />
+                          {r.market === "ct" && r.owner && /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|HOLDINGS|REALTY|PROPERTIES)\b/i.test(r.owner) && (
+                            <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (CT discloses LLC principals).</div>
+                          )}
+                          <ResearchBrief r={{ name: r.owner || "", entity_type: "", address: r.address, borough: r.marketLabel, contact_address: r.mailing || "", city: r.raw.mailing_city || r.raw.town, state: r.raw.mailing_state || (r.market === "ct" ? "CT" : "NY"), last_sale_price: r.raw.sale_price || null, last_sale_date: r.raw.sale_date || "", years_owned: null }} pw={pw} />
+                        </>)}
+                      </td></tr>
+                    )}
+                  </React.Fragment>))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!rows && !loading && (
+        <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
+          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>One search, every market.</span> Type a NYC borough or address, a CT town (Greenwich, Darien…), or a Hamptons town (East Hampton, Southampton, Shelter Island). FRONTAGE routes to the right public-records engine and returns owners; open <strong style={{ color: C.ivory }}>▸ details</strong> for the full record and the AI deep dive.
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Sourcing({ pw }) {

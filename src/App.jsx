@@ -757,6 +757,7 @@ const TOOL_ROUTES = {
   web_search: { url: "/api/research", label: "Searching the web", body: (a) => ({ mode: "web", query: a.query }) },
   brand_radar: { url: "/api/research", label: "Scouting brands", body: (a) => ({ mode: "web", query: `Compile a list of NEW / trendy / emerging retail brands that are expanding into physical stores, opening flagships, or actively seeking retail space${a.market ? `, relevant to ${a.market}` : ""}${a.category ? `, in ${a.category}` : ""}. For each brand give: what they sell, their growth/expansion status, any reported new store locations or space requirements, and the source. Favor buzzy / DTC-going-physical / fast-growing brands over legacy chains. Cite sources.` }) },
   search_ct_properties: { url: "/api/ctsource", label: "Searching Greenwich / CT", body: (a) => ({ town: a.town || "Greenwich", propertyType: a.propertyType, minPrice: a.minPrice, maxPrice: a.maxPrice, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
+  ct_sales_comps: { url: "/api/ctcomps", label: "Pulling CT sale comps", body: (a) => ({ town: a.town, propertyType: a.propertyType, address: a.address, sinceYear: a.sinceYear, minAmount: a.minAmount, maxAmount: a.maxAmount }) },
   ct_entity_lookup: { url: "/api/ctentity", label: "CT entity lookup", body: (a) => ({ name: a.name }) },
   search_hamptons_properties: { url: "/api/nysource", label: "Searching the Hamptons", body: (a) => ({ town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
@@ -858,6 +859,10 @@ function shapeResult(name, data) {
   if (name === "sales_comps") {
     const all = data.comps || [];
     return { forModel: { count: all.length, comps: all.slice(0, 15) }, uiSummary: `${all.length} comps` };
+  }
+  if (name === "ct_sales_comps") {
+    const all = data.comps || [];
+    return { forModel: { count: data.count ?? all.length, town: data.town, note: data.note, comps: all.slice(0, 20) }, uiSummary: `${data.count ?? all.length} CT comps` };
   }
   if (name === "reveal_contact") {
     if (data.noKey) return { forModel: data, uiSummary: "skip-trace not configured" };

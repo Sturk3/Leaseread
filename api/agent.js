@@ -152,6 +152,25 @@ const TOOLS = [
     },
   },
   {
+    name: "ct_sales_comps",
+    description:
+      "Recent recorded SALE comps for a Connecticut town (default Greenwich) from CT's statewide Real Estate Sales data. " +
+      "Returns each sale's address, sale amount + date, assessed value, and SALES RATIO (sale ÷ assessment — well above/below " +
+      "CT's ~0.7 norm flags an over/under-market trade), plus property type. Filter by town, type, street, sold-since year, and " +
+      "sale-amount range. Use for CT underwriting / pricing context (the CT analog of sales_comps; NYC tools don't apply there).",
+    input_schema: {
+      type: "object",
+      properties: {
+        town: { type: "string", description: "CT town, e.g. 'Greenwich' (default), 'Darien', 'Westport'." },
+        propertyType: { type: "string", enum: ["any", "commercial", "apartments", "industrial", "condo", "residential", "single_family", "vacant"], description: "Property type filter. 'commercial' covers retail/office." },
+        address: { type: "string", description: "Filter to a street, e.g. 'GREENWICH AVE'." },
+        sinceYear: { type: "number", description: "Only sales in this grand-list year or later." },
+        minAmount: { type: "number", description: "Minimum sale price." },
+        maxAmount: { type: "number", description: "Maximum sale price." },
+      },
+    },
+  },
+  {
     name: "ct_entity_lookup",
     description:
       "Look up a Connecticut business entity / LLC in CT's public Business Registry. Returns the entity's status + " +
@@ -255,7 +274,7 @@ WHAT YOU DO
 
 "MARKETS — NYC vs CONNECTICUT
 - NEW YORK CITY: use the full structured stack (search_properties + property_intel + transaction_history + portfolios + foot_traffic + sales_comps). Owners come straight from the public records.
-- GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there, but CT's statewide parcel+assessor data does. Use search_ct_properties — it returns the OWNER of record + mailing (absentee flagged), building SF, value, and latest sale. For an owner LLC, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations) — then web_research for contacts. The data has owners, so you rarely need paid web research just to find who owns it. CT commercial inventory is modest, so keep filters loose. CT open data has NO deeds/mortgages/liens — for those in Greenwich, point the user to the official land-records portal greenwich.ct.publicsearch.us (a gated site you can't query, but they can search it by owner/address).
+- GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there, but CT's statewide parcel+assessor data does. Use search_ct_properties — it returns the OWNER of record + mailing (absentee flagged), building SF, value, and latest sale. For an owner LLC, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations) — then web_research for contacts. For pricing/underwriting context use ct_sales_comps (FREE) — recent recorded sales with sale amount + sales ratio. The data has owners, so you rarely need paid web research just to find who owns it. CT commercial inventory is modest, so keep filters loose. CT open data has NO deeds/mortgages/liens — for those in Greenwich, point the user to the official land-records portal greenwich.ct.publicsearch.us (a gated site you can't query, but they can search it by owner/address).
 - HAMPTONS (East Hampton / Southampton / Shelter Island, Suffolk County NY — outside NYC): use search_hamptons_properties (NY State assessment roll) for OWNER + mailing (absentee flagged) + class. NY assessed $ are rough (varying town ratios), so lead with owner/address/class and use web_research for value/contacts.
 - For any other US market, lean on web_search / web_research entirely.
 
@@ -298,7 +317,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v12-batch" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v13-ctcomps" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

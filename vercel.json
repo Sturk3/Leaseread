@@ -41,6 +41,9 @@
     },
     "api/ctentity.js": {
       "maxDuration": 30
+    },
+    "api/nysource.js": {
+      "maxDuration": 30
     }
   }
 }

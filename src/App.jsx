@@ -756,6 +756,7 @@ const TOOL_ROUTES = {
   web_search: { url: "/api/research", label: "Searching the web", body: (a) => ({ mode: "web", query: a.query }) },
   search_ct_properties: { url: "/api/ctsource", label: "Searching Greenwich / CT", body: (a) => ({ town: a.town || "Greenwich", propertyType: a.propertyType, minPrice: a.minPrice, maxPrice: a.maxPrice, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
   ct_entity_lookup: { url: "/api/ctentity", label: "CT entity lookup", body: (a) => ({ name: a.name }) },
+  search_hamptons_properties: { url: "/api/nysource", label: "Searching the Hamptons", body: (a) => ({ town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
   reveal_contact: { url: "/api/skiptrace", label: "Revealing contact", paid: true, body: (a) => ({ name: a.name, entity_type: a.entity_type, contact_address: a.contact_address, city: a.city, state: a.state, zip: a.zip, address: a.address, borough: a.borough }) },
 };
@@ -806,9 +807,9 @@ function shapeResult(name, data) {
     const n = leads.length;
     return { forModel: { count: data.counts?.deals ?? n, center: data.center, leads }, uiSummary: `${n} propert${n === 1 ? "y" : "ies"}` };
   }
-  if (name === "search_ct_properties") {
+  if (name === "search_ct_properties" || name === "search_hamptons_properties") {
     const props = (data.properties || []).slice(0, 30);
-    return { forModel: { count: data.count, town: data.town, note: data.note, properties: props }, uiSummary: `${data.count || 0} in ${data.town || "CT"}` };
+    return { forModel: { count: data.count, town: data.town, note: data.note, properties: props }, uiSummary: `${data.count || 0} in ${data.town || "area"}` };
   }
   if (name === "reveal_contact") {
     if (data.noKey) return { forModel: data, uiSummary: "skip-trace not configured" };
@@ -1961,6 +1962,93 @@ function GreenwichSourcing({ pw }) {
   );
 }
 
+// Hamptons / NY-State (ex-NYC) sourcing — NY assessment roll via /api/nysource.
+const HAMPTONS_TOWN_OPTIONS = [["all", "All Hamptons"], ["East Hampton", "East Hampton"], ["Southampton", "Southampton"], ["Shelter Island", "Shelter Island"]];
+const NY_TYPE_OPTIONS = [["commercial", "Commercial (retail / office)"], ["any", "Any type"], ["residential", "Residential"], ["vacant", "Vacant land"], ["industrial", "Industrial"]];
+function nyCSV(rows) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const cols = [["Owner", (r) => r.owner], ["Co-owner", (r) => r.co_owner], ["Mailing", (r) => r.mailing], ["Absentee", (r) => r.absentee || ""], ["Property address", (r) => r.address], ["Town", (r) => r.town], ["Use", (r) => r.use], ["Class", (r) => r.property_class], ["Assessed value", (r) => r.assessed_value], ["Market value", (r) => r.market_value], ["Frontage ft", (r) => r.frontage_ft]];
+  return cols.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => cols.map((c) => esc(c[1](r))).join(",")).join("\n");
+}
+function HamptonsSourcing({ pw }) {
+  const [town, setTown] = useState("all");
+  const [propertyType, setPropertyType] = useState("commercial");
+  const [minValue, setMinValue] = useState("");
+  const [streetq, setStreetq] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [props, setProps] = useState(null);
+  const [openIdx, setOpenIdx] = useState(null);
+  const run = async () => {
+    setError(""); setProps(null); setOpenIdx(null); setLoading(true);
+    try { const d = await postJSON("/api/nysource", { password: pw, town, propertyType, minValue, address: streetq }); setProps(d.properties || []); }
+    catch (e) { setError(e.message || "Hamptons sourcing failed."); }
+    finally { setLoading(false); }
+  };
+  return (<>
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+        <label><div className="mono" style={labelStyle}>TOWN</div><select value={town} onChange={(e) => setTown(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{HAMPTONS_TOWN_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+        <label><div className="mono" style={labelStyle}>TYPE</div><select value={propertyType} onChange={(e) => setPropertyType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{NY_TYPE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+        <label><div className="mono" style={labelStyle}>STREET (optional)</div><input value={streetq} onChange={(e) => setStreetq(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="e.g. NEWTOWN LANE" /></label>
+        <label><div className="mono" style={labelStyle}>MIN ASSESSED</div><input type="number" value={minValue} onChange={(e) => setMinValue(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
+        <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "SEARCHING…" : "◎ SOURCE PROPERTIES"}</button>
+        {props && props.length > 0 && <button onClick={() => downloadBlob(nyCSV(props), `frontage_hamptons_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>}
+      </div>
+      {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
+      <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
+        NY State assessment roll (data.ny.gov) — <strong style={{ color: C.ivory }}>owner + mailing</strong> (absentee flagged), property class, frontage, assessment. Heads up: NY town assessed values use different ratios and market value is often blank, so treat $ as rough — owner/address/class are the reliable fields. Use <strong style={{ color: C.ivory }}>▸ details</strong> → AI deep dive for value &amp; contacts.
+      </div>
+    </div>
+    {props && (
+      <div style={{ marginTop: 18 }}>
+        <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>{props.length} PROPERT{props.length === 1 ? "Y" : "IES"} · {town === "all" ? "HAMPTONS" : town.toUpperCase()}</div>
+        {props.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No parcels matched. Widen the type, town, or street.</div> : (
+          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>
+                {["Owner", "Property", "Use", "Assessed", "Frontage", ""].map((h, i) => <th key={h} style={{ textAlign: i === 3 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {props.map((p, i) => (<React.Fragment key={i}>
+                  <tr style={{ borderBottom: `1px solid ${C.line}` }}>
+                    <td style={{ padding: "9px 12px", fontSize: 13, maxWidth: 230 }}>
+                      <div style={{ fontWeight: 700, color: C.ivory }}>{p.owner || "—"}{p.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber, whiteSpace: "nowrap" }}>{p.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}</div>
+                      {p.mailing && <div style={{ color: C.muted, fontSize: 11, marginTop: 1 }}>{p.mailing}</div>}
+                    </td>
+                    <td style={{ padding: "9px 12px", fontSize: 12.5 }}><a href={p.maps_url} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{p.address} ↗</a><div style={{ color: C.muted, fontSize: 11 }}>{p.town}</div></td>
+                    <td style={{ padding: "9px 12px", fontSize: 12, color: C.muted }}>{p.use}</td>
+                    <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right" }}>{p.assessed_value ? fmtAmount(p.assessed_value) : "—"}</td>
+                    <td className="mono" style={{ padding: "9px 12px", fontSize: 12, color: C.muted }}>{p.frontage_ft ? `${p.frontage_ft} ft` : "—"}</td>
+                    <td style={{ padding: "9px 12px" }}><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ details"}</button></td>
+                  </tr>
+                  {openIdx === i && (
+                    <tr><td colSpan={6} style={{ padding: "4px 14px 18px", background: C.ink }}>
+                      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "10px 0 8px" }}>NY ASSESSOR RECORD</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: "6px 18px", fontSize: 12.5 }}>
+                        {[["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Town", p.town], ["County", p.county], ["Use", p.use], ["Class", p.property_class], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Market value", p.market_value ? fmtAmount(p.market_value) : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Depth", p.depth_ft ? `${p.depth_ft} ft` : null], ["School district", p.school_district]].filter(([, v]) => v != null && v !== "" && v !== 0).map(([k, v]) => (<div key={k}><span style={{ color: C.muted }}>{k}: </span><span style={{ color: C.ivory }}>{v}</span></div>))}
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 11.5, color: C.muted }}>NY assessed $ are at the town's ratio (not market). Use the AI deep dive for the real value &amp; the decision-maker.</div>
+                      <ResearchBrief r={{ name: p.owner || "", entity_type: "", address: p.address, borough: `${p.town}, NY`, contact_address: p.mailing || "", city: p.mailing_city || p.town, state: p.mailing_state || "NY", last_sale_price: null, last_sale_date: "", years_owned: null }} pw={pw} />
+                    </td></tr>
+                  )}
+                </React.Fragment>))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    )}
+    {!props && !loading && (
+      <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
+        <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>Hamptons sourcing.</span> NY State's assessment roll covers East Hampton, Southampton, and Shelter Island — owner of record, mailing (absentee flagged), property class, and frontage. Find a target, then run the <strong style={{ color: C.ivory }}>AI deep dive</strong> for the real value and how to reach the owner.
+      </div>
+    )}
+  </>);
+}
+
 function Sourcing({ pw }) {
   const [market, setMarket] = useState("nyc");
   const [borough, setBorough] = useState("");
@@ -2013,7 +2101,7 @@ function Sourcing({ pw }) {
     <div style={{ marginTop: 22 }}>
       {/* Market toggle — one Sourcing tab, two markets */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {[["nyc", "NEW YORK CITY"], ["ct", "GREENWICH · CT"]].map(([m, lab]) => (
+        {[["nyc", "NEW YORK CITY"], ["ct", "GREENWICH · CT"], ["hampt", "HAMPTONS · NY"]].map(([m, lab]) => (
           <button key={m} onClick={() => setMarket(m)} className="mono"
             style={{ cursor: "pointer", fontSize: 12, padding: "8px 16px", borderRadius: 8, border: `1px solid ${market === m ? C.gold : C.line}`, background: market === m ? C.goldSoft : "transparent", color: market === m ? C.gold : C.muted, letterSpacing: "0.05em" }}>
             {lab}
@@ -2022,6 +2110,8 @@ function Sourcing({ pw }) {
       </div>
 
       {market === "ct" && <GreenwichSourcing pw={pw} />}
+
+      {market === "hampt" && <HamptonsSourcing pw={pw} />}
 
       {market === "nyc" && (<>
           {/* Filters */}

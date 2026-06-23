@@ -135,6 +135,23 @@ const TOOLS = [
     },
   },
   {
+    name: "search_hamptons_properties",
+    description:
+      "Source properties in the HAMPTONS / NY State outside NYC (default towns: East Hampton, Southampton, Shelter Island) " +
+      "from NY State's assessment roll. Returns OWNER + mailing (absentee flagged), address, property class, frontage, and " +
+      "assessment. Use for the Hamptons (NYC tools don't apply there). CAVEAT: NY town assessed values use varying ratios and " +
+      "market value is often blank — lead with owner/address/class, treat $ as rough. Find contacts via web_research.",
+    input_schema: {
+      type: "object",
+      properties: {
+        town: { type: "string", description: "NY municipality, e.g. 'East Hampton', 'Southampton', 'Shelter Island', or 'all' for all three Hamptons towns (default)." },
+        propertyType: { type: "string", enum: ["any", "commercial", "residential", "vacant", "industrial"], description: "Use filter. 'commercial' covers retail/office/apartments." },
+        minValue: { type: "number", description: "Minimum assessment_total (rough — varying town ratios)." },
+        address: { type: "string", description: "Filter to a street, e.g. 'NEWTOWN LANE' or 'MAIN ST'." },
+      },
+    },
+  },
+  {
     name: "ct_entity_lookup",
     description:
       "Look up a Connecticut business entity / LLC in CT's public Business Registry. Returns the entity's status + " +
@@ -208,7 +225,9 @@ WHAT YOU DO
 
 "MARKETS — NYC vs CONNECTICUT
 - NEW YORK CITY: use the full structured stack (search_properties + property_intel + transaction_history + portfolios + foot_traffic + sales_comps). Owners come straight from the public records.
-- GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there, but CT's statewide parcel+assessor data does. Use search_ct_properties — it returns the OWNER of record + mailing (absentee flagged), building SF, value, and latest sale. For an owner LLC, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations) — then web_research for contacts. The data has owners, so you rarely need paid web research just to find who owns it. CT commercial inventory is modest, so keep filters loose. For any other US market, lean on web_search / web_research entirely.
+- GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there, but CT's statewide parcel+assessor data does. Use search_ct_properties — it returns the OWNER of record + mailing (absentee flagged), building SF, value, and latest sale. For an owner LLC, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations) — then web_research for contacts. The data has owners, so you rarely need paid web research just to find who owns it. CT commercial inventory is modest, so keep filters loose.
+- HAMPTONS (East Hampton / Southampton / Shelter Island, Suffolk County NY — outside NYC): use search_hamptons_properties (NY State assessment roll) for OWNER + mailing (absentee flagged) + class. NY assessed $ are rough (varying town ratios), so lead with owner/address/class and use web_research for value/contacts.
+- For any other US market, lean on web_search / web_research entirely.
 
 "WHO OWNS THIS + HOW TO REACH THEM" (a top use case — given an address, find the owner, their portfolio, and institutional contacts on the web)
 - NYC address: get the owner of record cheaply first via search_properties (free public records), then web_research to unmask the parent/management firm + principals, map the portfolio, and pull publicly-listed institutional contacts (main/leasing/acquisitions lines and emails) from the company's own website. Add owner_portfolio / hidden_portfolio to widen the holdings picture.
@@ -247,7 +266,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v8-ctcama" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v9-hamptons" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

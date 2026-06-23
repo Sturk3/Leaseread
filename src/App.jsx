@@ -115,8 +115,9 @@ export default function App() {
   const [presets, setPresetsState] = useState(loadPresets);
   const [showSettings, setShowSettings] = useState(false);
 
-  // Which tool is showing: the OM screener or the NYC sourcing page.
-  const [view, setView] = useState("screener");
+  // Which tool is showing. Defaults to the Agent tab (the Screener is hidden / folded
+  // into Scout, so it must NOT be the default or a reload lands on the tabless OM grader).
+  const [view, setView] = useState("agent");
 
   function setConfig(updater) {
     setConfigState((prev) => {

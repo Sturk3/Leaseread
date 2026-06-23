@@ -2331,6 +2331,12 @@ function AssessorDetail({ p, ny }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: "6px 18px", fontSize: 12.5 }}>
         {grid.filter(([, v]) => v != null && v !== "" && v !== 0).map(([k, v]) => (<div key={k}><span style={{ color: C.muted }}>{k}: </span><span style={{ color: C.ivory }}>{v}</span></div>))}
       </div>
+      {!ny && /greenwich/i.test(p.town || "") && (
+        <div style={{ marginTop: 8, fontSize: 12 }}>
+          <a href="https://greenwich.ct.publicsearch.us/" target="_blank" rel="noreferrer" style={{ color: C.gold }}>Greenwich Land Records ↗</a>
+          <span style={{ color: C.muted }}> — official deeds / mortgages / liens portal{p.owner ? `. Search "${p.owner}" or the address.` : "."}</span>
+        </div>
+      )}
     </div>
   );
 }

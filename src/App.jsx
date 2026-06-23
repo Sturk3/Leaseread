@@ -1119,7 +1119,7 @@ function openPrintable(title, markdown) {
   return true;
 }
 
-function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedBy) {
+function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedBy, leaseTerms) {
   const money = (a) => (a == null || a === "" ? "—" : "$" + Number(a).toLocaleString());
   const num = (a) => (a == null || a === "" ? "—" : Number(a).toLocaleString());
   const ppsf = (a) => (a == null ? "—" : "$" + Math.round(a).toLocaleString());
@@ -1144,6 +1144,8 @@ function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedB
     ? `<div class="sec">INVESTMENT HIGHLIGHTS</div><ul class="hl">${highlights.map((h) => `<li>${escHtml(h)}</li>`).join("")}</ul>` : "";
   const notesBlock = (notes && notes.trim())
     ? `<div class="sec">NOTES &amp; INVESTMENT THESIS</div><div class="notes">${miniMd(notes)}</div>` : "";
+  const leaseBlock = (leaseTerms && leaseTerms.trim())
+    ? `<div class="sec">LEASE TERMS</div><div class="notes">${miniMd(leaseTerms)}</div>` : "";
   const rentBlock = rentText
     ? `<div class="sec">RENT COMPARABLES (asking · corridor)</div><div class="notes">${miniMd(rentText)}</div>` : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
@@ -1217,6 +1219,7 @@ function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedB
     <th>#</th><th>Address</th><th>Sold</th><th class="r">Price</th><th class="r">Bldg SF</th><th class="r">$/SF</th><th class="r">Yr</th><th class="r">Dist</th>
   </tr></thead><tbody>${compRows}</tbody></table>` : `<p class="muted" style="font-size:12.5px">No recorded sales in this radius and window.</p>`}
 
+  ${leaseBlock}
   ${notesBlock}
   ${rentBlock}
 
@@ -1235,6 +1238,8 @@ function CompSheet({ pw }) {
   const [data, setData] = useState(null); // { subject, comps, stats }
   const [rent, setRent] = useState({ state: "idle", text: "", err: "" });
   const [sales, setSales] = useState({ state: "idle", text: "", err: "" });
+  const [leases, setLeases] = useState({ state: "idle", recorded: [], text: "", err: "" });
+  const [leaseTerms, setLeaseTerms] = useState("");
   const [notes, setNotes] = useState("");
   const [drafting, setDrafting] = useState(false);
   const [sortBy, setSortBy] = useState("recent"); // recent | ppsf | price
@@ -1266,7 +1271,7 @@ function CompSheet({ pw }) {
 
   const generate = async () => {
     if (!picked) { setError("Pick an address from the dropdown so I have exact coordinates."); return; }
-    setLoading(true); setError(""); setData(null); setRent({ state: "idle", text: "", err: "" }); setSales({ state: "idle", text: "", err: "" });
+    setLoading(true); setError(""); setData(null); setRent({ state: "idle", text: "", err: "" }); setSales({ state: "idle", text: "", err: "" }); setLeases({ state: "idle", recorded: [], text: "", err: "" });
     try {
       const res = await postJSON("/api/source", {
         password: pw, sources: ["pluto"], assetType, radiusMiles: radius || "0.25",
@@ -1294,6 +1299,7 @@ function CompSheet({ pw }) {
       };
       setData({ subject, comps, stats });
       setNotes(loadCompNote(subject.deal_id));
+      setLeaseTerms(loadLeaseTerms(subject.deal_id));
     } catch (e) { setError(e.message || "Something went wrong."); }
     finally { setLoading(false); }
   };
@@ -1324,6 +1330,37 @@ function CompSheet({ pw }) {
       if (m === "web") addScoutSpend(WEB_RUN_COST);
       setSales({ state: "done", text: d.brief || "No reported sales found.", err: "" });
     } catch (e) { setSales({ state: "error", text: "", err: e.message || "Sales lookup failed." }); }
+  };
+
+  // Lease verification: recorded ACRIS leases for the subject (free) + reported retail
+  // lease deals nearby from the web (metered). No public lease DB exists, so this surfaces
+  // the available evidence; the user fills in actual terms below as they confirm them.
+  const findLeases = async () => {
+    if (!data) return;
+    setLeases({ state: "loading", recorded: [], text: "", err: "" });
+    try {
+      const s2 = data.subject;
+      const where = [s2.address, s2.borough].filter(Boolean).join(", ");
+      const q = `Find RECENTLY REPORTED RETAIL LEASE deals near ${where} (same corridor, last ~3 years). For each, give the tenant, the address, the rent ($/SF/yr if reported), the term/length, and CITE the source (The Real Deal, Commercial Observer, broker release). Only include leases you actually find with a source — never invent a tenant, rent, or term. If little is reported, say so.`;
+      const m = webResearchMode();
+      const [hist, research] = await Promise.all([
+        (s2.borough && s2.block && s2.lot)
+          ? postJSON("/api/history", { password: pw, borough: s2.borough, block: s2.block, lot: s2.lot }).catch(() => ({ history: [] }))
+          : Promise.resolve({ history: [] }),
+        postJSON("/api/research", { mode: m, password: pw, query: q }).catch((e) => ({ _err: e.message })),
+      ]);
+      if (m === "web" && research && !research._err) addScoutSpend(WEB_RUN_COST);
+      const recorded = (hist.history || []).filter((h) => /lease/i.test(h.doc_label || "") || /^(LEAS|LSE|MLSE|SLEA)$/i.test(h.doc_type || ""));
+      setLeases({ state: "done", recorded, text: research && research.brief ? research.brief : (research && research._err ? "" : "No reported leases found."), err: research && research._err ? research._err : "" });
+    } catch (e) { setLeases({ state: "error", recorded: [], text: "", err: e.message || "Lease lookup failed." }); }
+  };
+
+  // Editable, persisted "known lease terms" (per subject BBL) — fill in real terms as found.
+  const LEASE_STORE = "fr_comp_leaseterms_v1";
+  const loadLeaseTerms = (bbl) => { try { return (JSON.parse(localStorage.getItem(LEASE_STORE) || "{}"))[bbl] || ""; } catch { return ""; } };
+  const updateLeaseTerms = (t) => {
+    setLeaseTerms(t);
+    try { const all = JSON.parse(localStorage.getItem(LEASE_STORE) || "{}"); const bbl = data && data.subject.deal_id; if (bbl) { if (t) all[bbl] = t; else delete all[bbl]; localStorage.setItem(LEASE_STORE, JSON.stringify(all)); } } catch { /* quota */ }
   };
 
   // Re-sort comps for display without refetching.
@@ -1380,7 +1417,7 @@ function CompSheet({ pw }) {
             <button onClick={() => downloadBlob(compsToCSV({ ...s, _ppsf: null, _price: purchasePrice(s), _saleYear: purchaseDate(s) }, sortComps(data.comps)), `comp-sheet-${(s.address || "subject").replace(/[^a-z0-9]+/gi, "-")}.csv`, "text/csv")}
               className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>
             <button onClick={() => {
-              const html = onePagerHTML(s, sortComps(data.comps), data.stats, { radius, lookback, assetType }, rent.state === "done" ? rent.text : "", siteHighlights(s), notes, preparedBy);
+              const html = onePagerHTML(s, sortComps(data.comps), data.stats, { radius, lookback, assetType }, rent.state === "done" ? rent.text : "", siteHighlights(s), notes, preparedBy, leaseTerms);
               const w = window.open("", "_blank");
               if (!w) { setError("Allow pop-ups for this site to open the one-pager."); return; }
               w.document.open(); w.document.write(html); w.document.close();
@@ -1529,6 +1566,36 @@ function CompSheet({ pw }) {
           {sales.state === "loading" && <div className="mono" style={{ fontSize: 11, color: C.gold }}>▸ searching reported sales…</div>}
           {sales.state === "error" && <div style={{ fontSize: 12.5, color: C.red }}>{sales.err}</div>}
           {sales.state === "done" && <ResearchBriefBody text={sales.text} />}
+
+          {/* Lease verification — recorded ACRIS leases (free) + reported retail leases (web) + your own terms */}
+          <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "20px 0 8px" }}>LEASE VERIFICATION <span style={{ color: C.muted }}>(recorded · reported)</span></div>
+          {leases.state === "idle" && (
+            <div style={{ fontSize: 12.5, color: C.muted }}>
+              <button className="no-print" onClick={findLeases} style={{ cursor: "pointer", fontSize: 12, padding: "7px 13px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>✦ Find leases</button>
+              <span style={{ marginLeft: 10 }}>Pulls any ACRIS-recorded leases for this lot (free) and recently reported retail leases on the corridor (tenant/rent/term, web). No public lease database exists, so most retail leases won't appear — record confirmed terms below.</span>
+            </div>
+          )}
+          {leases.state === "loading" && <div className="mono" style={{ fontSize: 11, color: C.gold }}>▸ checking recorded + reported leases…</div>}
+          {leases.state === "error" && <div style={{ fontSize: 12.5, color: C.red }}>{leases.err}</div>}
+          {leases.state === "done" && (<>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>Recorded leases (ACRIS): {leases.recorded.length === 0 ? <span>none on record (most retail leases aren't recorded)</span> : null}</div>
+            {leases.recorded.map((h, i) => (
+              <div key={i} style={{ fontSize: 12.5, marginBottom: 2 }}>
+                <span className="mono" style={{ color: C.muted }}>{h.date || "—"}</span> · {h.doc_label} · <span style={{ color: C.ivory }}>{(h.parties || []).map((p) => p.name).join(" · ") || "—"}</span>
+                {h.document_id && <a href={acrisDeedUrl(h.document_id)} target="_blank" rel="noreferrer" style={{ color: C.gold, marginLeft: 6 }}>↗</a>}
+              </div>
+            ))}
+            {leases.text && <div style={{ marginTop: 8 }}><div style={{ fontSize: 12, color: C.muted, marginBottom: 2 }}>Reported leases (web):</div><ResearchBriefBody text={leases.text} /></div>}
+          </>)}
+
+          {/* Your confirmed lease terms (editable + persisted + printed) */}
+          <div style={{ marginTop: 12 }}>
+            <div className="mono no-print" style={{ fontSize: 10, color: C.muted, letterSpacing: "0.1em", marginBottom: 4 }}>CONFIRMED LEASE TERMS (yours)</div>
+            <textarea className="no-print" value={leaseTerms} onChange={(e) => updateLeaseTerms(e.target.value)} rows={Math.max(2, leaseTerms.split("\n").length)}
+              placeholder="Enter actual lease terms as you confirm them — e.g. Tenant · 4,200 SF · $425/SF NNN · 10yr term, expires 2031 · source. Saved with this property and printed on the sheet."
+              style={{ width: "100%", resize: "vertical", fontFamily: "Archivo, sans-serif", fontSize: 12.5, lineHeight: 1.6, color: C.ivory, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 8, padding: "9px 11px" }} />
+            {leaseTerms.trim() && <div className="cs-print-only" style={{ fontSize: 12.5, lineHeight: 1.6, whiteSpace: "pre-wrap", marginTop: 4 }}>{leaseTerms}</div>}
+          </div>
 
           <div style={{ marginTop: 18, paddingTop: 10, borderTop: `1px solid ${C.line}`, fontSize: 9.5, color: C.muted, lineHeight: 1.5 }}>
             Sources: NYC ACRIS (recorded sale prices) + PLUTO (building areas) for sales comps; rent comps via published market reports. $/SF = recorded deed price ÷ PLUTO gross building area; recorded prices can include non-arm's-length transfers — verify outliers. Asking rents are not effective/in-place rents. For internal underwriting use.

@@ -755,6 +755,7 @@ const TOOL_ROUTES = {
   sales_comps: { url: "/api/comps", label: "Pulling sale comps", body: (a) => ({ borough: a.borough, block: a.block }) },
   web_research: { url: "/api/research", label: "Researching owner", body: (a) => ({ mode: "web", name: a.name, address: a.address, borough: a.borough }) },
   web_search: { url: "/api/research", label: "Searching the web", body: (a) => ({ mode: "web", query: a.query }) },
+  brand_radar: { url: "/api/research", label: "Scouting brands", body: (a) => ({ mode: "web", query: `Compile a list of NEW / trendy / emerging retail brands that are expanding into physical stores, opening flagships, or actively seeking retail space${a.market ? `, relevant to ${a.market}` : ""}${a.category ? `, in ${a.category}` : ""}. For each brand give: what they sell, their growth/expansion status, any reported new store locations or space requirements, and the source. Favor buzzy / DTC-going-physical / fast-growing brands over legacy chains. Cite sources.` }) },
   search_ct_properties: { url: "/api/ctsource", label: "Searching Greenwich / CT", body: (a) => ({ town: a.town || "Greenwich", propertyType: a.propertyType, minPrice: a.minPrice, maxPrice: a.maxPrice, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
   ct_entity_lookup: { url: "/api/ctentity", label: "CT entity lookup", body: (a) => ({ name: a.name }) },
   search_hamptons_properties: { url: "/api/nysource", label: "Searching the Hamptons", body: (a) => ({ town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
@@ -883,7 +884,7 @@ function AgentChat({ pw, config }) {
     }
     // Web research/search: honor Quick (knowledge, free-ish) vs Deep (live web, paid) and
     // the monthly spend cap. Over cap, deep auto-downgrades to knowledge so nothing breaks.
-    if (name === "web_research" || name === "web_search") {
+    if (name === "web_research" || name === "web_search" || name === "brand_radar") {
       const overCap = scoutSpend() >= cap;
       const deep = mode === "deep" && !overCap;
       const data = await postJSON(TOOL_ROUTES[name].url, { password: pw, ...TOOL_ROUTES[name].body(inputArgs), mode: deep ? "web" : "knowledge" });

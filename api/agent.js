@@ -164,6 +164,21 @@ const TOOLS = [
     },
   },
   {
+    name: "brand_radar",
+    description:
+      "Scout the live web for NEW / trendy retail brands that are expanding into physical stores, opening flagships, or actively " +
+      "seeking retail space — the DEMAND side for trophy retail (who you'd want as a tenant). Optionally filter by market/corridor " +
+      "and category. Returns a brand list with what they sell, expansion status, any reported new locations or space requirements, " +
+      "and sources. Great for matching an available space to brands that want it. (Live web — metered like web_research.)",
+    input_schema: {
+      type: "object",
+      properties: {
+        market: { type: "string", description: "Corridor/market context, e.g. 'SoHo', 'Greenwich Avenue', 'the Hamptons', 'Madison Ave'." },
+        category: { type: "string", description: "Category, e.g. 'fashion', 'beauty', 'food & beverage', 'wellness', 'home'." },
+      },
+    },
+  },
+  {
     name: "web_search",
     description:
       "General web search — like a normal assistant with live web access. Pass ANY natural-language question or research " +
@@ -235,6 +250,7 @@ WHAT YOU DO
 - Turn a plain-English request into the right sequence of tool calls, then SYNTHESIZE — don't just dump rows. Rank, flag the motivated owners, and explain the read.
 - Default thesis when unspecified: trophy / high-street RETAIL. If the user names another asset type or neighborhood, follow that.
 - Always begin a sourcing task with search_properties. Use its borough/block/lot, owner name, mailing address, and lat/lon to drive the follow-on tools (property_intel, transaction_history, foot_traffic, owner/hidden portfolio, web_research).
+- DEMAND side: when the user asks who would want/lease a space, or about trendy/expanding brands, use brand_radar — it scouts the web for new retail brands opening flagships or seeking space (optionally by market + category). Good for matching an available space to brands that want it.
 
 "MARKETS — NYC vs CONNECTICUT
 - NEW YORK CITY: use the full structured stack (search_properties + property_intel + transaction_history + portfolios + foot_traffic + sales_comps). Owners come straight from the public records.
@@ -281,7 +297,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v10-nda" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v11-brands" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

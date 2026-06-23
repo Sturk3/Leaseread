@@ -376,7 +376,7 @@ export default function App() {
           <AgentChat pw={pw} config={config} />
         </>}
 
-        {view === "comps" && <CompSheet pw={pw} />}
+        {view === "comps" && <CompTool pw={pw} />}
 
         {view === "sourcing" && <UnifiedSourcing pw={pw} />}
 
@@ -1237,6 +1237,159 @@ function onePagerHTML(s, comps, st, meta, rentText, highlights, notes, preparedB
 
   <div class="foot">Sources: NYC ACRIS (recorded sale prices) + PLUTO (building areas). $/SF = recorded deed price ÷ PLUTO gross building area; implied value = average $/SF × subject building area. Recorded prices can include non-arm's-length transfers — verify outliers. Asking rents are not effective/in-place rents. For internal underwriting use.</div>
 </div></body></html>`;
+}
+
+// Comp tool wrapper — one tool, a market dropdown (NYC · Greenwich/CT · Hamptons/NY).
+function CompTool({ pw }) {
+  const [market, setMarket] = useState("nyc");
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <span className="mono" style={{ ...labelStyle }}>MARKET</span>
+        <select value={market} onChange={(e) => setMarket(e.target.value)} style={{ ...fieldStyle, fontSize: 13, padding: "8px 12px" }}>
+          <option value="nyc">New York City</option>
+          <option value="ct">Greenwich · CT</option>
+          <option value="ny">Hamptons · NY</option>
+        </select>
+      </div>
+      {market === "nyc" && <CompSheet pw={pw} />}
+      {market === "ct" && <CTCompSheet pw={pw} />}
+      {market === "ny" && <NYCompSheet pw={pw} />}
+    </div>
+  );
+}
+
+const CT_COMP_TYPES = [["commercial", "Commercial (retail / office)"], ["apartments", "Apartments"], ["industrial", "Industrial"], ["any", "Any type"]];
+function ctCompCSV(rows) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const cols = [["Address", (r) => r.address], ["Owner", (r) => r.owner], ["Use", (r) => r.use], ["Sale price", (r) => r._price], ["Building SF", (r) => r.building_sqft], ["$/SF", (r) => (r._ppsf ? Math.round(r._ppsf) : "")], ["Sold", (r) => r.sale_date], ["Assessed", (r) => r.assessed_value]];
+  return cols.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => cols.map((c) => esc(c[1](r))).join(",")).join("\n");
+}
+function CTCompSheet({ pw }) {
+  const [town, setTown] = useState("Greenwich");
+  const [type, setType] = useState("commercial");
+  const [sinceYear, setSinceYear] = useState("2018");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [data, setData] = useState(null);
+  const run = async () => {
+    setError(""); setData(null); setLoading(true);
+    try {
+      const d = await postJSON("/api/ctsource", { password: pw, town, propertyType: type, sinceYear });
+      const cutoff = Number(sinceYear || 0);
+      const comps = (d.properties || []).filter((p) => p.sale_price && p.building_sqft && p.sale_date)
+        .map((p) => ({ ...p, _ppsf: p.sale_price / p.building_sqft, _price: p.sale_price, _year: Number((p.sale_date || "").split("/").pop()) }))
+        .filter((c) => c._price >= 100000 && c._ppsf >= 25 && c._ppsf <= 60000 && (!cutoff || c._year >= cutoff))
+        .sort((a, b) => (b._year || 0) - (a._year || 0));
+      const ppsfs = comps.map((c) => c._ppsf);
+      const avg = ppsfs.length ? ppsfs.reduce((s, x) => s + x, 0) / ppsfs.length : null;
+      setData({ comps, stats: { count: comps.length, avg, median: median(ppsfs), min: ppsfs.length ? Math.min(...ppsfs) : null, max: ppsfs.length ? Math.max(...ppsfs) : null } });
+    } catch (e) { setError(e.message || "Failed."); }
+    finally { setLoading(false); }
+  };
+  const st = data && data.stats;
+  return (
+    <div>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+          <label><div className="mono" style={labelStyle}>TOWN</div><input value={town} onChange={(e) => setTown(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="Greenwich" /></label>
+          <label><div className="mono" style={labelStyle}>TYPE</div><select value={type} onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{CT_COMP_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+          <label><div className="mono" style={labelStyle}>SOLD SINCE</div><input type="number" value={sinceYear} onChange={(e) => setSinceYear(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="2018" /></label>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
+          <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "BUILDING…" : "■ BUILD COMP SET"}</button>
+          {data && data.comps.length > 0 && <button onClick={() => downloadBlob(ctCompCSV(data.comps), `comps_${town.toLowerCase().replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
+        </div>
+        {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red }}>{error}</div>}
+        <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>Connecticut CAMA sales — $/SF = recorded sale price ÷ assessor building area, for the town's traded {type === "any" ? "" : type + " "}properties. Town-level (CT records have no coordinates for a radius).</div>
+      </div>
+      {data && (<div style={{ marginTop: 18 }}>
+        {data.comps.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No sales with a building size matched. Widen the year or type.</div> : (<>
+          <div style={{ display: "flex", border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden", marginBottom: 14 }}>
+            {[["COMPS", st.count], ["AVG $/SF", st.avg != null ? `$${Math.round(st.avg).toLocaleString()}` : "—"], ["MEDIAN $/SF", st.median != null ? `$${Math.round(st.median).toLocaleString()}` : "—"], ["RANGE $/SF", st.min != null ? `$${Math.round(st.min).toLocaleString()}–${Math.round(st.max).toLocaleString()}` : "—"]].map(([k, v], i) => (
+              <div key={k} style={{ flex: 1, padding: "10px 12px", borderLeft: i ? `1px solid ${C.line}` : "none", background: C.ink }}><div className="mono" style={{ fontSize: 9, color: C.muted, letterSpacing: "0.12em" }}>{k}</div><div style={{ fontSize: 16, fontWeight: 700, marginTop: 3 }}>{v}</div></div>
+            ))}
+          </div>
+          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>{["Address", "Owner", "Use", "Sale", "Bldg SF", "$/SF", "Sold"].map((h, i) => <th key={h} style={{ textAlign: i >= 3 && i <= 5 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}</tr></thead>
+              <tbody>{data.comps.map((c, i) => (<tr key={i} style={{ borderBottom: `1px solid ${C.line}` }}>
+                <td style={{ padding: "8px 12px", fontSize: 12.5 }}>{c.address}</td>
+                <td style={{ padding: "8px 12px", fontSize: 12, color: C.muted, maxWidth: 180 }}>{c.owner}</td>
+                <td style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>{c.use}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12.5, textAlign: "right" }}>{fmtAmount(c._price)}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12, textAlign: "right", color: C.muted }}>{Number(c.building_sqft).toLocaleString()}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12.5, textAlign: "right", fontWeight: 700, color: C.gold }}>${Math.round(c._ppsf).toLocaleString()}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>{c.sale_date}</td>
+              </tr>))}</tbody>
+            </table>
+          </div>
+        </>)}
+      </div>)}
+    </div>
+  );
+}
+function NYCompSheet({ pw }) {
+  const [town, setTown] = useState("all");
+  const [type, setType] = useState("commercial");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [props, setProps] = useState(null);
+  const [sales, setSales] = useState({ state: "idle", text: "", err: "" });
+  const run = async () => {
+    setError(""); setProps(null); setSales({ state: "idle", text: "", err: "" }); setLoading(true);
+    try { const d = await postJSON("/api/nysource", { password: pw, town, propertyType: type }); setProps(d.properties || []); }
+    catch (e) { setError(e.message || "Failed."); }
+    finally { setLoading(false); }
+  };
+  const pullSales = async () => {
+    setSales({ state: "loading", text: "", err: "" });
+    try {
+      const m = webResearchMode();
+      const q = `Find recently reported commercial/retail building SALES in the Hamptons (${town === "all" ? "East Hampton, Southampton, Shelter Island" : town}, NY) in the last ~5 years — address, price, date, and $/SF or building size if reported, with the SOURCE. Sorted by price. Only real reported sales with a source — never invent prices.`;
+      const d = await postJSON("/api/research", { mode: m, password: pw, query: q });
+      if (m === "web") addScoutSpend(WEB_RUN_COST);
+      setSales({ state: "done", text: d.brief || "No reported sales found.", err: "" });
+    } catch (e) { setSales({ state: "error", text: "", err: e.message || "Failed." }); }
+  };
+  return (
+    <div>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+          <label><div className="mono" style={labelStyle}>TOWN</div><select value={town} onChange={(e) => setTown(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{HAMPTONS_TOWN_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+          <label><div className="mono" style={labelStyle}>TYPE</div><select value={type} onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{NY_TYPE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
+          <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "LOADING…" : "■ LOAD PROPERTIES"}</button>
+          {props && props.length > 0 && <button onClick={() => downloadBlob(nyCSV(props), `hamptons_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
+        </div>
+        {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red }}>{error}</div>}
+        <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>⚠ NY's assessment roll has <strong style={{ color: C.ivory }}>no sale prices or building SF</strong>, so structured $/SF comps aren't possible for the Hamptons. This lists assessor records (owner / assessed value); for real sale comps use <strong style={{ color: C.ivory }}>✦ Pull market sales</strong> (web).</div>
+      </div>
+      {props && (<div style={{ marginTop: 18 }}>
+        <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>{props.length} PROPERTIES · {town === "all" ? "HAMPTONS" : town.toUpperCase()}</div>
+        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>{["Owner", "Address", "Use", "Assessed", "Frontage"].map((h, i) => <th key={h} style={{ textAlign: i === 3 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}</tr></thead>
+            <tbody>{props.slice(0, 60).map((p, i) => (<tr key={i} style={{ borderBottom: `1px solid ${C.line}` }}>
+              <td style={{ padding: "8px 12px", fontSize: 12.5, maxWidth: 220 }}>{p.owner}{p.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber }}>{p.absentee === "out-of-state" ? "OOS" : "OOA"}</span>}</td>
+              <td style={{ padding: "8px 12px", fontSize: 12.5 }}>{p.address}</td>
+              <td style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>{p.use}</td>
+              <td className="mono" style={{ padding: "8px 12px", fontSize: 12.5, textAlign: "right" }}>{p.assessed_value ? fmtAmount(p.assessed_value) : "—"}</td>
+              <td className="mono" style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>{p.frontage_ft ? `${p.frontage_ft} ft` : "—"}</td>
+            </tr>))}</tbody>
+          </table>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", marginBottom: 8 }}>MARKET SALES <span style={{ color: C.muted }}>(reported · web)</span></div>
+          {sales.state === "idle" && <button onClick={pullSales} style={{ cursor: "pointer", fontSize: 12, padding: "7px 13px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>✦ Pull market sales</button>}
+          {sales.state === "loading" && <div className="mono" style={{ fontSize: 11, color: C.gold }}>▸ searching reported sales…</div>}
+          {sales.state === "error" && <div style={{ fontSize: 12.5, color: C.red }}>{sales.err}</div>}
+          {sales.state === "done" && <ResearchBriefBody text={sales.text} />}
+        </div>
+      </div>)}
+    </div>
+  );
 }
 
 function CompSheet({ pw }) {

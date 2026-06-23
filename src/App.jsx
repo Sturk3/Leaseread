@@ -2354,7 +2354,9 @@ function UnifiedSourcing({ pw }) {
       let out = [];
       if (det.market === "nyc") {
         if (det.kind === "address" && coords) {
-          const d = await postJSON("/api/source", { password: pw, sources: ["pluto"], assetType: mapType(type, "nyc"), radiusMiles: radius || "", centerLat: coords.lat, centerLon: coords.lon, pickedBbl: coords.bbl });
+          // nearAddress must be sent too — api/source only sets the property anchor when
+          // nearAddress is present (else it falls through to a citywide search).
+          const d = await postJSON("/api/source", { password: pw, sources: ["pluto"], assetType: mapType(type, "nyc"), nearAddress: loc, radiusMiles: radius || "", centerLat: coords.lat, centerLon: coords.lon, pickedBbl: coords.bbl });
           out = (d.leads || []).map(nycRow);
         } else if (det.kind === "address-text") {
           const d = await postJSON("/api/source", { password: pw, sources: ["pluto"], assetType: mapType(type, "nyc"), nearAddress: det.nearAddress, radiusMiles: radius || "" });

@@ -2300,11 +2300,15 @@ const mapType = (t, m) => (TYPE_MAP_BY_MARKET[m] || {})[t] || "any";
 const titleCase = (s) => String(s || "").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 function unifiedDetect(loc, coords) {
   if (coords) return { market: "nyc", kind: "address" };
-  const k = String(loc || "").trim().toLowerCase();
+  const raw = String(loc || "").trim();
+  const k = raw.toLowerCase();
   if (!k) return { market: null };
   if (k in NYC_BORO_SET) return { market: "nyc", kind: "borough", borough: NYC_BORO_SET[k] };
-  if (CT_TOWN_SET.has(k)) return { market: "ct", town: titleCase(loc) };
-  if (HAMPTON_SET.has(k)) return { market: "ny", town: HAMLET_TOWN[k] || titleCase(loc) };
+  if (CT_TOWN_SET.has(k)) return { market: "ct", town: titleCase(raw) };
+  if (HAMPTON_SET.has(k)) return { market: "ny", town: HAMLET_TOWN[k] || titleCase(raw) };
+  // Free text that looks like a street address (has a number, or a comma) → treat as a
+  // NYC address even if it wasn't picked from the dropdown; api/source geocodes it.
+  if (/\d/.test(raw) || raw.includes(",")) return { market: "nyc", kind: "address-text", nearAddress: raw };
   return { market: null };
 }
 function unifiedCSV(rows) {
@@ -2351,6 +2355,9 @@ function UnifiedSourcing({ pw }) {
       if (det.market === "nyc") {
         if (det.kind === "address" && coords) {
           const d = await postJSON("/api/source", { password: pw, sources: ["pluto"], assetType: mapType(type, "nyc"), radiusMiles: radius || "", centerLat: coords.lat, centerLon: coords.lon, pickedBbl: coords.bbl });
+          out = (d.leads || []).map(nycRow);
+        } else if (det.kind === "address-text") {
+          const d = await postJSON("/api/source", { password: pw, sources: ["pluto"], assetType: mapType(type, "nyc"), nearAddress: det.nearAddress, radiusMiles: radius || "" });
           out = (d.leads || []).map(nycRow);
         } else {
           const d = await postJSON("/api/source", { password: pw, sources: ["acris", "dob", "pluto"], borough: det.borough, assetType: mapType(type, "nyc"), limit: 80 });

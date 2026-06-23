@@ -770,7 +770,8 @@ function pickLeadFields(r) {
   return {
     name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough,
     block: r.block, lot: r.lot, lat: r.lat, lon: r.lon,
-    mailing: [r.contact_address, r.city, r.state, r.zip].filter(Boolean).join(", "),
+    // Mailing address as discrete fields only (reveal_contact needs them); the model can
+    // read them as-is — no need to also send a pre-joined string (duplicate tokens × leads × turns).
     contact_address: r.contact_address, city: r.city, state: r.state, zip: r.zip,
     years_owned: r.years_owned, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price,
     absentee: r.absentee || null, tax_lien: r.tax_lien || false, buildable_sqft: r.buildable_sqft || null,
@@ -887,6 +888,10 @@ function AgentChat({ pw, config }) {
   const idRef = useRef(0);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
+  // Dedupe identical tool calls within a session: same tool + same args -> reuse the
+  // shaped result instead of re-hitting the endpoint and burning an agent turn. Keyed by
+  // name+args (web tools also key on mode, since deep vs quick yields a different answer).
+  const toolCacheRef = useRef(new Map());
 
   const onAttach = (f) => {
     if (!f) return;
@@ -931,18 +936,31 @@ function AgentChat({ pw, config }) {
     if (name === "web_research" || name === "web_search" || name === "brand_radar") {
       const overCap = scoutSpend() >= cap;
       const deep = mode === "deep" && !overCap;
+      const wKey = `${name}:${deep ? "web" : "knowledge"}:${JSON.stringify(inputArgs)}`;
+      const wHit = toolCacheRef.current.get(wKey);
+      if (wHit) return { ...wHit, uiSummary: `${wHit.uiSummary} (cached)` };
       const data = await postJSON(TOOL_ROUTES[name].url, { password: pw, ...TOOL_ROUTES[name].body(inputArgs), mode: deep ? "web" : "knowledge" });
       if (deep) { addScoutSpend(WEB_RUN_COST); setSpend(scoutSpend()); }
-      return { forModel: shapeWebResult(data), uiSummary: deep ? "web research" : (overCap ? "quick take (cap reached)" : "quick take") };
+      const out = { forModel: shapeWebResult(data), uiSummary: deep ? "web research" : (overCap ? "quick take (cap reached)" : "quick take") };
+      if (!data.error) toolCacheRef.current.set(wKey, out);
+      return out;
     }
     const route = TOOL_ROUTES[name];
     if (!route || !route.url) return { forModel: { error: `Unknown tool ${name}` }, uiSummary: "unknown tool" };
     if (route.paid) {
       const ok = typeof window !== "undefined" && window.confirm(`This runs a PAID skip trace (~$0.10, billed only on a match) for ${inputArgs.name || "this owner"}. Proceed?`);
       if (!ok) return { forModel: { declined: true, note: "User declined the paid skip trace." }, uiSummary: "declined" };
+      const data = await postJSON(route.url, { password: pw, ...route.body(inputArgs) });
+      return shapeResult(name, data); // never cache a paid lookup
     }
+    // Free structured lookups: serve from the session cache on an identical repeat call.
+    const key = `${name}:${JSON.stringify(inputArgs)}`;
+    const hit = toolCacheRef.current.get(key);
+    if (hit) return { ...hit, uiSummary: `${hit.uiSummary} (cached)` };
     const data = await postJSON(route.url, { password: pw, ...route.body(inputArgs) });
-    return shapeResult(name, data);
+    const out = shapeResult(name, data);
+    if (!data.error) toolCacheRef.current.set(key, out);
+    return out;
   };
 
   // One request = run the agent loop to completion (or the safety step cap).

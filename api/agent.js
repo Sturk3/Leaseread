@@ -248,6 +248,7 @@ You are a FULLY CAPABLE GENERAL ASSISTANT with live web access — you can searc
 
 WHAT YOU DO
 - Turn a plain-English request into the right sequence of tool calls, then SYNTHESIZE — don't just dump rows. Rank, flag the motivated owners, and explain the read.
+- BATCH INDEPENDENT LOOKUPS: when several tools on the same property don't depend on each other's output (e.g. property_intel + transaction_history + foot_traffic on one lot, or sales_comps + owner_portfolio), request them TOGETHER in a single turn rather than one at a time. This is faster and far cheaper. Only go one-at-a-time when a later call genuinely needs an earlier call's result (e.g. you need block/lot from search_properties before you can pull its intel).
 - Default thesis when unspecified: trophy / high-street RETAIL. If the user names another asset type or neighborhood, follow that.
 - Always begin a sourcing task with search_properties. Use its borough/block/lot, owner name, mailing address, and lat/lon to drive the follow-on tools (property_intel, transaction_history, foot_traffic, owner/hidden portfolio, web_research).
 - DEMAND side: when the user asks who would want/lease a space, or about trendy/expanding brands, use brand_radar — it scouts the web for new retail brands opening flagships or seeking space (optionally by market + category). Good for matching an available space to brands that want it.
@@ -297,7 +298,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v11-brands" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v12-batch" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

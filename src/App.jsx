@@ -2371,6 +2371,7 @@ function UnifiedSourcing({ pw }) {
         out = (d.properties || []).map(nyRow);
       }
       setRows(out);
+      if (out.length === 1) setOpenIdx(0); // single property → open its dossier immediately
     } catch (e) { setError(e.message || "Search failed."); }
     finally { setLoading(false); }
   };

@@ -803,7 +803,18 @@ function webResearchMode() {
   } catch { return "web"; }
 }
 
-// Trim/summarize an endpoint's response into { forModel, uiSummary }.
+// Trim a web-research/brand_radar response down to just the brief — `model` and
+// `stop_reason` are noise that would ride along in context on every later turn.
+function shapeWebResult(data) {
+  if (!data || typeof data !== "object") return data;
+  if (data.error || data.noKey) return data;
+  return data.brief ? { brief: data.brief } : data;
+}
+
+// Trim/summarize an endpoint's response into { forModel, uiSummary }. The forModel
+// payload is appended to the conversation and RE-SENT on every subsequent agent turn,
+// so keeping it lean is the main token lever for Scout — cap arrays and drop fields the
+// model never reasons over (coords, document ids, etc.).
 function shapeResult(name, data) {
   if (name === "search_properties") {
     const leads = (data.leads || []).slice(0, 15).map(pickLeadFields);
@@ -813,6 +824,39 @@ function shapeResult(name, data) {
   if (name === "search_ct_properties" || name === "search_hamptons_properties") {
     const props = (data.properties || []).slice(0, 30);
     return { forModel: { count: data.count, town: data.town, note: data.note, properties: props }, uiSummary: `${data.count || 0} in ${data.town || "area"}` };
+  }
+  if (name === "property_intel") {
+    // Already mostly scalars; just cap the two list fields the model doesn't need in full.
+    const officers = (data.officers || []).slice(0, 6);
+    const businesses = (data.businesses || []).slice(0, 6);
+    return { forModel: { ...data, officers, businesses }, uiSummary: "public records" };
+  }
+  if (name === "transaction_history") {
+    // ACRIS can return hundreds of docs; keep the 20 most recent and drop document_id
+    // (an internal key the model never uses), capping parties per doc.
+    const all = data.history || [];
+    const history = all.slice(0, 20).map((h) => ({
+      doc: h.doc_label || h.doc_type, date: h.date, amount: h.amount,
+      parties: (h.parties || []).slice(0, 4),
+    }));
+    return { forModel: { count: all.length, history }, uiSummary: `${all.length} record${all.length === 1 ? "" : "s"}` };
+  }
+  if (name === "owner_portfolio") {
+    // Can be up to 500 lots — the worst offender. Keep the count + total and only the
+    // top ~20 properties by assessed value (already sorted DESC by the endpoint).
+    const all = data.properties || [];
+    const properties = all.slice(0, 20).map((p) => ({
+      address: p.address, borough: p.borough, bldgclass: p.bldgclass, assessed: p.assessed, block: p.block, lot: p.lot,
+    }));
+    return { forModel: { count: data.count ?? all.length, total_assessed: data.total_assessed, properties }, uiSummary: `${data.count ?? all.length} properties` };
+  }
+  if (name === "hidden_portfolio") {
+    const all = data.buildings || [];
+    return { forModel: { person: data.person, count: data.count ?? all.length, buildings: all.slice(0, 25) }, uiSummary: `${data.count ?? all.length} buildings` };
+  }
+  if (name === "sales_comps") {
+    const all = data.comps || [];
+    return { forModel: { count: all.length, comps: all.slice(0, 15) }, uiSummary: `${all.length} comps` };
   }
   if (name === "reveal_contact") {
     if (data.noKey) return { forModel: data, uiSummary: "skip-trace not configured" };
@@ -889,7 +933,7 @@ function AgentChat({ pw, config }) {
       const deep = mode === "deep" && !overCap;
       const data = await postJSON(TOOL_ROUTES[name].url, { password: pw, ...TOOL_ROUTES[name].body(inputArgs), mode: deep ? "web" : "knowledge" });
       if (deep) { addScoutSpend(WEB_RUN_COST); setSpend(scoutSpend()); }
-      return { forModel: data, uiSummary: deep ? "web research" : (overCap ? "quick take (cap reached)" : "quick take") };
+      return { forModel: shapeWebResult(data), uiSummary: deep ? "web research" : (overCap ? "quick take (cap reached)" : "quick take") };
     }
     const route = TOOL_ROUTES[name];
     if (!route || !route.url) return { forModel: { error: `Unknown tool ${name}` }, uiSummary: "unknown tool" };

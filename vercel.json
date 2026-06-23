@@ -44,6 +44,9 @@
     },
     "api/nysource.js": {
       "maxDuration": 30
+    },
+    "api/leasecomps.js": {
+      "maxDuration": 30
     }
   }
 }

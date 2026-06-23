@@ -1355,14 +1355,14 @@ function CompSheet({ pw }) {
       const where = [s2.address, s2.borough].filter(Boolean).join(", ");
       const q = `Find RECENTLY REPORTED RETAIL LEASE deals near ${where} (same corridor, last ~3 years). For each, give the tenant, the address, the rent ($/SF/yr if reported), the term/length, and CITE the source (The Real Deal, Commercial Observer, broker release). Only include leases you actually find with a source — never invent a tenant, rent, or term. If little is reported, say so.`;
       const m = webResearchMode();
-      const [hist, research] = await Promise.all([
-        (s2.borough && s2.block && s2.lot)
-          ? postJSON("/api/history", { password: pw, borough: s2.borough, block: s2.block, lot: s2.lot }).catch(() => ({ history: [] }))
-          : Promise.resolve({ history: [] }),
+      const [lc, research] = await Promise.all([
+        (s2.borough && s2.block)
+          ? postJSON("/api/leasecomps", { password: pw, borough: s2.borough, block: s2.block }).catch(() => ({ leases: [] }))
+          : Promise.resolve({ leases: [] }),
         postJSON("/api/research", { mode: m, password: pw, query: q }).catch((e) => ({ _err: e.message })),
       ]);
       if (m === "web" && research && !research._err) addScoutSpend(WEB_RUN_COST);
-      const recorded = (hist.history || []).filter((h) => /lease/i.test(h.doc_label || "") || /^(LEAS|LSE|MLSE|SLEA)$/i.test(h.doc_type || ""));
+      const recorded = lc.leases || [];
       setLeases({ state: "done", recorded, text: research && research.brief ? research.brief : (research && research._err ? "" : "No reported leases found."), err: research && research._err ? research._err : "" });
     } catch (e) { setLeases({ state: "error", recorded: [], text: "", err: e.message || "Lease lookup failed." }); }
   };
@@ -1579,25 +1579,27 @@ function CompSheet({ pw }) {
           {sales.state === "error" && <div style={{ fontSize: 12.5, color: C.red }}>{sales.err}</div>}
           {sales.state === "done" && <ResearchBriefBody text={sales.text} />}
 
-          {/* Lease verification — recorded ACRIS leases (free) + reported retail leases (web) + your own terms */}
-          <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "20px 0 8px" }}>LEASE VERIFICATION <span style={{ color: C.muted }}>(recorded · reported)</span></div>
+          {/* Lease comps — recorded ACRIS leases on the block (free) + reported corridor leases (web) + your own terms */}
+          <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "20px 0 8px" }}>LEASE COMPS <span style={{ color: C.muted }}>(recorded · reported)</span></div>
           {leases.state === "idle" && (
             <div style={{ fontSize: 12.5, color: C.muted }}>
-              <button className="no-print" onClick={findLeases} style={{ cursor: "pointer", fontSize: 12, padding: "7px 13px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>✦ Find leases</button>
-              <span style={{ marginLeft: 10 }}>Pulls any ACRIS-recorded leases for this lot (free) and recently reported retail leases on the corridor (tenant/rent/term, web). No public lease database exists, so most retail leases won't appear — record confirmed terms below.</span>
+              <button className="no-print" onClick={findLeases} style={{ cursor: "pointer", fontSize: 12, padding: "7px 13px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>✦ Find lease comps</button>
+              <span style={{ marginLeft: 10 }}>Pulls ACRIS-recorded leases on this block (tenant + landlord, free) and recently reported retail leases on the corridor (tenant/rent/term, web). No public lease database exists, so recorded leases are sparse — record confirmed terms below.</span>
             </div>
           )}
-          {leases.state === "loading" && <div className="mono" style={{ fontSize: 11, color: C.gold }}>▸ checking recorded + reported leases…</div>}
+          {leases.state === "loading" && <div className="mono" style={{ fontSize: 11, color: C.gold }}>▸ checking recorded + reported lease comps…</div>}
           {leases.state === "error" && <div style={{ fontSize: 12.5, color: C.red }}>{leases.err}</div>}
           {leases.state === "done" && (<>
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>Recorded leases (ACRIS): {leases.recorded.length === 0 ? <span>none on record (most retail leases aren't recorded)</span> : null}</div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>Recorded leases (ACRIS, this block): {leases.recorded.length === 0 ? <span>none on record (most retail leases aren't recorded)</span> : null}</div>
             {leases.recorded.map((h, i) => (
               <div key={i} style={{ fontSize: 12.5, marginBottom: 2 }}>
-                <span className="mono" style={{ color: C.muted }}>{h.date || "—"}</span> · {h.doc_label} · <span style={{ color: C.ivory }}>{(h.parties || []).map((p) => p.name).join(" · ") || "—"}</span>
+                <span className="mono" style={{ color: C.muted }}>{h.date || "—"}</span> · {h.doc_label} · <span style={{ color: C.ivory }}>{h.address || "—"}</span>
+                {h.tenant && <span> · tenant <span style={{ color: C.ivory }}>{h.tenant}</span></span>}
+                {h.landlord && <span style={{ color: C.muted }}> ← {h.landlord}</span>}
                 {h.document_id && <a href={acrisDeedUrl(h.document_id)} target="_blank" rel="noreferrer" style={{ color: C.gold, marginLeft: 6 }}>↗</a>}
               </div>
             ))}
-            {leases.text && <div style={{ marginTop: 8 }}><div style={{ fontSize: 12, color: C.muted, marginBottom: 2 }}>Reported leases (web):</div><ResearchBriefBody text={leases.text} /></div>}
+            {leases.text && <div style={{ marginTop: 8 }}><div style={{ fontSize: 12, color: C.muted, marginBottom: 2 }}>Reported leases (web · corridor):</div><ResearchBriefBody text={leases.text} /></div>}
           </>)}
 
           {/* Your confirmed lease terms (editable + persisted + printed) */}

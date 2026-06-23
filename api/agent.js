@@ -192,6 +192,19 @@ const TOOLS = [
     },
   },
   {
+    name: "review_nda",
+    description:
+      "Redline an NDA against the firm's NDA playbook — flags each clause Keep / Revise / Cut / Flag with suggested language, " +
+      "and lists missing protections. Use when the user wants an NDA reviewed/redlined. The user can ATTACH the NDA as a PDF " +
+      "(preferred) — if so you don't need nda_text; otherwise pass the pasted text. (Sister tool to grade_offering_memo.)",
+    input_schema: {
+      type: "object",
+      properties: {
+        nda_text: { type: "string", description: "The NDA text, if pasted. Omit when a PDF is attached." },
+      },
+    },
+  },
+  {
     name: "reveal_contact",
     description:
       "PAID skip trace (~$0.10 per match, billed only on a hit) — returns the owner's phone numbers + emails. " +
@@ -239,8 +252,10 @@ HOW TO REASON ABOUT MOTIVATION (the firm's wedge = finding off-market motivated 
 - For INSTITUTIONAL / named owners (REITs, developers, management cos): use web_research to identify the decision-maker and acquisitions/dispositions contact.
 - For anonymous single-asset LLCs: use property_intel to surface named HPD officers, then hidden_portfolio to map the human's other buildings.
 
-DEAL SCREENING (offering memos)
-- If the user attaches an offering memorandum PDF (or pastes one) and wants it underwritten/graded, call grade_offering_memo. It scores the deal against the firm's saved buy-box and returns extracted financials, the tenant roster, per-criterion scores, and a Pursue/Watch/Pass recommendation. Lead with the recommendation and the few drivers that moved it; flag any missing/low-confidence figures rather than glossing them.
+DOCUMENT REVIEW (offering memos & NDAs)
+- If the user attaches an offering memorandum PDF (or pastes one) and wants it underwritten/graded, call grade_offering_memo. It scores the deal against the firm's saved buy-box and returns extracted financials, the tenant roster, per-criterion scores, and a Pursue/Watch/Pass recommendation. Lead with the recommendation and the few drivers that moved it; flag any missing/low-confidence figures.
+- If the user attaches/pastes an NDA and wants it reviewed/redlined, call review_nda. It flags each clause Keep/Revise/Cut/Flag against the firm's NDA playbook with suggested language + missing protections. Lead with the overall risk read and the clauses that need attention. (It's a drafting aid — remind them counsel should confirm.)
+- A PDF attachment could be either — pick the tool from what the user asks for.
 
 COST DISCIPLINE (important — the team is cost-conscious)
 - The FREE structured tools (search_properties, property_intel, transaction_history, portfolios, foot_traffic, sales_comps, search_ct_properties) cost nothing — use them freely and ALWAYS try them first.
@@ -266,7 +281,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v9-hamptons" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v10-nda" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

@@ -759,6 +759,7 @@ const TOOL_ROUTES = {
   ct_entity_lookup: { url: "/api/ctentity", label: "CT entity lookup", body: (a) => ({ name: a.name }) },
   search_hamptons_properties: { url: "/api/nysource", label: "Searching the Hamptons", body: (a) => ({ town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
+  review_nda: { label: "Reviewing NDA" }, // executed specially in runTool (PDF/text + NDA playbook)
   reveal_contact: { url: "/api/skiptrace", label: "Revealing contact", paid: true, body: (a) => ({ name: a.name, entity_type: a.entity_type, contact_address: a.contact_address, city: a.city, state: a.state, zip: a.zip, address: a.address, borough: a.borough }) },
 };
 
@@ -870,6 +871,16 @@ function AgentChat({ pw, config }) {
       const data = await postJSON("/api/screen", body);
       return { forModel: data, uiSummary: attachedPdf ? `graded ${attachedPdf.name}` : "graded OM" };
     }
+    // NDA redline against the firm's NDA playbook (loaded from localStorage), same
+    // PDF/text mechanism as the OM grader.
+    if (name === "review_nda") {
+      let body;
+      if (attachedPdf) body = { password: pw, mode: "pdf", pdfData: attachedPdf.data, config: loadNdaActive() };
+      else if (inputArgs.nda_text) body = { password: pw, mode: "text", ndaText: inputArgs.nda_text, config: loadNdaActive() };
+      else return { forModel: { error: "No NDA provided — ask the user to attach the NDA PDF (📎) or paste its text." }, uiSummary: "no NDA" };
+      const data = await postJSON("/api/nda", body);
+      return { forModel: data, uiSummary: attachedPdf ? `reviewed ${attachedPdf.name}` : "reviewed NDA" };
+    }
     // Web research/search: honor Quick (knowledge, free-ish) vs Deep (live web, paid) and
     // the monthly spend cap. Over cap, deep auto-downgrades to knowledge so nothing breaks.
     if (name === "web_research" || name === "web_search") {
@@ -922,10 +933,10 @@ function AgentChat({ pw, config }) {
 
   const send = async (preset) => {
     let text = (preset ?? input).trim();
-    if (!text && attachedPdf) text = "Grade the attached offering memorandum against our buy-box mandate.";
+    if (!text && attachedPdf) text = "Here's a document — grade it if it's an offering memo, or redline it against our playbook if it's an NDA.";
     if (!text || busy) return;
     setInput("");
-    const note = attachedPdf ? `\n\n[The user has attached an offering memorandum PDF: ${attachedPdf.name}. Use grade_offering_memo to grade it.]` : "";
+    const note = attachedPdf ? `\n\n[The user attached a PDF: ${attachedPdf.name}. Use grade_offering_memo if it's an offering memo, or review_nda if it's an NDA — pick from their request.]` : "";
     const messages = [...convo, { role: "user", content: [{ type: "text", text: text + note }] }];
     setConvo(messages);
     setLog((l) => [...l, { kind: "user", text: attachedPdf ? `${text}  📎 ${attachedPdf.name}` : text }]);
@@ -943,7 +954,7 @@ function AgentChat({ pw, config }) {
         {log.length === 0 && !busy && (
           <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
             <div style={{ color: C.ivory, fontWeight: 600, marginBottom: 8 }}>Hi — I'm Scout. ✦</div>
-            Ask me to source owners, read a property, check distress, map a portfolio, research who's behind an LLC, or grade an offering memo (📎 attach the PDF). I'll run the right engines and give you the read. Try:
+            Ask me to source owners, read a property, check distress, map a portfolio, research who's behind an LLC, grade an offering memo, or redline an NDA (📎 attach the PDF). I'll run the right engines and give you the read. Try:
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
               {AGENT_EXAMPLES.map((ex) => (
                 <button key={ex} onClick={() => send(ex)} className="lift" style={{ textAlign: "left", cursor: "pointer", fontSize: 12.5, padding: "10px 13px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.ink, color: C.ivory }}>{ex}</button>
@@ -1011,7 +1022,7 @@ function AgentChat({ pw, config }) {
         <input
           value={input} onChange={(e) => setInput(e.target.value)} disabled={busy}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder="Ask Scout to source, screen, research, or grade an attached OM…"
+          placeholder="Ask Scout to source, research, grade an OM, or redline an NDA…"
           style={{ flex: 1, fontSize: 14, padding: "12px 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory }} />
         <button onClick={() => send()} disabled={busy || (!input.trim() && !attachedPdf)} className="mono lift"
           style={{ cursor: busy || (!input.trim() && !attachedPdf) ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 9, border: `1px solid ${C.gold}`, background: busy || (!input.trim() && !attachedPdf) ? C.panel : C.goldSoft, color: C.gold, opacity: busy || (!input.trim() && !attachedPdf) ? 0.5 : 1 }}>SEND</button>

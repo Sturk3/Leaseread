@@ -760,6 +760,7 @@ const TOOL_ROUTES = {
   ct_sales_comps: { url: "/api/ctcomps", label: "Pulling CT sale comps", body: (a) => ({ town: a.town, propertyType: a.propertyType, address: a.address, sinceYear: a.sinceYear, minAmount: a.minAmount, maxAmount: a.maxAmount }) },
   ct_entity_lookup: { url: "/api/ctentity", label: "CT entity lookup", body: (a) => ({ name: a.name }) },
   search_hamptons_properties: { url: "/api/nysource", label: "Searching the Hamptons", body: (a) => ({ town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
+  search_ma_properties: { url: "/api/masource", label: "Searching Massachusetts", body: (a) => ({ town: a.town, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
   review_nda: { label: "Reviewing NDA" }, // executed specially in runTool (PDF/text + NDA playbook)
   reveal_contact: { url: "/api/skiptrace", label: "Revealing contact", paid: true, body: (a) => ({ name: a.name, entity_type: a.entity_type, contact_address: a.contact_address, city: a.city, state: a.state, zip: a.zip, address: a.address, borough: a.borough }) },
@@ -823,7 +824,7 @@ function shapeResult(name, data) {
     const n = leads.length;
     return { forModel: { count: data.counts?.deals ?? n, center: data.center, leads }, uiSummary: `${n} propert${n === 1 ? "y" : "ies"}` };
   }
-  if (name === "search_ct_properties" || name === "search_hamptons_properties") {
+  if (name === "search_ct_properties" || name === "search_hamptons_properties" || name === "search_ma_properties") {
     const props = (data.properties || []).slice(0, 30);
     return { forModel: { count: data.count, town: data.town, note: data.note, properties: props }, uiSummary: `${data.count || 0} in ${data.town || "area"}` };
   }

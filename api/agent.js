@@ -171,6 +171,27 @@ const TOOLS = [
     },
   },
   {
+    name: "search_ma_properties",
+    description:
+      "Source properties in MASSACHUSETTS towns (default Boston) from MassGIS statewide assessor data. Returns the OWNER of " +
+      "record + mailing address (absentee owners flagged), site address, use code/type, assessed value, building SF, year built, " +
+      "units, zoning, and latest sale (price + date). Filter by town, type, assessed-value range, min SF, sold-since year, and " +
+      "street. Use for MA sourcing — Boston trophy retail, or Nantucket / Martha's Vineyard luxury (NYC/CT tools don't apply " +
+      "there). For an owner LLC, follow with web_research for principals/contacts.",
+    input_schema: {
+      type: "object",
+      properties: {
+        town: { type: "string", description: "MA town/city name, e.g. 'Boston' (default), 'Nantucket', 'Cambridge', 'Provincetown'." },
+        propertyType: { type: "string", enum: ["any", "commercial", "office", "apartments", "industrial", "single_family", "condo", "residential", "vacant"], description: "Use filter. 'commercial' covers retail/office." },
+        minValue: { type: "number", description: "Minimum assessed value." },
+        maxValue: { type: "number", description: "Maximum assessed value." },
+        minSqft: { type: "number", description: "Minimum building square footage." },
+        sinceYear: { type: "number", description: "Only properties whose latest sale was this year or later." },
+        address: { type: "string", description: "Filter to a street, e.g. 'NEWBURY ST' or 'MAIN ST'." },
+      },
+    },
+  },
+  {
     name: "ct_entity_lookup",
     description:
       "Look up a Connecticut business entity / LLC in CT's public Business Registry. Returns the entity's status + " +
@@ -276,7 +297,8 @@ WHAT YOU DO
 - NEW YORK CITY: use the full structured stack (search_properties + property_intel + transaction_history + portfolios + foot_traffic + sales_comps). Owners come straight from the public records.
 - GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there, but CT's statewide parcel+assessor data does. Use search_ct_properties — it returns the OWNER of record + mailing (absentee flagged), building SF, value, and latest sale. For an owner LLC, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations) — then web_research for contacts. For pricing/underwriting context use ct_sales_comps (FREE) — recent recorded sales with sale amount + sales ratio. The data has owners, so you rarely need paid web research just to find who owns it. CT commercial inventory is modest, so keep filters loose. CT open data has NO deeds/mortgages/liens — for those in Greenwich, point the user to the official land-records portal greenwich.ct.publicsearch.us (a gated site you can't query, but they can search it by owner/address).
 - HAMPTONS (East Hampton / Southampton / Shelter Island, Suffolk County NY — outside NYC): use search_hamptons_properties (NY State assessment roll) for OWNER + mailing (absentee flagged) + class. NY assessed $ are rough (varying town ratios), so lead with owner/address/class and use web_research for value/contacts.
-- For any other US market, lean on web_search / web_research entirely.
+- MASSACHUSETTS (Boston trophy retail, Nantucket / Martha's Vineyard / Cape luxury, any MA town): use search_ma_properties (MassGIS assessor data) for OWNER + mailing (absentee flagged), use/value, building SF, year, and latest sale. MA keeps owners public and its assessed values track market reasonably. For an owner LLC, use web_research for principals/contacts.
+- ANY OTHER US MARKET (no structured connector — most of the country): you can still source there. NEVER say a market is unsupported. For a specific address, web_research works the whole chain from the address alone — it identifies the owner of record, unmasks the parent/firm + principals, maps the portfolio, and pulls published contacts. For a "find me owners in <city>" ask where there's no structured feed, use web_research / web_search to surface candidates (recent trades, known local owners/landlords, brokers), and be upfront: outside NYC/CT/the Hamptons you don't have a parcel database to filter on, so results come from the live web and you can't guarantee completeness — but you can absolutely work any specific property or owner they name. Offer to go deep on the ones that look best.
 
 "WHO OWNS THIS + HOW TO REACH THEM" (a top use case — given an address, find the owner, their portfolio, and institutional contacts on the web)
 - NYC address: get the owner of record cheaply first via search_properties (free public records), then web_research to unmask the parent/management firm + principals, map the portfolio, and pull publicly-listed institutional contacts (main/leasing/acquisitions lines and emails) from the company's own website. Add owner_portfolio / hidden_portfolio to widen the holdings picture.
@@ -317,7 +339,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v13-ctcomps" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v14-ma" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

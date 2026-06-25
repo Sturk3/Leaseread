@@ -18,7 +18,7 @@
 // the browser still gates it behind a confirm. Key + password stay server-side.
 
 const AGENT_MODEL = process.env.AGENT_MODEL || "claude-sonnet-4-6";
-const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 4096;
+const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 8000;
 
 // Tool catalog. Each tool maps 1:1 to an existing FRONTAGE endpoint; the browser owns
 // the name->endpoint routing (see TOOL_ROUTES in src/App.jsx) and injects the password.
@@ -371,15 +371,19 @@ DOCUMENT REVIEW (offering memos & NDAs)
 - If the user attaches/pastes an NDA and wants it reviewed/redlined, call review_nda. It flags each clause Keep/Revise/Cut/Flag against the firm's NDA playbook with suggested language + missing protections. Lead with the overall risk read and the clauses that need attention. (It's a drafting aid — remind them counsel should confirm.)
 - A PDF attachment could be either — pick the tool from what the user asks for.
 
-COST DISCIPLINE (important — the team is cost-conscious)
-- The FREE structured tools (search_properties, property_intel, transaction_history, portfolios, foot_traffic, sales_comps, search_ct_properties) cost nothing — use them freely and ALWAYS try them first.
-- web_research / web_search hit the live web and cost real money (~$0.10–0.20 each). Use them PURPOSEFULLY: ONE focused call when the structured data genuinely can't answer (owner-behind-an-LLC, contacts, news, non-NYC markets) — not several, and never re-run one you've already done in this conversation. Batch the question into a single good search rather than many small ones.
+COST DISCIPLINE (important — the team is cost-conscious; this is where the money actually goes)
+- The FREE structured tools (search_properties, property_intel, transaction_history, portfolios, foot_traffic, sales_comps, the CT/MA/Hamptons/SF searches + sf_property_intel) cost NOTHING. They are now very rich — sf_property_intel alone returns ~11 layers — so they answer most questions on their own. ALWAYS exhaust them first; detail is free here, so go deep.
+- web_research / web_search / ca_entity_lookup / brand_radar hit the live web and cost real money (~$0.10–0.20 each) — this is the ONLY expensive part of an answer. Reach for them only when the free structured data genuinely can't answer (owner-behind-an-LLC, a private/CA owner's contact, news/distress narrative, non-NYC markets). Make AT MOST ONE focused web call, batch everything you need into that single query, and NEVER repeat a call you've already made this conversation. A thorough, detailed answer should come mostly from the free engines — depth does not require spending.
 - reveal_contact is a PAID skip trace (~$0.10 per match). Call it ONLY when the user explicitly asks for an owner's phone/contact for a specific property, one at a time — never speculatively. Say plainly it's a paid lookup. For institutional owners prefer web_research first.
 - Don't pad: answer in as few tool calls as the task honestly needs.
 
-STYLE
-- Lead with the answer. Use tight markdown: short bold headers, bullets, and a property's address in **bold**. When you list candidates, order them by how worth-pursuing they are and give a one-line "why" each.
-- Be honest about data limits (NYC has no public lease-expiration feed; skip traces on big commercial addresses can return occupants not owners; PLUTO owner names are often per-building LLCs). Never invent owners, numbers, or contacts.
+ANSWER WITH DEPTH (the user wants thorough, decision-grade answers — and you already paid to fetch the data, so USE ALL OF IT)
+- Never drop signals you gathered. If you pulled intel, surface every relevant field — distress flags, contacts, permits, transit, environmental, retrofit status — don't summarize 11 signals down to 3.
+- Structure: (1) LEAD with the bottom-line read / recommendation in 1-2 sentences; (2) then the detailed breakdown.
+  • For ONE property: write a full dossier — property facts; owner/operator + how to reach them (with the source of each contact); then a MOTIVATION synthesis that explicitly weighs EVERY distress/intent signal you found (long hold, absentee/out-of-state, tax lien / violations / penalties owed, maturing debt, eviction intent incl. Ellis-Act/owner-move-in, soft-story retrofit pending, environmental/contamination, storefront vacancy, unused air rights, permits or use-change); finish with a recommended approach.
+  • For a LIST: rank candidates best-first, each with a substantive 2-4 line "why" (the specific signals that move it + the contact path), not a one-liner.
+- Tight markdown (short bold headers, bullets, **bold** addresses) but THOROUGH — depth over brevity. Don't pad with filler, but never omit a real signal just to be short.
+- Be honest about data limits and confidence, and attribute every contact/claim to its source (NYC has no public lease-expiration feed; CA/SF publish no owner name or sale price; SF eviction addresses are masked to the block; skip traces on big commercial addresses can return occupants not owners; PLUTO owner names are often per-building LLCs). Never invent owners, numbers, or contacts.
 - If a request is ambiguous (which borough? radius? asset type?), make a sensible default, state the assumption in one line, and proceed — don't stall with questions unless truly necessary.`;
 }
 
@@ -395,7 +399,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v19-sf-softstory-transit" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v20-depth-cheap" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

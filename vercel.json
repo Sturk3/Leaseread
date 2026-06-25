@@ -51,6 +51,9 @@
     "api/masource.js": {
       "maxDuration": 30
     },
+    "api/nashvillesource.js": {
+      "maxDuration": 30
+    },
     "api/sfsource.js": {
       "maxDuration": 30
     },

@@ -762,6 +762,7 @@ const TOOL_ROUTES = {
   ca_entity_lookup: { url: "/api/research", label: "CA entity lookup", body: (a) => ({ mode: "web", query: `Look up the California business entity "${a.name}" in the California Secretary of State business registry (bizfileOnline at bizfileonline.sos.ca.gov) and OpenCorporates (opencorporates.com/companies/us_ca). Report exactly what the records show: the precise entity name, entity number, type (LLC / corporation), status (active / suspended / FTB-suspended / dissolved), registration/formation date, jurisdiction, the AGENT FOR SERVICE OF PROCESS (name + full address — this is the key contact for an anonymous LLC), the principal office / mailing address, and any listed managers / members / officers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.` }) },
   search_hamptons_properties: { url: "/api/nysource", label: "Searching the Hamptons", body: (a) => ({ town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
   search_ma_properties: { url: "/api/masource", label: "Searching Massachusetts", body: (a) => ({ town: a.town, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
+  search_nashville_properties: { url: "/api/nashvillesource", label: "Searching Nashville", body: (a) => ({ propertyType: a.propertyType, address: a.address, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
   search_sf_properties: { url: "/api/sfsource", label: "Searching San Francisco", body: (a) => ({ neighborhood: a.neighborhood, address: a.address, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft }) },
   sf_property_intel: { url: "/api/sfintel", label: "Pulling SF records", body: (a) => ({ block: a.block, lot: a.lot, address: a.address }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
@@ -866,6 +867,10 @@ function shapeResult(name, data) {
   if (name === "search_ct_properties" || name === "search_hamptons_properties" || name === "search_ma_properties") {
     const props = (data.properties || []).slice(0, 30);
     return { forModel: { count: data.count, town: data.town, note: data.note, properties: props }, uiSummary: `${data.count || 0} in ${data.town || "area"}` };
+  }
+  if (name === "search_nashville_properties") {
+    const props = (data.properties || []).slice(0, 30);
+    return { forModel: { count: data.count, county: data.county, note: data.note, properties: props }, uiSummary: `${data.count || 0} in Nashville` };
   }
   if (name === "search_sf_properties") {
     const props = (data.properties || []).slice(0, 30);

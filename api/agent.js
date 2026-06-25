@@ -195,6 +195,26 @@ const TOOLS = [
     },
   },
   {
+    name: "search_nashville_properties",
+    description:
+      "Source properties in NASHVILLE / Davidson County, TN from Metro Nashville's daily parcel + ownership data. Returns the " +
+      "OWNER of record + mailing address (absentee flagged), property address, land use, zoning, appraised/assessed value, last " +
+      "SALE price + year (→ years owned), and acreage. Tennessee is an open-records state, so owners ARE public (a full sourcing " +
+      "market like NYC/CT/MA). Filter by type, street, value range, min acreage, and sold-since year. For an owner LLC, follow " +
+      "with web_research for principals/contacts. NOTE: this dataset has land acreage but no building square footage.",
+    input_schema: {
+      type: "object",
+      properties: {
+        propertyType: { type: "string", enum: ["any", "commercial", "retail", "office", "apartments", "industrial", "hotel", "vacant", "single_family", "residential"], description: "Land-use filter. 'commercial' covers retail/office/hotel; 'retail' is stores/restaurants/markets." },
+        address: { type: "string", description: "Filter to a street, e.g. 'BROADWAY' or '5TH AVE'." },
+        minValue: { type: "number", description: "Minimum total APPRAISED value." },
+        maxValue: { type: "number", description: "Maximum total appraised value." },
+        minAcres: { type: "number", description: "Minimum lot acreage." },
+        sinceYear: { type: "number", description: "Only properties whose latest sale/ownership was this year or later." },
+      },
+    },
+  },
+  {
     name: "search_sf_properties",
     description:
       "Source properties in SAN FRANCISCO from DataSF's assessor roll. Returns property characteristics (use, building/lot SF, " +
@@ -356,6 +376,7 @@ WHAT YOU DO
 - GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there, but CT's statewide parcel+assessor data does. Use search_ct_properties — it returns the OWNER of record + mailing (absentee flagged), building SF, value, and latest sale. For an owner LLC, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations) — then web_research for contacts. For pricing/underwriting context use ct_sales_comps (FREE) — recent recorded sales with sale amount + sales ratio. The data has owners, so you rarely need paid web research just to find who owns it. CT commercial inventory is modest, so keep filters loose. CT open data has NO deeds/mortgages/liens — for those in Greenwich, point the user to the official land-records portal greenwich.ct.publicsearch.us (a gated site you can't query, but they can search it by owner/address).
 - HAMPTONS (East Hampton / Southampton / Shelter Island, Suffolk County NY — outside NYC): use search_hamptons_properties (NY State assessment roll) for OWNER + mailing (absentee flagged) + class. NY assessed $ are rough (varying town ratios), so lead with owner/address/class and use web_research for value/contacts.
 - MASSACHUSETTS (Boston trophy retail, Nantucket / Martha's Vineyard / Cape luxury, any MA town): use search_ma_properties (MassGIS assessor data) for OWNER + mailing (absentee flagged), use/value, building SF, year, and latest sale. MA keeps owners public and its assessed values track market reasonably. For an owner LLC, use web_research for principals/contacts.
+- NASHVILLE / DAVIDSON COUNTY, TN: use search_nashville_properties (Metro Nashville parcel data, updated daily). FULL owner market — OWNER of record + mailing (absentee flagged), land use, value, last sale + years owned. TN is open-records so owners are public; treat it like NYC/CT/MA. For an owner LLC, use web_research for principals/contacts. (No building SF in the data — acreage only.)
 - SAN FRANCISCO: use search_sf_properties (DataSF assessor roll) for property characteristics + assessed value + block/lot, then sf_property_intel (block+lot+address) for permits, DBI complaints, the active business operator (a real contact lead), eviction notices (Ellis Act / owner move-in / demolition / capital improvement = landlord clearing the building = strong motivation), fire violations, and 311. IMPORTANT: California open data has NO owner-of-record name, so SF is a characteristics+distress market — get the actual OWNER via web_research (from the address), and use the operating business's legal name as a contact lead. Eviction addresses are masked to the block (street/corridor signal, not building-exact). Once you have the owning LLC's name, use ca_entity_lookup to unmask it — the CA SOS registry agent for service of process + principals (the CA analog of the NY/CT entity lookup; it's a metered web lookup because California gates its registry).
 - ANY OTHER US MARKET (no structured connector — most of the country): you can still source there. NEVER say a market is unsupported. For a specific address, web_research works the whole chain from the address alone — it identifies the owner of record, unmasks the parent/firm + principals, maps the portfolio, and pulls published contacts. For a "find me owners in <city>" ask where there's no structured feed, use web_research / web_search to surface candidates (recent trades, known local owners/landlords, brokers), and be upfront: outside NYC/CT/the Hamptons you don't have a parcel database to filter on, so results come from the live web and you can't guarantee completeness — but you can absolutely work any specific property or owner they name. Offer to go deep on the ones that look best.
 
@@ -422,7 +443,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, deepModel: AGENT_MODEL_DEEP, tools: TOOLS.map((t) => t.name), build: "agent-v22-refined" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, deepModel: AGENT_MODEL_DEEP, tools: TOOLS.map((t) => t.name), build: "agent-v23-nashville" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

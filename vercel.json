@@ -51,6 +51,12 @@
     "api/masource.js": {
       "maxDuration": 30
     },
+    "api/sfsource.js": {
+      "maxDuration": 30
+    },
+    "api/sfintel.js": {
+      "maxDuration": 30
+    },
     "api/leasecomps.js": {
       "maxDuration": 30
     }

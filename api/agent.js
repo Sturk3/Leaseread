@@ -192,6 +192,44 @@ const TOOLS = [
     },
   },
   {
+    name: "search_sf_properties",
+    description:
+      "Source properties in SAN FRANCISCO from DataSF's assessor roll. Returns property characteristics (use, building/lot SF, " +
+      "frontage, year built, units, zoning) + assessed value + block/lot, by neighborhood, street, type, value range, and min SF. " +
+      "IMPORTANT: California does NOT publish owner names in open data, so this returns NO owner of record — find the owner with " +
+      "web_research, and use sf_property_intel (block+lot) for the operating business's legal name, permits, evictions, and " +
+      "complaints. Use for SF (NYC/CT/MA tools don't apply there).",
+    input_schema: {
+      type: "object",
+      properties: {
+        neighborhood: { type: "string", description: "SF analysis neighborhood, e.g. 'Financial District', 'Mission', 'Pacific Heights', 'Marina'." },
+        address: { type: "string", description: "Filter to a street, e.g. 'GEARY' or 'UNION ST'." },
+        propertyType: { type: "string", enum: ["any", "commercial", "retail", "office", "hotel", "apartments", "industrial", "mixed_use", "single_family", "residential"], description: "Use filter. 'commercial' covers retail/office/hotel/misc." },
+        minValue: { type: "number", description: "Minimum total assessed value (land + improvement)." },
+        maxValue: { type: "number", description: "Maximum total assessed value." },
+        minSqft: { type: "number", description: "Minimum building square footage." },
+      },
+    },
+  },
+  {
+    name: "sf_property_intel",
+    description:
+      "Consolidated San Francisco public-records intel for ONE property (pass block+lot from search_sf_properties, plus the " +
+      "address): building permits (development activity, cost, use change), DBI building complaints, the active BUSINESS operators " +
+      "at the address (legal name = a real contact lead) + recent closures (vacancy signal), nearby EVICTION notices with cause " +
+      "flags (Ellis Act / owner move-in / demolition / capital improvement = landlord clearing the building = strong motivation), " +
+      "open fire-code violations, and 311 volume. The SF analog of property_intel. Needs block + lot + address.",
+    input_schema: {
+      type: "object",
+      properties: {
+        block: { type: "string", description: "Assessor block from the search result." },
+        lot: { type: "string", description: "Assessor lot from the search result." },
+        address: { type: "string", description: "Property address (for the address-keyed sources: businesses, evictions, fire, 311)." },
+      },
+      required: ["address"],
+    },
+  },
+  {
     name: "ct_entity_lookup",
     description:
       "Look up a Connecticut business entity / LLC in CT's public Business Registry. Returns the entity's status + " +
@@ -298,6 +336,7 @@ WHAT YOU DO
 - GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there, but CT's statewide parcel+assessor data does. Use search_ct_properties — it returns the OWNER of record + mailing (absentee flagged), building SF, value, and latest sale. For an owner LLC, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations) — then web_research for contacts. For pricing/underwriting context use ct_sales_comps (FREE) — recent recorded sales with sale amount + sales ratio. The data has owners, so you rarely need paid web research just to find who owns it. CT commercial inventory is modest, so keep filters loose. CT open data has NO deeds/mortgages/liens — for those in Greenwich, point the user to the official land-records portal greenwich.ct.publicsearch.us (a gated site you can't query, but they can search it by owner/address).
 - HAMPTONS (East Hampton / Southampton / Shelter Island, Suffolk County NY — outside NYC): use search_hamptons_properties (NY State assessment roll) for OWNER + mailing (absentee flagged) + class. NY assessed $ are rough (varying town ratios), so lead with owner/address/class and use web_research for value/contacts.
 - MASSACHUSETTS (Boston trophy retail, Nantucket / Martha's Vineyard / Cape luxury, any MA town): use search_ma_properties (MassGIS assessor data) for OWNER + mailing (absentee flagged), use/value, building SF, year, and latest sale. MA keeps owners public and its assessed values track market reasonably. For an owner LLC, use web_research for principals/contacts.
+- SAN FRANCISCO: use search_sf_properties (DataSF assessor roll) for property characteristics + assessed value + block/lot, then sf_property_intel (block+lot+address) for permits, DBI complaints, the active business operator (a real contact lead), eviction notices (Ellis Act / owner move-in / demolition / capital improvement = landlord clearing the building = strong motivation), fire violations, and 311. IMPORTANT: California open data has NO owner-of-record name, so SF is a characteristics+distress market — get the actual OWNER via web_research (from the address), and use the operating business's legal name as a contact lead. Eviction addresses are masked to the block (street/corridor signal, not building-exact).
 - ANY OTHER US MARKET (no structured connector — most of the country): you can still source there. NEVER say a market is unsupported. For a specific address, web_research works the whole chain from the address alone — it identifies the owner of record, unmasks the parent/firm + principals, maps the portfolio, and pulls published contacts. For a "find me owners in <city>" ask where there's no structured feed, use web_research / web_search to surface candidates (recent trades, known local owners/landlords, brokers), and be upfront: outside NYC/CT/the Hamptons you don't have a parcel database to filter on, so results come from the live web and you can't guarantee completeness — but you can absolutely work any specific property or owner they name. Offer to go deep on the ones that look best.
 
 "WHO OWNS THIS + HOW TO REACH THEM" (a top use case — given an address, find the owner, their portfolio, and institutional contacts on the web)
@@ -339,7 +378,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v14-ma" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v15-sf" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

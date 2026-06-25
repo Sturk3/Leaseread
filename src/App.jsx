@@ -761,6 +761,8 @@ const TOOL_ROUTES = {
   ct_entity_lookup: { url: "/api/ctentity", label: "CT entity lookup", body: (a) => ({ name: a.name }) },
   search_hamptons_properties: { url: "/api/nysource", label: "Searching the Hamptons", body: (a) => ({ town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
   search_ma_properties: { url: "/api/masource", label: "Searching Massachusetts", body: (a) => ({ town: a.town, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
+  search_sf_properties: { url: "/api/sfsource", label: "Searching San Francisco", body: (a) => ({ neighborhood: a.neighborhood, address: a.address, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft }) },
+  sf_property_intel: { url: "/api/sfintel", label: "Pulling SF records", body: (a) => ({ block: a.block, lot: a.lot, address: a.address }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
   review_nda: { label: "Reviewing NDA" }, // executed specially in runTool (PDF/text + NDA playbook)
   reveal_contact: { url: "/api/skiptrace", label: "Revealing contact", paid: true, body: (a) => ({ name: a.name, entity_type: a.entity_type, contact_address: a.contact_address, city: a.city, state: a.state, zip: a.zip, address: a.address, borough: a.borough }) },
@@ -827,6 +829,14 @@ function shapeResult(name, data) {
   if (name === "search_ct_properties" || name === "search_hamptons_properties" || name === "search_ma_properties") {
     const props = (data.properties || []).slice(0, 30);
     return { forModel: { count: data.count, town: data.town, note: data.note, properties: props }, uiSummary: `${data.count || 0} in ${data.town || "area"}` };
+  }
+  if (name === "search_sf_properties") {
+    const props = (data.properties || []).slice(0, 30);
+    return { forModel: { count: data.count, neighborhood: data.neighborhood, note: data.note, properties: props }, uiSummary: `${data.count || 0} in SF` };
+  }
+  if (name === "sf_property_intel") {
+    // Endpoint already caps each section; pass through (it's the bounded SF analog of intel).
+    return { forModel: data, uiSummary: "SF records" };
   }
   if (name === "property_intel") {
     // Already mostly scalars; just cap the two list fields the model doesn't need in full.

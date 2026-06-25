@@ -18,6 +18,9 @@
 // the browser still gates it behind a confirm. Key + password stay server-side.
 
 const AGENT_MODEL = process.env.AGENT_MODEL || "claude-sonnet-4-6";
+// Deep Research runs on the strongest model for sharper reasoning/synthesis (opt-in; the
+// token tracker costs it correctly). Routine Scout stays on the cheaper Sonnet.
+const AGENT_MODEL_DEEP = process.env.AGENT_MODEL_DEEP || "claude-opus-4-8";
 const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 8000;
 
 // Tool catalog. Each tool maps 1:1 to an existing FRONTAGE endpoint; the browser owns
@@ -384,6 +387,7 @@ ANSWER WITH DEPTH (the user wants thorough, decision-grade answers — and you a
   • For a LIST: rank candidates best-first, each with a substantive 2-4 line "why" (the specific signals that move it + the contact path), not a one-liner.
 - Tight markdown (short bold headers, bullets, **bold** addresses) but THOROUGH — depth over brevity. Don't pad with filler, but never omit a real signal just to be short.
 - Be honest about data limits and confidence, and attribute every contact/claim to its source (NYC has no public lease-expiration feed; CA/SF publish no owner name or sale price; SF eviction addresses are masked to the block; skip traces on big commercial addresses can return occupants not owners; PLUTO owner names are often per-building LLCs). Never invent owners, numbers, or contacts.
+- CITE THE WEB: when a fact came from web research, cite it inline as a markdown link [source](url) using the \`sources\` the research tools return, so the user can verify it. Name the dataset/engine for public-record facts.
 - If a request is ambiguous (which borough? radius? asset type?), make a sensible default, state the assumption in one line, and proceed — don't stall with questions unless truly necessary.${deepResearch ? `
 
 ═══════════ DEEP RESEARCH MODE — ON (the user explicitly enabled it; be exhaustive) ═══════════
@@ -392,7 +396,8 @@ You are now operating as a DEEP RESEARCHER. The user wants a thorough, comprehen
 1) PLAN FIRST. Open with a brief research plan: restate the objective in one line, then list the threads you'll pursue (e.g. ownership & entity, principals & portfolio, distress/motivation, contacts, comps & market, risks/diligence). A few bullets, then start working.
 2) INVESTIGATE EXHAUSTIVELY. Work every thread methodically and EXHAUST the FREE structured engines first — they're unlimited, so go deep. Chase the full chain: property → owner of record → the entity → its principals (property_intel officers / ca_entity_lookup / ct_entity_lookup) → their other holdings (owner_portfolio + hidden_portfolio) → EVERY distress/intent signal (intel, transaction_history for debt + recorded leases, evictions, soft-story, environmental, vacancy, air rights) → comps → market context. Follow the leads the data opens up; never stop at the first result.
 3) USE THE WEB PURPOSEFULLY (still cost-aware). In deep mode you MAY make SEVERAL focused web calls (web_research / ca_entity_lookup / web_search) where the free data genuinely can't answer — to unmask an LLC, find principals/contacts, or pull news/distress narrative — but make each count and NEVER repeat one you've already run.
-4) DELIVER A FULL CITED REPORT at the end, structured:
+4) SELF-CHECK before writing the report (do this EVERY time): re-read your draft findings against the tool results you actually received. For every claim you're about to make, confirm a tool result or a cited web source supports it — if not, either go verify it with another tool/search or label it explicitly as "unverified / assumption", and drop anything you can't stand behind. Briefly note what you could not confirm.
+5) DELIVER A FULL CITED REPORT, structured:
    • **Bottom line** — the verdict / recommendation in 2-3 sentences.
    • **Property & ownership** — facts + owner of record + the entity behind it.
    • **Who's behind it & how to reach them** — principals / decision-makers + every contact found, EACH with its source.
@@ -401,7 +406,8 @@ You are now operating as a DEEP RESEARCHER. The user wants a thorough, comprehen
    • **Comps & market** — pricing and corridor context.
    • **Risks & diligence** — environmental, violations, retrofit, and explicit DATA GAPS.
    • **Recommended approach & next steps** — concrete moves, incl. any paid step (skip trace) worth taking.
-   Cite the source of every external fact, state your confidence, and be explicit about what you could NOT determine. Never invent.` : ""}`;
+   • **Sources** — list the web sources you used as markdown links [title](url) (take them from the \`sources\` array the research tools return). For public-record facts, name the engine/dataset (ACRIS, PLUTO, DataSF, EnviroStor, etc.).
+   Cite every web-derived fact INLINE as a markdown link to its source, state your confidence, and be explicit about what you could NOT determine. Never invent.` : ""}`;
 }
 
 export default async function handler(req, res) {
@@ -416,7 +422,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v21-deep-research" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, deepModel: AGENT_MODEL_DEEP, tools: TOOLS.map((t) => t.name), build: "agent-v22-refined" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {
@@ -448,7 +454,7 @@ export default async function handler(req, res) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: AGENT_MODEL,
+        model: deepResearch ? AGENT_MODEL_DEEP : AGENT_MODEL,
         max_tokens: MAX_TOKENS,
         system: [{ type: "text", text: buildSystem(deepResearch), cache_control: { type: "ephemeral" } }],
         tools: cachedTools,

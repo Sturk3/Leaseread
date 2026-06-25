@@ -818,23 +818,30 @@ function webResearchMode() {
 // hub lands (today it's per-browser). Pricing = Claude Sonnet 4.6 (the agent + research
 // default), USD per 1M tokens; web search is $/request.
 const TOKEN_KEY = "fr_token_usage_v1";
-const TOK_PRICE = { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75, webSearch: 0.01 };
-const blankUsage = () => ({ month: curMonth(), in: 0, out: 0, cacheRead: 0, cacheWrite: 0, webSearch: 0, calls: 0 });
+// Per-model pricing ($/1M tokens) so Opus Deep Research is costed correctly, not at Sonnet
+// rates. Cache read = 0.1x input, cache write (5m) = 1.25x input. Web search = $/request.
+const MODEL_PRICE = {
+  opus: { in: 15, out: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  sonnet: { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  haiku: { in: 1, out: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+};
+const WEB_SEARCH_PRICE = 0.01; // $ per web_search request
+const priceFor = (model) => { const m = String(model || "").toLowerCase(); return m.includes("opus") ? MODEL_PRICE.opus : m.includes("haiku") ? MODEL_PRICE.haiku : MODEL_PRICE.sonnet; };
+const blankUsage = () => ({ month: curMonth(), in: 0, out: 0, cacheRead: 0, cacheWrite: 0, webSearch: 0, calls: 0, cost: 0 });
 function tokenUsage() { try { const o = JSON.parse(localStorage.getItem(TOKEN_KEY) || "{}"); return o && o.month === curMonth() ? o : blankUsage(); } catch { return blankUsage(); } }
-function recordUsage(u) {
+function recordUsage(u, model) {
   const cur = tokenUsage();
   if (u) {
-    cur.in += u.input_tokens || 0;
-    cur.out += u.output_tokens || 0;
-    cur.cacheRead += u.cache_read_input_tokens || 0;
-    cur.cacheWrite += u.cache_creation_input_tokens || 0;
-    cur.webSearch += u.web_search_requests || (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
-    cur.calls += 1;
+    const p = priceFor(model);
+    const inTok = u.input_tokens || 0, outTok = u.output_tokens || 0;
+    const cR = u.cache_read_input_tokens || 0, cW = u.cache_creation_input_tokens || 0;
+    const web = u.web_search_requests || (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
+    cur.in += inTok; cur.out += outTok; cur.cacheRead += cR; cur.cacheWrite += cW; cur.webSearch += web; cur.calls += 1;
+    cur.cost += (inTok * p.in + outTok * p.out + cR * p.cacheRead + cW * p.cacheWrite) / 1e6 + web * WEB_SEARCH_PRICE;
   }
   try { localStorage.setItem(TOKEN_KEY, JSON.stringify(cur)); } catch { /* quota */ }
   return cur;
 }
-const tokenCost = (o) => (o.in * TOK_PRICE.in + o.out * TOK_PRICE.out + o.cacheRead * TOK_PRICE.cacheRead + o.cacheWrite * TOK_PRICE.cacheWrite) / 1e6 + o.webSearch * TOK_PRICE.webSearch;
 const fmtTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n || 0));
 
 // Trim a web-research/brand_radar response down to just the brief — `model` and
@@ -842,7 +849,8 @@ const fmtTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? Math.r
 function shapeWebResult(data) {
   if (!data || typeof data !== "object") return data;
   if (data.error || data.noKey) return data;
-  return data.brief ? { brief: data.brief } : data;
+  // Keep the brief + the verifiable sources (so Scout can cite them as links); drop the rest.
+  return data.brief ? { brief: data.brief, ...(data.sources && data.sources.length ? { sources: data.sources } : {}) } : data;
 }
 
 // Trim/summarize an endpoint's response into { forModel, uiSummary }. The forModel
@@ -920,6 +928,16 @@ const AGENT_EXAMPLES = [
   "Scout SoHo for trophy retail with maturing debt or tax liens and rank the best targets",
 ];
 
+// One-click Deep Research recipes — structured templates so every analyst's deep dive
+// follows the same rigorous shape. Clicking turns Deep Research on and drops the template
+// (with a <…> slot to fill) into the box; the user fills the target and hits RESEARCH.
+const RESEARCH_PLAYBOOKS = [
+  ["🏛️ Owner-unmasking dossier", "Deep research: who really owns <ADDRESS>? Unmask the owning LLC to its principals, map their portfolio across entities, and give me every verified way to reach the decision-maker — with sources."],
+  ["⚑ Distress / motivation report", "Deep research <ADDRESS>: how motivated is the owner to sell? Pull EVERY distress and intent signal (recorded debt/maturity, liens, violations & penalties, evictions, retrofit, vacancy, hold period, absentee), weigh them, and give a motivation read — with sources."],
+  ["🗺️ Corridor sweep", "Deep research the <NEIGHBORHOOD / CORRIDOR> retail corridor: surface the most motivated trophy-retail owners and rank the best 5–10 targets, each with the why and the contact path — with sources."],
+  ["🛍️ Tenant / brand match", "Deep research: which new or expanding retail brands fit <ADDRESS / CORRIDOR>? Match the space to brands actively opening stores or seeking space, and explain the fit — with sources."],
+];
+
 function AgentChat({ pw, config }) {
   const [log, setLog] = useState([]);        // render transcript
   const [convo, setConvo] = useState([]);    // raw Anthropic-format messages
@@ -988,7 +1006,7 @@ function AgentChat({ pw, config }) {
       const wHit = toolCacheRef.current.get(wKey);
       if (wHit) return { ...wHit, uiSummary: `${wHit.uiSummary} (cached)` };
       const data = await postJSON(TOOL_ROUTES[name].url, { password: pw, ...TOOL_ROUTES[name].body(inputArgs), mode: deep ? "web" : "knowledge" });
-      if (data && data.usage) setTokens(recordUsage(data.usage));
+      if (data && data.usage) setTokens(recordUsage(data.usage, data.model));
       if (deep) { addScoutSpend(WEB_RUN_COST); setSpend(scoutSpend()); }
       const out = { forModel: shapeWebResult(data), uiSummary: deep ? "web research" : (overCap ? "quick take (cap reached)" : "quick take") };
       if (!data.error) toolCacheRef.current.set(wKey, out);
@@ -1018,7 +1036,7 @@ function AgentChat({ pw, config }) {
     const maxSteps = deep ? DEEP_RESEARCH_STEPS : MAX_AGENT_STEPS;
     for (let turn = 0; turn < maxSteps; turn++) {
       const data = await postJSON("/api/agent", { password: pw, messages, deepResearch: deep });
-      if (data && data.usage) setTokens(recordUsage(data.usage));
+      if (data && data.usage) setTokens(recordUsage(data.usage, data.model));
       const content = data.content || [];
       const toolUses = [];
       for (const block of content) {
@@ -1075,6 +1093,14 @@ function AgentChat({ pw, config }) {
                 <button key={ex} onClick={() => send(ex)} className="lift" style={{ textAlign: "left", cursor: "pointer", fontSize: 12.5, padding: "10px 13px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.ink, color: C.ivory }}>{ex}</button>
               ))}
             </div>
+            <div style={{ marginTop: 18, fontSize: 10, color: C.muted, letterSpacing: "0.16em" }} className="mono">🧠 DEEP RESEARCH PLAYBOOKS</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 9 }}>
+              {RESEARCH_PLAYBOOKS.map(([label, tmpl]) => (
+                <button key={label} onClick={() => { setDeep(true); setInput(tmpl); }} className="lift" title={tmpl}
+                  style={{ cursor: "pointer", fontSize: 12, padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.gold}55`, background: C.goldSoft, color: C.gold }}>{label}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: 10.5, color: C.muted, marginTop: 7 }}>Loads a template + turns on Deep Research — fill the &lt;…&gt; and hit RESEARCH.</div>
           </div>
         )}
         {log.map((e, i) => {
@@ -1136,7 +1162,7 @@ function AgentChat({ pw, config }) {
         {spend >= cap && <span style={{ color: C.red }}>cap reached — deep web paused, using Quick</span>}
         <span style={{ color: C.muted, borderLeft: `1px solid ${C.line}`, paddingLeft: 12 }}
           title={`Actual API usage this month: ${fmtTok(tokens.in)} input · ${fmtTok(tokens.out)} output · ${fmtTok(tokens.cacheRead)} cache-read · ${fmtTok(tokens.cacheWrite)} cache-write${tokens.webSearch ? ` · ${tokens.webSearch} web searches` : ""}, across ${tokens.calls} AI calls. Cost is an estimate at Claude Sonnet 4.6 rates.`}>
-          Tokens / mo: <strong style={{ color: C.ivory }}>{fmtTok(tokens.in + tokens.out + tokens.cacheRead + tokens.cacheWrite)}</strong> · est <strong style={{ color: C.ivory }}>${tokenCost(tokens).toFixed(2)}</strong>
+          Tokens / mo: <strong style={{ color: C.ivory }}>{fmtTok(tokens.in + tokens.out + tokens.cacheRead + tokens.cacheWrite)}</strong> · est <strong style={{ color: C.ivory }}>${(tokens.cost || 0).toFixed(2)}</strong>
         </span>
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>

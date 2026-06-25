@@ -120,6 +120,7 @@ export default async function handler(req, res) {
     // re-send to let it continue. Bounded so a runaway can't burn the budget — raised
     // to 6 so a deeper multi-search run (on Pro) can finish its continuation legs.
     const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, web_search_requests: 0 };
+    const sources = []; const seenSrc = new Set(); // verifiable citations from the web-search results
     for (let i = 0; i < 6; i++) {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -151,6 +152,15 @@ export default async function handler(req, res) {
       usage.web_search_requests += (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
       for (const block of data.content || []) {
         if (block.type === "text" && block.text) parts.push(block.text);
+        // Collect the actual web sources the search returned, so the brief is verifiable.
+        if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
+          for (const r of block.content) {
+            const url = r && r.url;
+            if (!url || seenSrc.has(url)) continue;
+            seenSrc.add(url);
+            sources.push({ url, title: String(r.title || url).replace(/\s+/g, " ").trim().slice(0, 160) });
+          }
+        }
       }
       if (data.stop_reason !== "pause_turn") break;
       messages.push({ role: "assistant", content: data.content });
@@ -162,6 +172,7 @@ export default async function handler(req, res) {
       model: RESEARCH_MODEL,
       stop_reason: last && last.stop_reason,
       usage,
+      sources: sources.slice(0, 20),
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "research" });

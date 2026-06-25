@@ -22,6 +22,19 @@ async function soda(dataset, params) {
   return r.json().catch(() => []);
 }
 
+// DTSC EnviroStor cleanup/contamination sites (statewide ArcGIS) — a diligence flag.
+const ENVIROSTOR = process.env.ENVIROSTOR_URL || "https://services3.arcgis.com/Oy2JTCD10wkoelxS/arcgis/rest/services/Envirostor_Public_Data_Export/FeatureServer/0";
+async function envirostor(where) {
+  const params = new URLSearchParams({
+    where, outFields: "project_name,address,apn,site_type,status,status_date,potential_coc,confirmed_coc",
+    returnGeometry: "false", orderByFields: "status_date DESC", resultRecordCount: "15", f: "json",
+  });
+  const r = await fetch(`${ENVIROSTOR}/query?${params}`);
+  if (!r.ok) return [];
+  const j = await r.json().catch(() => ({}));
+  return (j.features || []).map((f) => f.attributes || {});
+}
+
 // Pull "<houseNumber>" and the primary street token out of a free-form address.
 function addrParts(address) {
   const a = clean(address);
@@ -58,9 +71,16 @@ export default async function handler(req, res) {
     const mapblklot = b && l && lotM
       ? `${b.replace(/\D/g, "").padStart(4, "0")}${lotM[1].padStart(3, "0")}${lotM[2].toUpperCase()}`
       : null;
+    // EnviroStor apn matches SF's blocklot (4-digit block + 3-digit numeric lot); match on
+    // that OR the street address, scoped to SF.
+    const apnCandidate = b && lotM ? `${b.replace(/\D/g, "").padStart(4, "0")}${lotM[1].padStart(3, "0")}` : null;
+    const envWhere = [
+      apnCandidate ? `apn='${apnCandidate}'` : null,
+      num && street ? `(UPPER(city)='SAN FRANCISCO' AND UPPER(address) LIKE '%${num}%${street}%')` : null,
+    ].filter(Boolean).join(" OR ") || null;
     const addrLike = num && street ? `upper(full_business_address) like '%${num}%${street}%'` : (street ? `upper(full_business_address) like '%${street}%'` : null);
 
-    const [permits, complaints, biz, evictions, fire, c311, planning, pipeline] = await Promise.all([
+    const [permits, complaints, biz, evictions, fire, c311, planning, pipeline, env] = await Promise.all([
       blockLotWhere ? soda("i98e-djp9", { $where: blockLotWhere, $select: "permit_number,permit_type_definition,description,status,estimated_cost,revised_cost,proposed_use,existing_use,filed_date,issued_date", $order: "filed_date DESC", $limit: 25 }) : [],
       blockLotWhere ? soda("gm2e-bten", { $where: blockLotWhere, $select: "complaint_number,complaint_description,status,date_filed,date_abated", $order: "date_filed DESC", $limit: 25 }) : [],
       addrLike ? soda("g8m3-pdis", { $where: addrLike, $select: "ownership_name,dba_name,full_business_address,location_start_date,location_end_date", $order: "location_start_date DESC", $limit: 30 }) : [],
@@ -71,6 +91,8 @@ export default async function handler(req, res) {
       blockLotWhere ? soda("qvu5-m3a2", { $where: blockLotWhere, $select: "project_address,project_name,description,record_status,open_date,applicant,applicant_org,number_of_units_prop", $order: "open_date DESC", $limit: 15 }) : [],
       // Development pipeline -> the SPONSOR + a named CONTACT and PHONE for active projects.
       mapblklot ? soda("6jgi-cpb4", { $where: `blklot='${mapblklot}'`, $select: "nameaddr,sponsor,contact,contactph,current_status,current_status_date,description_planning,net_pipeline_units,ret", $order: "current_status_date DESC", $limit: 10 }) : [],
+      // EnviroStor contamination / cleanup sites (DTSC, statewide) at/near the lot.
+      envWhere ? envirostor(envWhere) : [],
     ]);
 
     // Permits: recent + total estimated cost of open work.
@@ -118,6 +140,14 @@ export default async function handler(req, res) {
       description: clean(p.description_planning).slice(0, 140) || null,
     })).filter((p) => p.sponsor || p.contact || p.project);
 
+    // EnviroStor: contamination / cleanup sites at or near the lot (development diligence).
+    const envSites = env.map((e) => ({
+      name: clean(e.project_name) || clean(e.address), address: clean(e.address),
+      type: clean(e.site_type), status: clean(e.status),
+      contaminants: clean(e.confirmed_coc || e.potential_coc) || null,
+    })).filter((e) => e.name || e.address);
+    const envOpen = envSites.filter((e) => /active|state response|open|operation|investigation/i.test(e.status));
+
     return res.status(200).json({
       block: b || null, lot: l || null,
       permits: { count: permits.length, recent: permitList.slice(0, 8) },
@@ -128,7 +158,8 @@ export default async function handler(req, res) {
       complaints_311: c311.length,
       planning_applications: { count: planningList.length, recent: planningList.slice(0, 6) },
       development_pipeline: pipelineList.slice(0, 4),
-      note: "SF intel (DataSF). NO owner name in CA open data — get the owner via web_research; the active business 'operator' (ownership_name) is a real contact lead. PLANNING applicant + DEVELOPMENT PIPELINE sponsor/contact/contact_phone are the closest thing to an owner contact here — a named person/firm tied to the property (CAVEAT: often the owner's rep — architect/attorney/expediter — not the owner directly, but a warm lead who routes to the owner). Eviction addresses are masked to the block (street/corridor signal, not building-exact); Ellis Act / owner move-in / demolition / capital-improvement causes = landlord clearing the building = strong motivation. Permits with a use change or high cost = active repositioning.",
+      environmental: { count: envSites.length, open: envOpen.length, sites: envSites.slice(0, 6) },
+      note: "SF intel (DataSF). NO owner name in CA open data — get the owner via web_research; the active business 'operator' (ownership_name) is a real contact lead. PLANNING applicant + DEVELOPMENT PIPELINE sponsor/contact/contact_phone are the closest thing to an owner contact here — a named person/firm tied to the property (CAVEAT: often the owner's rep — architect/attorney/expediter — not the owner directly, but a warm lead who routes to the owner). Eviction addresses are masked to the block (street/corridor signal, not building-exact); Ellis Act / owner move-in / demolition / capital-improvement causes = landlord clearing the building = strong motivation. Permits with a use change or high cost = active repositioning. ENVIRONMENTAL = DTSC EnviroStor contamination/cleanup sites at/near the lot (open/Active = a real diligence + cost issue, especially on commercial/industrial/development targets).",
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "sfintel" });

@@ -793,6 +793,8 @@ function addSpend(amount) { try { const cur = Number(localStorage.getItem(SPEND_
 const SCOUT_SPEND_KEY = "fr_scout_spend_v1", SCOUT_CAP_KEY = "fr_scout_cap_v1", SCOUT_MODE_KEY = "fr_scout_mode_v1";
 const WEB_RUN_COST = 0.15;
 const MAX_AGENT_STEPS = 6; // cap tool steps per request (was 10) to bound cost/runaway
+const DEEP_RESEARCH_STEPS = 24; // higher budget in Deep Research mode (opt-in, exhaustive)
+const SCOUT_DEEP_KEY = "fr_scout_deepresearch_v1";
 const curMonth = () => new Date().toISOString().slice(0, 7);
 function scoutSpend() { try { const o = JSON.parse(localStorage.getItem(SCOUT_SPEND_KEY) || "{}"); return o.month === curMonth() ? (Number(o.spent) || 0) : 0; } catch { return 0; } }
 function addScoutSpend(amt) { try { localStorage.setItem(SCOUT_SPEND_KEY, JSON.stringify({ month: curMonth(), spent: scoutSpend() + amt })); } catch { /* quota */ } }
@@ -901,7 +903,9 @@ function AgentChat({ pw, config }) {
   const [mode, setModeState] = useState(() => { try { return localStorage.getItem(SCOUT_MODE_KEY) || "deep"; } catch { return "deep"; } });
   const [spend, setSpend] = useState(scoutSpend());
   const [cap, setCapState] = useState(scoutCap());
+  const [deepResearch, setDeepState] = useState(() => { try { return localStorage.getItem(SCOUT_DEEP_KEY) === "1"; } catch { return false; } });
   const setMode = (m) => { setModeState(m); try { localStorage.setItem(SCOUT_MODE_KEY, m); } catch { /* quota */ } };
+  const setDeep = (v) => { setDeepState(v); try { localStorage.setItem(SCOUT_DEEP_KEY, v ? "1" : "0"); } catch { /* quota */ } };
   const idRef = useRef(0);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
@@ -980,10 +984,12 @@ function AgentChat({ pw, config }) {
     return out;
   };
 
-  // One request = run the agent loop to completion (or the safety step cap).
-  const runLoop = async (messages) => {
-    for (let turn = 0; turn < MAX_AGENT_STEPS; turn++) {
-      const data = await postJSON("/api/agent", { password: pw, messages });
+  // One request = run the agent loop to completion (or the safety step cap). Deep Research
+  // mode lifts the step budget and tells the backend to plan → investigate → write a report.
+  const runLoop = async (messages, deep = false) => {
+    const maxSteps = deep ? DEEP_RESEARCH_STEPS : MAX_AGENT_STEPS;
+    for (let turn = 0; turn < maxSteps; turn++) {
+      const data = await postJSON("/api/agent", { password: pw, messages, deepResearch: deep });
       const content = data.content || [];
       const toolUses = [];
       for (const block of content) {
@@ -1008,7 +1014,7 @@ function AgentChat({ pw, config }) {
       messages.push({ role: "user", content: results });
     }
     setConvo([...messages]);
-    setLog((l) => [...l, { kind: "error", text: "Hit the step limit for one request. Ask me to continue if you need more." }]);
+    setLog((l) => [...l, { kind: "error", text: "Reached the step limit for this run. Ask me to continue if you need more." }]);
   };
 
   const send = async (preset) => {
@@ -1021,7 +1027,7 @@ function AgentChat({ pw, config }) {
     setConvo(messages);
     setLog((l) => [...l, { kind: "user", text: attachedPdf ? `${text}  📎 ${attachedPdf.name}` : text }]);
     setBusy(true);
-    try { await runLoop(messages); }
+    try { await runLoop(messages, deepResearch); }
     catch (e) { setLog((l) => [...l, { kind: "error", text: e.message }]); }
     finally { setBusy(false); setAttachedPdf(null); }
   };
@@ -1071,7 +1077,7 @@ function AgentChat({ pw, config }) {
             <div key={i} style={{ margin: "10px 0", fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{e.text}</div>
           );
         })}
-        {busy && <div className="mono" style={{ fontSize: 11, color: C.gold, marginTop: 10 }}>▸ Scout is working…</div>}
+        {busy && <div className="mono" style={{ fontSize: 11, color: C.gold, marginTop: 10 }}>▸ {deepResearch ? "Scout is researching deeply — planning, investigating, compiling…" : "Scout is working…"}</div>}
       </div>
 
       {attachedPdf && (
@@ -1080,8 +1086,13 @@ function AgentChat({ pw, config }) {
           <span onClick={() => setAttachedPdf(null)} style={{ cursor: "pointer", color: C.muted, marginLeft: 4 }}>✕</span>
         </div>
       )}
-      {/* Cost controls: Quick (free-ish) vs Deep (paid web) + monthly web-spend cap */}
+      {/* Cost controls: Deep Research depth · Quick (free-ish) vs Deep web · monthly web-spend cap */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap", fontSize: 11.5 }}>
+        <button onClick={() => setDeep(!deepResearch)}
+          title="Deep Research: Scout plans, investigates exhaustively across every engine, and writes a full cited report. Slower (more steps); uses live web only if 'Deep web' is also on."
+          className="mono lift" style={{ cursor: "pointer", fontSize: 10.5, padding: "5px 12px", borderRadius: 7, letterSpacing: "0.04em", border: `1px solid ${deepResearch ? C.gold : C.line}`, background: deepResearch ? C.goldSoft : "transparent", color: deepResearch ? C.gold : C.muted }}>
+          🧠 Deep Research{deepResearch ? " · ON" : ""}
+        </button>
         <div style={{ display: "flex", gap: 3, border: `1px solid ${C.line}`, borderRadius: 8, padding: 2 }}>
           {[["quick", "⚡ Quick", "Knowledge only — no paid web search"], ["deep", "🔎 Deep web", "Live web research (~$0.15/run)"]].map(([m, lab, tip]) => (
             <button key={m} onClick={() => setMode(m)} title={tip} className="mono"
@@ -1105,7 +1116,7 @@ function AgentChat({ pw, config }) {
           placeholder="Ask Scout to source, research, grade an OM, or redline an NDA…"
           style={{ flex: 1, fontSize: 14, padding: "12px 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory }} />
         <button onClick={() => send()} disabled={busy || (!input.trim() && !attachedPdf)} className="mono lift"
-          style={{ cursor: busy || (!input.trim() && !attachedPdf) ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 9, border: `1px solid ${C.gold}`, background: busy || (!input.trim() && !attachedPdf) ? C.panel : C.goldSoft, color: C.gold, opacity: busy || (!input.trim() && !attachedPdf) ? 0.5 : 1 }}>SEND</button>
+          style={{ cursor: busy || (!input.trim() && !attachedPdf) ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 9, border: `1px solid ${C.gold}`, background: busy || (!input.trim() && !attachedPdf) ? C.panel : C.goldSoft, color: C.gold, opacity: busy || (!input.trim() && !attachedPdf) ? 0.5 : 1 }}>{deepResearch ? "RESEARCH" : "SEND"}</button>
         {log.length > 0 && <button onClick={reset} disabled={busy} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "0 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: "transparent", color: C.muted }}>NEW</button>}
       </div>
       <div style={{ fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>

@@ -14,6 +14,12 @@ const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
 const toNum = (v) => { if (v == null || v === "") return null; const n = Number(String(v).replace(/[$,]/g, "")); return Number.isFinite(n) ? n : null; };
 const sqlStr = (s) => clean(s).toUpperCase().replace(/'/g, "''");
 const day = (v) => clean(v).slice(0, 10);
+const milesBetween = (la1, lo1, la2, lo2) => {
+  const R = 3958.8, d2r = Math.PI / 180;
+  const dLa = (la2 - la1) * d2r, dLo = (lo2 - lo1) * d2r;
+  const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * d2r) * Math.cos(la2 * d2r) * Math.sin(dLo / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
 
 async function soda(dataset, params) {
   const token = process.env.SOCRATA_APP_TOKEN;
@@ -80,7 +86,7 @@ export default async function handler(req, res) {
     ].filter(Boolean).join(" OR ") || null;
     const addrLike = num && street ? `upper(full_business_address) like '%${num}%${street}%'` : (street ? `upper(full_business_address) like '%${street}%'` : null);
 
-    const [permits, complaints, biz, evictions, fire, c311, planning, pipeline, env] = await Promise.all([
+    const [permits, complaints, biz, evictions, fire, c311, planning, pipeline, env, soft, parcel] = await Promise.all([
       blockLotWhere ? soda("i98e-djp9", { $where: blockLotWhere, $select: "permit_number,permit_type_definition,description,status,estimated_cost,revised_cost,proposed_use,existing_use,filed_date,issued_date", $order: "filed_date DESC", $limit: 25 }) : [],
       blockLotWhere ? soda("gm2e-bten", { $where: blockLotWhere, $select: "complaint_number,complaint_description,status,date_filed,date_abated", $order: "date_filed DESC", $limit: 25 }) : [],
       addrLike ? soda("g8m3-pdis", { $where: addrLike, $select: "ownership_name,dba_name,full_business_address,location_start_date,location_end_date", $order: "location_start_date DESC", $limit: 30 }) : [],
@@ -93,6 +99,10 @@ export default async function handler(req, res) {
       mapblklot ? soda("6jgi-cpb4", { $where: `blklot='${mapblklot}'`, $select: "nameaddr,sponsor,contact,contactph,current_status,current_status_date,description_planning,net_pipeline_units,ret", $order: "current_status_date DESC", $limit: 10 }) : [],
       // EnviroStor contamination / cleanup sites (DTSC, statewide) at/near the lot.
       envWhere ? envirostor(envWhere) : [],
+      // Mandatory soft-story seismic retrofit list -> compliance/cost pressure.
+      blockLotWhere ? soda("beah-shgi", { $where: blockLotWhere, $select: "tier,status,property_address", $limit: 3 }) : [],
+      // Parcel centroid -> coordinates for the transit-proximity (foot-traffic) signal.
+      mapblklot ? soda("acdm-wktn", { $where: `blklot='${mapblklot}'`, $select: "centroid_latitude,centroid_longitude", $limit: 1 }) : [],
     ]);
 
     // Permits: recent + total estimated cost of open work.
@@ -148,6 +158,31 @@ export default async function handler(req, res) {
     })).filter((e) => e.name || e.address);
     const envOpen = envSites.filter((e) => /active|state response|open|operation|investigation/i.test(e.status));
 
+    // Soft-story seismic retrofit: on the list and not yet completed = compliance/cost pressure.
+    const softRow = soft && soft[0] ? soft[0] : null;
+    const softStory = softRow ? {
+      tier: clean(softRow.tier) || null, status: clean(softRow.status),
+      retrofit_pending: !/complete|cfc issued|exempt|not.*required/i.test(clean(softRow.status)),
+    } : null;
+
+    // Transit proximity (foot-traffic proxy): nearest Muni stops to the parcel centroid.
+    let transit = null;
+    const lat = parcel && parcel[0] ? toNum(parcel[0].centroid_latitude) : null;
+    const lon = parcel && parcel[0] ? toNum(parcel[0].centroid_longitude) : null;
+    if (lat != null && lon != null) {
+      const d = 0.0028; // ~0.19 mi bbox
+      const stops = await soda("i28k-bkz6", {
+        $where: `latitude between ${lat - d} and ${lat + d} and longitude between ${lon - d} and ${lon + d}`,
+        $select: "stopname,onstreet,latitude,longitude", $limit: 80,
+      }).catch(() => []);
+      const ranked = stops.map((s) => ({ stop: clean(s.stopname), on: clean(s.onstreet), dist: milesBetween(lat, lon, toNum(s.latitude), toNum(s.longitude)) }))
+        .filter((s) => Number.isFinite(s.dist)).sort((a, b) => a.dist - b.dist);
+      transit = {
+        nearest_stop: ranked[0] ? { stop: ranked[0].stop, on_street: ranked[0].on, miles: Math.round(ranked[0].dist * 100) / 100 } : null,
+        stops_within_quarter_mile: ranked.filter((s) => s.dist <= 0.25).length,
+      };
+    }
+
     return res.status(200).json({
       block: b || null, lot: l || null,
       permits: { count: permits.length, recent: permitList.slice(0, 8) },
@@ -159,7 +194,9 @@ export default async function handler(req, res) {
       planning_applications: { count: planningList.length, recent: planningList.slice(0, 6) },
       development_pipeline: pipelineList.slice(0, 4),
       environmental: { count: envSites.length, open: envOpen.length, sites: envSites.slice(0, 6) },
-      note: "SF intel (DataSF). NO owner name in CA open data — get the owner via web_research; the active business 'operator' (ownership_name) is a real contact lead. PLANNING applicant + DEVELOPMENT PIPELINE sponsor/contact/contact_phone are the closest thing to an owner contact here — a named person/firm tied to the property (CAVEAT: often the owner's rep — architect/attorney/expediter — not the owner directly, but a warm lead who routes to the owner). Eviction addresses are masked to the block (street/corridor signal, not building-exact); Ellis Act / owner move-in / demolition / capital-improvement causes = landlord clearing the building = strong motivation. Permits with a use change or high cost = active repositioning. ENVIRONMENTAL = DTSC EnviroStor contamination/cleanup sites at/near the lot (open/Active = a real diligence + cost issue, especially on commercial/industrial/development targets).",
+      soft_story: softStory,
+      transit,
+      note: "SF intel (DataSF). NO owner name in CA open data — get the owner via web_research; the active business 'operator' (ownership_name) is a real contact lead. PLANNING applicant + DEVELOPMENT PIPELINE sponsor/contact/contact_phone are the closest thing to an owner contact here — a named person/firm tied to the property (CAVEAT: often the owner's rep — architect/attorney/expediter — not the owner directly, but a warm lead who routes to the owner). Eviction addresses are masked to the block (street/corridor signal, not building-exact); Ellis Act / owner move-in / demolition / capital-improvement causes = landlord clearing the building = strong motivation. Permits with a use change or high cost = active repositioning. ENVIRONMENTAL = DTSC EnviroStor contamination/cleanup sites at/near the lot (open/Active = a real diligence + cost issue, especially on commercial/industrial/development targets). SOFT_STORY = mandatory seismic retrofit list; retrofit_pending = unfinished work = compliance/cost pressure (a motivation signal). TRANSIT = nearest Muni stop + stops within 0.25mi = a foot-traffic / retail-quality proxy (SF analog of the NYC subway signal).",
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "sfintel" });

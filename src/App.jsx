@@ -811,6 +811,32 @@ function webResearchMode() {
   } catch { return "web"; }
 }
 
+// ── Token + cost tracker ────────────────────────────────────────────────────────
+// Real Anthropic usage (not an estimate): every AI response carries a `usage` object
+// (input / output / cache-read / cache-write tokens, + web_search_requests). We tally it
+// per calendar month in localStorage and price it. Built to extend per-user when the team
+// hub lands (today it's per-browser). Pricing = Claude Sonnet 4.6 (the agent + research
+// default), USD per 1M tokens; web search is $/request.
+const TOKEN_KEY = "fr_token_usage_v1";
+const TOK_PRICE = { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75, webSearch: 0.01 };
+const blankUsage = () => ({ month: curMonth(), in: 0, out: 0, cacheRead: 0, cacheWrite: 0, webSearch: 0, calls: 0 });
+function tokenUsage() { try { const o = JSON.parse(localStorage.getItem(TOKEN_KEY) || "{}"); return o && o.month === curMonth() ? o : blankUsage(); } catch { return blankUsage(); } }
+function recordUsage(u) {
+  const cur = tokenUsage();
+  if (u) {
+    cur.in += u.input_tokens || 0;
+    cur.out += u.output_tokens || 0;
+    cur.cacheRead += u.cache_read_input_tokens || 0;
+    cur.cacheWrite += u.cache_creation_input_tokens || 0;
+    cur.webSearch += u.web_search_requests || (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
+    cur.calls += 1;
+  }
+  try { localStorage.setItem(TOKEN_KEY, JSON.stringify(cur)); } catch { /* quota */ }
+  return cur;
+}
+const tokenCost = (o) => (o.in * TOK_PRICE.in + o.out * TOK_PRICE.out + o.cacheRead * TOK_PRICE.cacheRead + o.cacheWrite * TOK_PRICE.cacheWrite) / 1e6 + o.webSearch * TOK_PRICE.webSearch;
+const fmtTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n || 0));
+
 // Trim a web-research/brand_radar response down to just the brief — `model` and
 // `stop_reason` are noise that would ride along in context on every later turn.
 function shapeWebResult(data) {
@@ -904,6 +930,7 @@ function AgentChat({ pw, config }) {
   const [spend, setSpend] = useState(scoutSpend());
   const [cap, setCapState] = useState(scoutCap());
   const [deepResearch, setDeepState] = useState(() => { try { return localStorage.getItem(SCOUT_DEEP_KEY) === "1"; } catch { return false; } });
+  const [tokens, setTokens] = useState(() => tokenUsage());
   const setMode = (m) => { setModeState(m); try { localStorage.setItem(SCOUT_MODE_KEY, m); } catch { /* quota */ } };
   const setDeep = (v) => { setDeepState(v); try { localStorage.setItem(SCOUT_DEEP_KEY, v ? "1" : "0"); } catch { /* quota */ } };
   const idRef = useRef(0);
@@ -961,6 +988,7 @@ function AgentChat({ pw, config }) {
       const wHit = toolCacheRef.current.get(wKey);
       if (wHit) return { ...wHit, uiSummary: `${wHit.uiSummary} (cached)` };
       const data = await postJSON(TOOL_ROUTES[name].url, { password: pw, ...TOOL_ROUTES[name].body(inputArgs), mode: deep ? "web" : "knowledge" });
+      if (data && data.usage) setTokens(recordUsage(data.usage));
       if (deep) { addScoutSpend(WEB_RUN_COST); setSpend(scoutSpend()); }
       const out = { forModel: shapeWebResult(data), uiSummary: deep ? "web research" : (overCap ? "quick take (cap reached)" : "quick take") };
       if (!data.error) toolCacheRef.current.set(wKey, out);
@@ -990,6 +1018,7 @@ function AgentChat({ pw, config }) {
     const maxSteps = deep ? DEEP_RESEARCH_STEPS : MAX_AGENT_STEPS;
     for (let turn = 0; turn < maxSteps; turn++) {
       const data = await postJSON("/api/agent", { password: pw, messages, deepResearch: deep });
+      if (data && data.usage) setTokens(recordUsage(data.usage));
       const content = data.content || [];
       const toolUses = [];
       for (const block of content) {
@@ -1105,6 +1134,10 @@ function AgentChat({ pw, config }) {
             style={{ width: 46, fontSize: 11.5, padding: "2px 4px", border: `1px solid ${C.line}`, borderRadius: 5, background: C.panel, color: C.ivory, fontFamily: "'IBM Plex Mono',monospace" }} />
         </span>
         {spend >= cap && <span style={{ color: C.red }}>cap reached — deep web paused, using Quick</span>}
+        <span style={{ color: C.muted, borderLeft: `1px solid ${C.line}`, paddingLeft: 12 }}
+          title={`Actual API usage this month: ${fmtTok(tokens.in)} input · ${fmtTok(tokens.out)} output · ${fmtTok(tokens.cacheRead)} cache-read · ${fmtTok(tokens.cacheWrite)} cache-write${tokens.webSearch ? ` · ${tokens.webSearch} web searches` : ""}, across ${tokens.calls} AI calls. Cost is an estimate at Claude Sonnet 4.6 rates.`}>
+          Tokens / mo: <strong style={{ color: C.ivory }}>{fmtTok(tokens.in + tokens.out + tokens.cacheRead + tokens.cacheWrite)}</strong> · est <strong style={{ color: C.ivory }}>${tokenCost(tokens).toFixed(2)}</strong>
+        </span>
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         <input ref={fileRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => { onAttach(e.target.files[0]); e.target.value = ""; }} />

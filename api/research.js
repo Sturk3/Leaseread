@@ -74,7 +74,7 @@ export default async function handler(req, res) {
     }
     // Zero-cost deploy/version probe (no Anthropic call). liveWeb reflects the env gate.
     if (req.body && req.body.debug) {
-      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, liveWeb: process.env.RESEARCH_LIVE_WEB !== "0", build: "v9-live" });
+      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, liveWeb: process.env.RESEARCH_LIVE_WEB !== "0", build: "v10-usage" });
     }
     if (!process.env.ANTHROPIC_API_KEY) {
       return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
@@ -119,6 +119,7 @@ export default async function handler(req, res) {
     // iteration cap the response comes back as stop_reason "pause_turn" and we
     // re-send to let it continue. Bounded so a runaway can't burn the budget — raised
     // to 6 so a deeper multi-search run (on Pro) can finish its continuation legs.
+    const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, web_search_requests: 0 };
     for (let i = 0; i < 6; i++) {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -142,6 +143,12 @@ export default async function handler(req, res) {
       }
       if (!r.ok) return res.status(r.status).json(data);
       last = data;
+      const u = data.usage || {};
+      usage.input_tokens += u.input_tokens || 0;
+      usage.output_tokens += u.output_tokens || 0;
+      usage.cache_read_input_tokens += u.cache_read_input_tokens || 0;
+      usage.cache_creation_input_tokens += u.cache_creation_input_tokens || 0;
+      usage.web_search_requests += (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
       for (const block of data.content || []) {
         if (block.type === "text" && block.text) parts.push(block.text);
       }
@@ -154,6 +161,7 @@ export default async function handler(req, res) {
       brief: brief || "No usable web information was found for this property and owner.",
       model: RESEARCH_MODEL,
       stop_reason: last && last.stop_reason,
+      usage,
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "research" });

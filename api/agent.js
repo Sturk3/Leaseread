@@ -218,7 +218,9 @@ const TOOLS = [
       "address): building permits (development activity, cost, use change), DBI building complaints, the active BUSINESS operators " +
       "at the address (legal name = a real contact lead) + recent closures (vacancy signal), nearby EVICTION notices with cause " +
       "flags (Ellis Act / owner move-in / demolition / capital improvement = landlord clearing the building = strong motivation), " +
-      "open fire-code violations, and 311 volume. The SF analog of property_intel. Needs block + lot + address.",
+      "open fire-code violations, 311 volume, PLANNING entitlement filings (the applicant — a named person/firm tied to the " +
+      "property), and the DEVELOPMENT PIPELINE (project sponsor + a named contact and PHONE). Planning applicant + pipeline contact " +
+      "are the closest thing to an owner contact in SF (often the owner's rep, but a warm lead). The SF analog of property_intel. Needs block + lot + address.",
     input_schema: {
       type: "object",
       properties: {
@@ -393,7 +395,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v16-ca-entity" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, tools: TOOLS.map((t) => t.name), build: "agent-v17-sf-planning" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

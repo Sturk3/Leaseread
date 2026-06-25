@@ -52,15 +52,25 @@ export default async function handler(req, res) {
     const b = clean(block), l = clean(lot);
     const { num, street } = addrParts(address);
     const blockLotWhere = b && l ? `block='${b.replace(/'/g, "''")}' AND lot='${l.replace(/'/g, "''")}'` : null;
+    // Development Pipeline keys on the concatenated map block-lot: 4-digit block + 3-digit
+    // lot + an optional alpha suffix (e.g. "5323014A" for block 5323, lot 014A).
+    const lotM = l.match(/^(\d+)([A-Za-z]*)$/);
+    const mapblklot = b && l && lotM
+      ? `${b.replace(/\D/g, "").padStart(4, "0")}${lotM[1].padStart(3, "0")}${lotM[2].toUpperCase()}`
+      : null;
     const addrLike = num && street ? `upper(full_business_address) like '%${num}%${street}%'` : (street ? `upper(full_business_address) like '%${street}%'` : null);
 
-    const [permits, complaints, biz, evictions, fire, c311] = await Promise.all([
+    const [permits, complaints, biz, evictions, fire, c311, planning, pipeline] = await Promise.all([
       blockLotWhere ? soda("i98e-djp9", { $where: blockLotWhere, $select: "permit_number,permit_type_definition,description,status,estimated_cost,revised_cost,proposed_use,existing_use,filed_date,issued_date", $order: "filed_date DESC", $limit: 25 }) : [],
       blockLotWhere ? soda("gm2e-bten", { $where: blockLotWhere, $select: "complaint_number,complaint_description,status,date_filed,date_abated", $order: "date_filed DESC", $limit: 25 }) : [],
       addrLike ? soda("g8m3-pdis", { $where: addrLike, $select: "ownership_name,dba_name,full_business_address,location_start_date,location_end_date", $order: "location_start_date DESC", $limit: 30 }) : [],
       street ? soda("5cei-gny5", { $where: `upper(address) like '%${street}%'`, $select: "address,file_date,ellis_act_withdrawal,owner_move_in,demolition,capital_improvement,substantial_rehab,condo_conversion,development,nuisance,breach,non_payment", $order: "file_date DESC", $limit: 30 }) : [],
       num && street ? soda("4zuq-2cbe", { $where: `upper(address) like '%${num}%${street}%'`, $select: "address,violation_item_description,status,violation_date,corrective_action", $order: "violation_date DESC", $limit: 20 }) : [],
       num && street ? soda("vw6y-z8j6", { $where: `upper(street) like '%${street}%'`, $select: "service_name,status_description,requested_datetime", $order: "requested_datetime DESC", $limit: 50 }) : [],
+      // Planning entitlement filings -> the APPLICANT name (often the owner or their rep).
+      blockLotWhere ? soda("qvu5-m3a2", { $where: blockLotWhere, $select: "project_address,project_name,description,record_status,open_date,applicant,applicant_org,number_of_units_prop", $order: "open_date DESC", $limit: 15 }) : [],
+      // Development pipeline -> the SPONSOR + a named CONTACT and PHONE for active projects.
+      mapblklot ? soda("6jgi-cpb4", { $where: `blklot='${mapblklot}'`, $select: "nameaddr,sponsor,contact,contactph,current_status,current_status_date,description_planning,net_pipeline_units,ret", $order: "current_status_date DESC", $limit: 10 }) : [],
     ]);
 
     // Permits: recent + total estimated cost of open work.
@@ -93,6 +103,21 @@ export default async function handler(req, res) {
     const fireOpen = fire.filter((f) => !/close|complete|abated/i.test(clean(f.status)));
     const fireList = fireOpen.slice(0, 8).map((f) => ({ item: clean(f.violation_item_description), status: clean(f.status), date: day(f.violation_date) }));
 
+    // Planning filings: the applicant is a named human/firm tied to the property (a lead).
+    const planningList = planning.map((p) => ({
+      project: clean(p.project_name) || clean(p.description).slice(0, 100),
+      applicant: clean(p.applicant) || null, applicant_org: clean(p.applicant_org) || null,
+      status: clean(p.record_status), opened: day(p.open_date), units_proposed: toNum(p.number_of_units_prop),
+    })).filter((p) => p.applicant || p.project);
+
+    // Development pipeline: sponsor + named contact + PHONE for active projects.
+    const pipelineList = pipeline.map((p) => ({
+      project: clean(p.nameaddr), sponsor: clean(p.sponsor) || null,
+      contact: clean(p.contact) || null, contact_phone: clean(p.contactph) || null,
+      status: clean(p.current_status), retail_gsf: toNum(p.ret) || null, net_units: toNum(p.net_pipeline_units),
+      description: clean(p.description_planning).slice(0, 140) || null,
+    })).filter((p) => p.sponsor || p.contact || p.project);
+
     return res.status(200).json({
       block: b || null, lot: l || null,
       permits: { count: permits.length, recent: permitList.slice(0, 8) },
@@ -101,7 +126,9 @@ export default async function handler(req, res) {
       evictions: { street_count: evictionRows.length, landlord_intent: landlordIntent, recent: evictionRows.slice(0, 10) },
       fire_violations: { open: fireOpen.length, recent: fireList },
       complaints_311: c311.length,
-      note: "SF intel (DataSF). NO owner name in CA open data — get the owner via web_research; the active business 'operator' (ownership_name) is a real contact lead. Eviction addresses are masked to the block, so they're a street/corridor signal, not building-exact; Ellis Act / owner move-in / demolition / capital-improvement causes = landlord clearing the building = strong motivation/repositioning signal. Permits with a use change or high cost = active repositioning.",
+      planning_applications: { count: planningList.length, recent: planningList.slice(0, 6) },
+      development_pipeline: pipelineList.slice(0, 4),
+      note: "SF intel (DataSF). NO owner name in CA open data — get the owner via web_research; the active business 'operator' (ownership_name) is a real contact lead. PLANNING applicant + DEVELOPMENT PIPELINE sponsor/contact/contact_phone are the closest thing to an owner contact here — a named person/firm tied to the property (CAVEAT: often the owner's rep — architect/attorney/expediter — not the owner directly, but a warm lead who routes to the owner). Eviction addresses are masked to the block (street/corridor signal, not building-exact); Ellis Act / owner move-in / demolition / capital-improvement causes = landlord clearing the building = strong motivation. Permits with a use change or high cost = active repositioning.",
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "sfintel" });

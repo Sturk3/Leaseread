@@ -98,17 +98,24 @@ async function enrichNashville(props, cap = 60) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, propertyType, address, minValue, maxValue, minAcres, sinceYear, limit, centerLat, centerLon, radiusMiles, check, debug } = req.body || {};
+    const { password, propertyType, address, owner, minValue, maxValue, minAcres, sinceYear, limit, centerLat, centerLon, radiusMiles, check, debug } = req.body || {};
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v3-distress", base: NASH_BASE });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v4-owner", base: NASH_BASE });
 
     const where = ["IsActive='Y'"];
-    const typeKey = clean(propertyType).toLowerCase().replace(/[\s/-]+/g, "_");
-    const pats = typeKey in USE_PATTERNS ? USE_PATTERNS[typeKey] : (propertyType ? [sqlStr(propertyType)] : null);
-    if (pats && pats.length) where.push(`(${pats.map((p) => `UPPER(LUDesc) LIKE '%${p.replace(/'/g, "''")}%'`).join(" OR ")})`);
+    // OWNER-PORTFOLIO mode: every Davidson County parcel held by this exact owner (the LLC tracker).
+    // Skips the type filter so the whole book shows, regardless of each parcel's land use.
+    const ownerQ = clean(owner);
+    if (!ownerQ) {
+      const typeKey = clean(propertyType).toLowerCase().replace(/[\s/-]+/g, "_");
+      const pats = typeKey in USE_PATTERNS ? USE_PATTERNS[typeKey] : (propertyType ? [sqlStr(propertyType)] : null);
+      if (pats && pats.length) where.push(`(${pats.map((p) => `UPPER(LUDesc) LIKE '%${p.replace(/'/g, "''")}%'`).join(" OR ")})`);
+    } else {
+      where.push(`UPPER(Owner) LIKE '%${sqlStr(ownerQ)}%'`);
+    }
     if (address) where.push(`UPPER(PropAddr) LIKE '%${normStreet(address).replace(/'/g, "''")}%'`);
     const lo = toNum(minValue), hi = toNum(maxValue);
     if (lo != null) where.push(`TotlAppr >= ${lo}`);

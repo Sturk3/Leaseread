@@ -2746,6 +2746,45 @@ function TnLlcFinder({ owner, pw }) {
   );
 }
 
+// LLC tracker — every Davidson County parcel held by the same owner name. Maps an entity to
+// its whole book (find a motivated owner's other buildings). Single-asset LLCs return one;
+// a reused name (a developer / operating co) returns the portfolio.
+function TnOwnerPortfolio({ owner, pw }) {
+  const [state, setState] = useState("idle"); // idle | loading | done | error
+  const [props, setProps] = useState([]);
+  const [err, setErr] = useState("");
+  const run = async () => {
+    setState("loading"); setErr("");
+    try {
+      const d = await postJSON("/api/nashvillesource", { password: pw, owner, propertyType: "any" });
+      setProps(d.properties || []); setState("done");
+    } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
+  };
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>▦ OWNER PORTFOLIO — what this owner holds in Nashville</div>
+        {state !== "loading" && <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻" : "▸ show"}</button>}
+      </div>
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Every Davidson County parcel held by <strong style={{ color: C.ivory }}>{owner}</strong>. A single-asset LLC returns one; a reused name (a developer / operating co) returns the whole book.</div>}
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Searching the county roll…</div>}
+      {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+      {state === "done" && (props.length ? (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{props.length} propert{props.length === 1 ? "y" : "ies"} under this owner</div>
+          {props.slice(0, 40).map((p, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, padding: "3px 0", borderBottom: `1px solid ${C.line}` }}>
+              <span style={{ color: C.ivory }}>{p.address}{p.use ? <span style={{ color: C.muted }}> · {p.use}</span> : ""}</span>
+              <span className="mono" style={{ color: C.muted, whiteSpace: "nowrap" }}>{p.appraised_value ? fmtAmount(p.appraised_value) : ""}</span>
+            </div>
+          ))}
+          {props.length > 40 && <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>+{props.length - 40} more</div>}
+        </div>
+      ) : <div style={{ color: C.muted, fontSize: 12, marginTop: 8 }}>No other parcels found under this exact owner name.</div>)}
+    </div>
+  );
+}
+
 const ENTITY_RE = /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|HOLDINGS|REALTY|PROPERTIES|GROUP|ENTERPRISES|VENTURES)\b/i;
 // Detail panel for the assessor markets (CT · Hamptons · Nashville): the record, the AI quick take,
 // and the PAID skip trace — the SAME owner-contact workflow NYC has, so it works in every market.
@@ -2768,6 +2807,7 @@ function AssessorMarketDetail({ r, pw }) {
       )}
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
       {r.market === "tn" && r.owner && ENTITY_RE.test(r.owner) && <TnLlcFinder owner={r.owner} pw={pw} />}
+      {r.market === "tn" && r.owner && <TnOwnerPortfolio owner={r.owner} pw={pw} />}
       <ResearchBrief r={contactR} pw={pw} />
       <ContactReveal r={contactR} pw={pw} />
     </>
@@ -2990,29 +3030,29 @@ function UnifiedSourcing({ pw, rows, setRows }) {
       } else if (det.market === "tn") {
         const hasPoint = coords && coords.lat != null && coords.lon != null;
         const street = (det.address || "").trim(); // the street portion, if the text named one
+        const justIt = !radius || Number(radius) === 0;
+        const houseNum = streetBits(street).num; // present when a SPECIFIC building was looked up
         let d = null;
-        // A SPATIAL search only makes sense for a specific picked ADDRESS or an explicit radius.
-        // Picking the bare city from autocomplete sets the city-CENTROID coords — a point search
-        // there lands off any parcel and returns nothing — so we skip spatial for a city pick.
-        if (hasPoint && (street || radius)) {
-          // Radius "off" = just that one lot (type filter off so it can't be excluded);
-          // a radius = the parcels within it (keep the type filter, e.g. retail nearby).
-          const justIt = !radius || Number(radius) === 0;
+        if (justIt && houseNum) {
+          // Specific building → the RELIABLE pin is an ADDRESS match (PropAddr LIKE), with the type
+          // filter OFF so the building isn't excluded by its land use. (A map-pin / point-in-polygon
+          // search can land off-parcel, and a retail filter would drop a non-retail address — that's
+          // why "2222 12th Ave S" wouldn't come up.)
+          d = await postJSON("/api/nashvillesource", { password: pw, propertyType: "any", address: street });
+        } else if (hasPoint && (street || radius)) {
+          // A radius area search around a picked point (keep the type filter for "retail nearby").
           d = await postJSON("/api/nashvillesource", { password: pw, centerLat: coords.lat, centerLon: coords.lon, radiusMiles: radius || "", propertyType: justIt ? "any" : mapType(type, "tn"), minValue });
         }
-        // City-level (typed/picked "Nashville"), OR a point search that came back empty (the
-        // geocoder's point fell off-parcel) → fall back to an attribute search by street/type.
+        // Bare street/city name (no house number), or an empty pinned search → attribute search.
         if (!d || !(d.properties || []).length) {
           const specific = /^\s*\d+\s/.test(street);
           d = await postJSON("/api/nashvillesource", { password: pw, propertyType: street && specific ? "any" : mapType(type, "tn"), minValue, ...(street ? { address: street } : {}) });
         }
         out = (d.properties || []).map(nashRow);
-        // "Just it": a specific building (a street with a house number) + radius off → one property.
-        // A bare-city search (no street) is NOT pinned — it returns the full list.
-        const justItTn = !radius || Number(radius) === 0;
-        if (justItTn && /\d/.test(street)) {
-          const { num } = streetBits(street);
-          if (num) { const exact = out.filter((r) => houseInAddress(r.address, num, false)); if (exact.length) out = exact; }
+        // "Just it": pin to the single building matching the house number (TN addresses are number-first).
+        if (justIt && houseNum) {
+          const exact = out.filter((r) => houseInAddress(r.address, houseNum, false));
+          if (exact.length) out = exact;
           out = out.slice(0, 1);
         }
       } else if (det.market === "web") {

@@ -2572,10 +2572,21 @@ function streetBits(addr) {
   if (toks.length > 1 && STREET_SUFFIX.has(toks[toks.length - 1])) toks.pop();
   return { num, core: toks.join(" ") };
 }
-const houseRe = (num) => new RegExp(`(^|\\D)${num}(\\D|$)`); // number-first formats (NYC/TN/Hamptons)
-// CT CAMA `location` is "STREET NAME <padded #>" (e.g. "GREENWICH AVENUE 0200") — pull the
-// trailing (zero-padded, possibly ranged) house number off the end and normalize it.
-const ctTrailingNum = (a) => { const m = String(a || "").match(/(\d+)(?:\s*-\s*\d+)?\s*$/); return m ? String(Number(m[1])) : ""; };
+// Does a property address carry/cover the target house number? Handles a single number OR a
+// RANGE ("252-264", "1216-1252" — common for assembled CT/retail lots), zero-padding, and both
+// number-FIRST formats (NYC/TN/Hamptons "36 MAIN ST") and street-first/padded CT ("GREENWICH
+// AVENUE 0252-0264"). `trailing` = read the number group off the END (CT) vs the START.
+function houseInAddress(address, numStr, trailing) {
+  const n = Number(numStr);
+  if (!Number.isFinite(n)) return false;
+  const m = trailing
+    ? String(address || "").match(/(\d+)(?:\s*-\s*(\d+))?\s*$/)
+    : String(address || "").match(/^\s*(\d+)(?:\s*-\s*(\d+))?/);
+  if (!m) return false;
+  const lo = Number(m[1]);
+  const hi = m[2] != null ? Number(m[2]) : lo;
+  return n >= Math.min(lo, hi) && n <= Math.max(lo, hi);
+}
 const US_STATE_CODES = new Set(["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"]);
 const inNycBox = (lat, lon) => Number.isFinite(lat) && Number.isFinite(lon) && lat >= 40.49 && lat <= 40.92 && lon >= -74.3 && lon <= -73.69;
 function unifiedDetect(loc, coords) {
@@ -2872,7 +2883,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           const { num, core } = streetBits(addr);
           const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: "any", address: core });
           let rows = (d.properties || []).map(ctRow);
-          if (num) { const exact = rows.filter((r) => ctTrailingNum(r.address) === String(Number(num))); if (exact.length) rows = exact; }
+          if (num) { const exact = rows.filter((r) => houseInAddress(r.address, num, true)); if (exact.length) rows = exact; }
           out = rows.slice(0, 1);
         } else {
           const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: mapType(type, "ct"), minPrice: minValue });
@@ -2903,7 +2914,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         const justItTn = !radius || Number(radius) === 0;
         if (justItTn && /\d/.test(street)) {
           const { num } = streetBits(street);
-          if (num) { const exact = out.filter((r) => houseRe(num).test(r.address || "")); if (exact.length) out = exact; }
+          if (num) { const exact = out.filter((r) => houseInAddress(r.address, num, false)); if (exact.length) out = exact; }
           out = out.slice(0, 1);
         }
       } else if (det.market === "web") {
@@ -2919,7 +2930,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           const { num, core } = streetBits(addr);
           const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: "any", address: core });
           let rows = (d.properties || []).map(nyRow);
-          if (num) { const exact = rows.filter((r) => houseRe(num).test(r.address || "")); if (exact.length) rows = exact; }
+          if (num) { const exact = rows.filter((r) => houseInAddress(r.address, num, false)); if (exact.length) rows = exact; }
           out = rows.slice(0, 1);
         } else {
           const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: mapType(type, "ny"), minValue });

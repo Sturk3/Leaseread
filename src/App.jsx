@@ -2250,7 +2250,14 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
       {open && (
         <div style={{ position: "absolute", zIndex: 30, top: "100%", left: 0, right: 0, marginTop: 4, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, boxShadow: "0 10px 28px rgba(20,16,48,0.18)", maxHeight: 240, overflow: "auto" }}>
           {sugs.map((s, i) => (
-            <div key={i} className="addr-opt" onClick={() => { onPick(s.label, s.lat, s.lon, s.bbl); setOpen(false); setSugs([]); }}
+            <div key={i} className="addr-opt" onClick={() => {
+                // Photon often returns a STREET-level suggestion ("12th Avenue South, Nashville")
+                // that drops the house number you typed → picking it would search the whole street.
+                // If the typed text led with a house number the suggestion lacks, carry it onto the pick.
+                const typedNum = (String(value || "").match(/^\s*(\d+[A-Za-z]?)\b/) || [])[1];
+                const label = typedNum && !/^\s*\d/.test(s.label) ? `${typedNum} ${s.label}` : s.label;
+                onPick(label, s.lat, s.lon, s.bbl); setOpen(false); setSugs([]);
+              }}
               style={{ padding: "9px 12px", fontSize: 13, cursor: "pointer", borderBottom: i < sugs.length - 1 ? `1px solid ${C.line}` : "none" }}>
               {s.label}
             </div>

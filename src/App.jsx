@@ -2203,21 +2203,27 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
     if (!text || text.trim().length < 3) { setSugs([]); setOpen(false); return; }
     timer.current = setTimeout(async () => {
       let items = [];
+      // If the text names another market (Nashville, a CT/Hamptons town), skip the NYC geocoder so
+      // it doesn't surface NYC look-alikes — go straight to the national geocoder below.
+      const nonNyc = marketFromText(text);
       // 1) NYC GeoSearch — best for NYC and carries the lot's BBL.
-      try {
-        const r = await fetch(`https://geosearch.planninglabs.nyc/v2/autocomplete?text=${encodeURIComponent(text)}`);
-        if (r.ok) {
-          const d = await r.json();
-          items = (d.features || [])
-            .filter((f) => f.geometry && f.properties)
-            .map((f) => ({ label: f.properties.label, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], bbl: ((f.properties.addendum || {}).pad || {}).bbl || null }));
-        }
-      } catch { /* fall through to backup */ }
-      // 2) Backup: Photon (free, no key, CORS-open) when GeoSearch is down/empty.
-      //    No BBL — the backend then snaps to the nearest lot from the coordinates.
+      if (!nonNyc) {
+        try {
+          const r = await fetch(`https://geosearch.planninglabs.nyc/v2/autocomplete?text=${encodeURIComponent(text)}`);
+          if (r.ok) {
+            const d = await r.json();
+            items = (d.features || [])
+              .filter((f) => f.geometry && f.properties)
+              .map((f) => ({ label: f.properties.label, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], bbl: ((f.properties.addendum || {}).pad || {}).bbl || null }));
+          }
+        } catch { /* fall through to backup */ }
+      }
+      // 2) Photon (free, no key, CORS-open): NYC-biased for NYC intent, nationwide otherwise — so
+      //    Nashville / CT / Hamptons addresses also appear. No BBL; non-NYC markets route by text/town.
       if (items.length === 0) {
         try {
-          const r = await fetch(`https://photon.komoot.io/api?q=${encodeURIComponent(text)}&limit=6&lat=40.75&lon=-73.98&bbox=-74.3,40.49,-73.69,40.92`);
+          const nycBias = "&lat=40.75&lon=-73.98&bbox=-74.3,40.49,-73.69,40.92";
+          const r = await fetch(`https://photon.komoot.io/api?q=${encodeURIComponent(text)}&limit=6${nonNyc ? "" : nycBias}`);
           if (r.ok) {
             const d = await r.json();
             items = (d.features || [])
@@ -2537,17 +2543,36 @@ const TYPE_MAP_BY_MARKET = {
 };
 const mapType = (t, m) => (TYPE_MAP_BY_MARKET[m] || {})[t] || "any";
 const titleCase = (s) => String(s || "").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+// Spot a non-NYC market inside free text (typed OR a picked autocomplete label like
+// "123 Broadway, Nashville, Tennessee"), and pull out the street for an address-level search.
+function marketFromText(raw) {
+  const k = String(raw || "").toLowerCase();
+  if (/\bnashville\b|\bdavidson\b|,\s*tn\b|\btennessee\b/.test(k)) {
+    const street = String(raw).replace(/,?\s*(metro\s+)?(nashville|davidson county|davidson|tennessee|tn|usa|united states).*$/i, "").replace(/[, ]+$/, "").trim();
+    return { market: "tn", town: "Nashville", address: street.length >= 3 ? street : "" };
+  }
+  for (const t of CT_TOWN_SET) if (k.includes(t)) return { market: "ct", town: titleCase(t) };
+  for (const t of HAMPTON_SET) if (k.includes(t)) return { market: "ny", town: HAMLET_TOWN[t] || titleCase(t) };
+  return null;
+}
 function unifiedDetect(loc, coords) {
-  if (coords) return { market: "nyc", kind: "address" };
   const raw = String(loc || "").trim();
+  const mt = marketFromText(raw);
+  // A picked autocomplete result carries coords. If its label names a non-NYC market, honor that;
+  // otherwise treat it as the NYC address+radius path (the only market with point search).
+  if (coords) {
+    if (mt && mt.market !== "nyc") return { ...mt, kind: "address-text" };
+    return { market: "nyc", kind: "address" };
+  }
   const k = raw.toLowerCase();
   if (!k) return { market: null };
   if (k in NYC_BORO_SET) return { market: "nyc", kind: "borough", borough: NYC_BORO_SET[k] };
   if (CT_TOWN_SET.has(k)) return { market: "ct", town: titleCase(raw) };
   if (HAMPTON_SET.has(k)) return { market: "ny", town: HAMLET_TOWN[k] || titleCase(raw) };
   if (NASHVILLE_SET.has(k)) return { market: "tn", town: "Nashville" };
-  // Free text that looks like a street address (has a number, or a comma) → treat as a
-  // NYC address even if it wasn't picked from the dropdown; api/source geocodes it.
+  // Free text naming a non-NYC market (e.g. "123 Broadway, Nashville") routes there, not to NYC.
+  if (mt) return { ...mt, kind: "address-text" };
+  // Otherwise a bare street address (number/comma) is treated as NYC (the only point-search market).
   if (/\d/.test(raw) || raw.includes(",")) return { market: "nyc", kind: "address-text", nearAddress: raw };
   return { market: null };
 }
@@ -2759,7 +2784,8 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: mapType(type, "ct"), minPrice: minValue });
         out = (d.properties || []).map(ctRow);
       } else if (det.market === "tn") {
-        const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: mapType(type, "tn"), minValue });
+        // For a specific address, drop the type filter so the one lot isn't excluded by it.
+        const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: det.address ? "any" : mapType(type, "tn"), minValue, ...(det.address ? { address: det.address } : {}) });
         out = (d.properties || []).map(nashRow);
       } else {
         const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: mapType(type, "ny"), minValue });

@@ -111,6 +111,13 @@ export default async function handler(req, res) {
       systemPrompt = useWeb ? buildSystem() : buildSystemKnowledge();
     }
 
+    // Optional "build on top": a prior answer from an earlier lookup. When present we ask
+    // the model to extend/update it rather than start cold — so saved answers compound.
+    const prior = typeof req.body.prior === "string" ? req.body.prior.trim() : "";
+    if (prior) {
+      userText += `\n\nPRIOR FINDINGS FROM AN EARLIER LOOKUP — build ON TOP of this: confirm or correct what's here, ADD anything new you can find, and note what changed. Do not simply repeat it.\n"""\n${prior.slice(0, 6000)}\n"""`;
+    }
+
     let messages = [{ role: "user", content: [{ type: "text", text: userText }] }];
     const parts = [];
     let last = null;

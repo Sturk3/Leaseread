@@ -2586,7 +2586,7 @@ function unifiedDetect(loc, coords) {
 }
 function unifiedCSV(rows) {
   const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
-  const cols = [["Market", (r) => r.marketLabel], ["Owner", (r) => r.owner], ["Mailing", (r) => r.mailing], ["Absentee", (r) => r.absentee || ""], ["Address", (r) => r.address], ["Use", (r) => r.use], ["Value", (r) => r.value]];
+  const cols = [["Opportunity", (r) => { const g = opportunityScore(r); return g ? g.overall : ""; }], ["Grade", (r) => { const g = opportunityScore(r); return g ? g.rec : ""; }], ["Market", (r) => r.marketLabel], ["Owner", (r) => r.owner], ["Mailing", (r) => r.mailing], ["Absentee", (r) => r.absentee || ""], ["Address", (r) => r.address], ["Use", (r) => r.use], ["Value", (r) => r.value]];
   return cols.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => cols.map((c) => esc(c[1](r))).join(",")).join("\n");
 }
 const nycRow = (l) => ({ market: "nyc", marketLabel: "NYC", owner: l.name, address: l.address, use: l.doc_type ? `class ${l.doc_type}` : (l.retail_sqft ? "Retail" : ""), value: assessedValue(l) != null ? fmtAmount(assessedValue(l)) : "", absentee: l.absentee, mailing: mailing(l), mapsUrl: mapUrl(l), raw: l });
@@ -2797,7 +2797,17 @@ function UnifiedSourcing({ pw, rows, setRows }) {
   const [error, setError] = useState("");
   const [resolved, setResolved] = useState(null);
   const [openIdx, setOpenIdx] = useState(null);
+  const [sortBy, setSortBy] = useState("opp"); // opp | default
   const points = useSourcingPoints(rows);
+  // Render a sorted VIEW but keep each row's ORIGINAL index (`i`) — openIdx, the
+  // row id, and map pins (useSourcingPoints keys on the original index) all stay aligned.
+  const view = useMemo(() => {
+    if (!rows) return rows;
+    const arr = rows.map((r, i) => ({ r, i, opp: opportunityScore(r) }));
+    if (sortBy === "opp") arr.sort((a, b) => (b.opp ? b.opp.overall : -1) - (a.opp ? a.opp.overall : -1));
+    return arr;
+  }, [rows, sortBy]);
+  const anyScored = !!(rows && rows.some((r) => opportunityScore(r)));
   const pickPin = (id) => { setOpenIdx(id); const el = document.getElementById(`usrc-row-${id}`); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); };
 
   const run = async () => {
@@ -2824,19 +2834,24 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         out = (d.properties || []).map(ctRow);
       } else if (det.market === "tn") {
         const hasPoint = coords && coords.lat != null && coords.lon != null;
-        if (hasPoint) {
-          // Picked address → SPATIAL search. Radius "off" = just that one lot (type filter off so it
-          // can't be excluded); a radius = the parcels within it (keep the type filter, e.g. retail nearby).
+        const street = (det.address || "").trim(); // the street portion, if the text named one
+        let d = null;
+        // A SPATIAL search only makes sense for a specific picked ADDRESS or an explicit radius.
+        // Picking the bare city from autocomplete sets the city-CENTROID coords — a point search
+        // there lands off any parcel and returns nothing — so we skip spatial for a city pick.
+        if (hasPoint && (street || radius)) {
+          // Radius "off" = just that one lot (type filter off so it can't be excluded);
+          // a radius = the parcels within it (keep the type filter, e.g. retail nearby).
           const justIt = !radius || Number(radius) === 0;
-          const d = await postJSON("/api/nashvillesource", { password: pw, centerLat: coords.lat, centerLon: coords.lon, radiusMiles: radius || "", propertyType: justIt ? "any" : mapType(type, "tn"), minValue });
-          out = (d.properties || []).map(nashRow);
-        } else {
-          // Typed street (no coords): a leading house number = a specific building (type off);
-          // a bare street name keeps the type filter (e.g. retail on 12th Ave S).
-          const specific = /^\s*\d+\s/.test(det.address || "");
-          const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: det.address && specific ? "any" : mapType(type, "tn"), minValue, ...(det.address ? { address: det.address } : {}) });
-          out = (d.properties || []).map(nashRow);
+          d = await postJSON("/api/nashvillesource", { password: pw, centerLat: coords.lat, centerLon: coords.lon, radiusMiles: radius || "", propertyType: justIt ? "any" : mapType(type, "tn"), minValue });
         }
+        // City-level (typed/picked "Nashville"), OR a point search that came back empty (the
+        // geocoder's point fell off-parcel) → fall back to an attribute search by street/type.
+        if (!d || !(d.properties || []).length) {
+          const specific = /^\s*\d+\s/.test(street);
+          d = await postJSON("/api/nashvillesource", { password: pw, propertyType: street && specific ? "any" : mapType(type, "tn"), minValue, ...(street ? { address: street } : {}) });
+        }
+        out = (d.properties || []).map(nashRow);
       } else if (det.market === "web") {
         // Any US address outside the free-data markets: one row that offers AI web research
         // (gated behind a click in the dossier — never auto-spends).
@@ -2893,16 +2908,27 @@ function UnifiedSourcing({ pw, rows, setRows }) {
 
       {rows && (
         <div style={{ marginTop: 18 }}>
-          <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>{rows.length} PROPERT{rows.length === 1 ? "Y" : "IES"}{!resolved ? " · FROM SCOUT" : ""}</div>
+          <div className="mono" style={{ ...labelStyle, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>{rows.length} PROPERT{rows.length === 1 ? "Y" : "IES"}{!resolved ? " · FROM SCOUT" : ""}</span>
+            {anyScored && rows.length > 1 && (
+              <span style={{ display: "flex", alignItems: "center", gap: 6, textTransform: "none", letterSpacing: 0 }}>
+                <span style={{ color: C.muted, fontSize: 10 }}>SORT</span>
+                {[["opp", "Opportunity"], ["default", "Default"]].map(([v, l]) => (
+                  <button key={v} onClick={() => setSortBy(v)} className="mono" style={{ cursor: "pointer", fontSize: 10, padding: "3px 9px", borderRadius: 6, border: `1px solid ${sortBy === v ? C.gold : C.line}`, background: sortBy === v ? C.goldSoft : "transparent", color: sortBy === v ? C.gold : C.muted }}>{l}</button>
+                ))}
+              </span>
+            )}
+          </div>
           {rows.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No properties matched. Try a different type or location.</div> : (
             <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>
-                  {["Owner", "Property", "Use", "Value", ""].map((h, i) => <th key={h} style={{ textAlign: i === 3 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}
+                  {["Opportunity", "Owner", "Property", "Use", "Value", ""].map((h, i) => <th key={h} style={{ textAlign: i === 4 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}
                 </tr></thead>
                 <tbody>
-                  {rows.map((r, i) => (<React.Fragment key={i}>
+                  {view.map(({ r, i, opp }) => (<React.Fragment key={i}>
                     <tr id={`usrc-row-${i}`} style={{ borderBottom: `1px solid ${C.line}`, background: openIdx === i ? C.goldSoft : "transparent" }}>
+                      <td style={{ padding: "9px 12px" }}>{opp ? <GradeCell g={opp} /> : <span style={{ color: C.line, fontSize: 11 }}>—</span>}</td>
                       <td style={{ padding: "9px 12px", fontSize: 13, maxWidth: 240 }}>
                         <div style={{ fontWeight: 700, color: C.ivory }}>{r.owner || "—"}{r.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber, whiteSpace: "nowrap" }}>{r.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}</div>
                         {r.mailing && <div style={{ color: C.muted, fontSize: 11, marginTop: 1 }}>{r.mailing}</div>}
@@ -2913,7 +2939,14 @@ function UnifiedSourcing({ pw, rows, setRows }) {
                       <td style={{ padding: "9px 12px" }}><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ details"}</button></td>
                     </tr>
                     {openIdx === i && (
-                      <tr><td colSpan={5} style={{ padding: r.market === "nyc" || r.market === "web" ? "0" : "4px 14px 18px", background: C.ink }}>
+                      <tr><td colSpan={6} style={{ padding: r.market === "nyc" || r.market === "web" ? "0" : "4px 14px 18px", background: C.ink }}>
+                        {r.market !== "web" && (
+                          <div style={{ padding: r.market === "nyc" ? "14px 14px 0" : "0" }}>
+                            {opp && <OppBreakdown g={opp} />}
+                            <AcquisitionMemo r={r} score={opp} pw={pw} />
+                            <OutreachDraft r={r} score={opp} pw={pw} />
+                          </div>
+                        )}
                         {r.market === "web" ? (() => {
                           const parts = (r.address || "").split(",").map((s) => s.trim());
                           const webR = { name: "", entity_type: "", address: parts[0] || r.address, contact_address: "", city: parts[1] || "", state: (parts[2] || "").split(/\s+/)[0] || "", zip: "", borough: "", last_sale_price: null, last_sale_date: "", years_owned: null };
@@ -3190,6 +3223,72 @@ function radarGrade(r, cfg) {
   return { overall, rec, parts };
 }
 const radarRecColor = (rec) => (rec === "Target" ? C.green : rec === "Watch" ? C.amber : C.muted);
+
+// ── Opportunity Score ────────────────────────────────────────────────────────
+// A lease-independent version of the radar grade for the live Sourcing table: one
+// 0–100 "how worth pursuing is this owner" read on EVERY result, in every market.
+// A signal only counts when the market actually carries the data (so CT/TN/Hamptons,
+// which have no tax-lien / air-rights feeds, aren't penalised for missing them).
+const OPP_SIGNALS = [
+  { id: "long_hold", label: "Long hold", weight: 35,
+    applies: (r) => r.raw && r.raw.years_owned != null,
+    sub: (r) => holdSub(r.raw.years_owned),
+    note: (r) => `held ${r.raw.years_owned} yr${r.raw.years_owned === 1 ? "" : "s"}` },
+  { id: "absentee", label: "Absentee owner", weight: 25,
+    applies: () => true,
+    sub: (r) => absSub(r.absentee),
+    note: (r) => (r.absentee ? r.absentee.replace(/-/g, " ") + " owner" : "local owner") },
+  { id: "distress", label: "Distress", weight: 25,
+    applies: (r) => r.market === "nyc",
+    sub: (r) => (r.raw && r.raw.tax_lien ? 100 : 0),
+    note: (r) => (r.raw && r.raw.tax_lien ? "tax lien on record" : "no tax lien") },
+  { id: "air_rights", label: "Air rights", weight: 15,
+    applies: (r) => r.market === "nyc",
+    sub: (r) => airSub(r.raw && r.raw.buildable_sqft),
+    note: (r) => { const n = Number(r.raw && r.raw.buildable_sqft) || 0; return n >= 2500 ? `~${n.toLocaleString()} SF unused` : "fully built"; } },
+];
+function opportunityScore(r) {
+  if (!r || !r.raw || r.market === "web") return null;
+  let num = 0, wsum = 0; const parts = [];
+  for (const s of OPP_SIGNALS) {
+    if (!s.applies(r)) continue;
+    const sub = Math.max(0, Math.min(100, Math.round(s.sub(r))));
+    num += sub * s.weight; wsum += s.weight;
+    parts.push({ id: s.id, label: s.label, sub, weight: s.weight, note: s.note(r) });
+  }
+  if (!wsum) return null;
+  const overall = Math.round(num / wsum);
+  const rec = overall >= 65 ? "Target" : overall >= 40 ? "Watch" : "Pass";
+  return { overall, rec, parts };
+}
+function OppBreakdown({ g }) {
+  const col = radarRecColor(g.rec);
+  const totalW = g.parts.reduce((a, p) => a + p.weight, 0) || 1;
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "10px 13px", marginBottom: 12 }}>
+      <div className="mono" style={{ fontSize: 10.5, letterSpacing: "0.04em", color: C.muted, marginBottom: 8 }}>
+        OPPORTUNITY SCORE — <span style={{ color: col }}>{g.rec.toUpperCase()} · {g.overall}/100</span>
+        <span style={{ color: C.muted }}> · prospecting priority, verify before outreach</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {g.parts.map((p) => {
+          const wpct = Math.round((p.weight / totalW) * 100);
+          return (
+            <div key={p.id}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, alignItems: "baseline", gap: 8 }}>
+                <span style={{ color: C.ivory }}>{p.label} <span style={{ color: C.muted }}>· {p.note}</span></span>
+                <span className="mono" style={{ color: C.muted, whiteSpace: "nowrap" }}>{p.sub}<span style={{ color: C.line }}>/100</span> × {wpct}%</span>
+              </div>
+              <div style={{ width: "100%", height: 4, background: C.ink, borderRadius: 3, overflow: "hidden", marginTop: 3 }}>
+                <div className="bar" style={{ width: `${p.sub}%`, height: "100%", background: C.gold }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function loadRadarPresets() {
   try { const p = JSON.parse(localStorage.getItem(RADAR_PRESETS_KEY)); if (p && typeof p === "object" && Object.keys(p).length) return p; } catch {}
@@ -3819,19 +3918,22 @@ function ResearchBriefBody({ text }) {
 // Engine 2: on-demand AI web research. Costs an Anthropic call (with web search) only
 // when the user clicks — never automatic.
 function ResearchBrief({ r, pw, forceMode }) {
-  const [state, setState] = useState("idle"); // idle | loading | done | error
-  const [brief, setBrief] = useState("");
+  const cached = getAiAnswer(r, "research");
+  const [state, setState] = useState(cached ? "done" : "idle"); // idle | loading | done | error
+  const [brief, setBrief] = useState(cached ? cached.text : "");
+  const [savedAt, setSavedAt] = useState(cached ? cached.savedAt : 0);
   const [err, setErr] = useState("");
-  const run = async () => {
+  const run = async (refine = false) => {
     setState("loading"); setErr("");
     try {
       // Requests live web mode; api/research transparently downgrades to knowledge until
       // the RESEARCH_LIVE_WEB env flag is set (needs Vercel Pro's 300s timeout). So this is
       // safe on Hobby today and auto-upgrades to real web research the moment Pro is on.
       const m = forceMode || webResearchMode();
-      const d = await postJSON("/api/research", { mode: m, password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned });
+      const d = await postJSON("/api/research", { mode: m, password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned, ...(refine && brief ? { prior: brief } : {}) });
       if (m === "web") addScoutSpend(WEB_RUN_COST);
-      setBrief(d.brief || ""); setState("done");
+      const text = d.brief || "";
+      setBrief(text); saveAiAnswer(r, "research", text, m); setSavedAt(Date.now()); setState("done");
     } catch (e) { setErr(e.message || "Research failed."); setState("error"); }
   };
   const isCo = isCompanyRow(r);
@@ -3840,9 +3942,13 @@ function ResearchBrief({ r, pw, forceMode }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
         <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>✦ AI QUICK TAKE — {isCo ? "who they are & how to reach them" : "what’s known about this owner"}{isCo && <span style={{ color: C.muted }}> · recommended</span>}</div>
         {state !== "loading" && (
-          <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>
-            {state === "done" || state === "error" ? "↻ re-run" : "▸ run"}
-          </button>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {state === "done" && savedAt > 0 && <span style={{ fontSize: 10, color: C.muted }}>saved · {savedAgo(savedAt)}</span>}
+            {state === "done" && <button onClick={() => run(true)} title="Re-run, building on the saved take" className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.line}` }}>↻ refine</button>}
+            <button onClick={() => run(false)} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>
+              {state === "done" || state === "error" ? "↻ fresh" : "▸ run"}
+            </button>
+          </div>
         )}
       </div>
       {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Compiling… (a few seconds)</div>}
@@ -3851,6 +3957,193 @@ function ResearchBrief({ r, pw, forceMode }) {
       {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>{isCo
         ? "Recommended for this owner — it reads as a company/firm, where skip tracing just returns the entity’s corporate web, not a person. The AI take recognizes named firms (REITs, big developers) and tells you who they are and how to reach their acquisitions team. For owners it doesn’t recognize, it says so rather than guess."
         : "Instant AI take from the model’s knowledge — best for recognizable owners (REITs, named developers). For obscure single-asset LLCs it will say there’s no public info rather than guess — use skip tracing there."}</div>}
+    </div>
+  );
+}
+
+// ── Browser-local AI answer cache ────────────────────────────────────────────
+// Persists each property's AI answers (memo / outreach / research) in localStorage so
+// re-opening the same property shows them instantly at $0 instead of re-running. Keyed
+// by address+owner, one entry per property sub-keyed by answer kind — the SAME shape a
+// shared team DB would use, so this migrates by swapping the storage backend, not the
+// call sites. A "↻ refine" re-run feeds the saved answer back so knowledge compounds.
+const AI_CACHE_KEY = "fr_ai_cache_v1";
+const AI_CACHE_MAX = 300; // cap properties so localStorage (~5MB) can't overflow
+function loadAiCache() { try { return JSON.parse(localStorage.getItem(AI_CACHE_KEY) || "{}") || {}; } catch { return {}; } }
+function aiCacheId(r) {
+  if (!r) return "";
+  const addr = (r.address || "").toUpperCase().replace(/\s+/g, " ").trim();
+  const owner = (r.owner || r.name || "").toUpperCase().replace(/\s+/g, " ").trim();
+  return (addr || owner) ? `${addr}|${owner}` : "";
+}
+function getAiAnswer(r, kind) { const e = loadAiCache()[aiCacheId(r)]; return (e && e[kind]) || null; }
+function saveAiAnswer(r, kind, text, mode) {
+  const id = aiCacheId(r); if (!id || !text) return;
+  try {
+    const c = loadAiCache();
+    c[id] = c[id] || {};
+    c[id][kind] = { text, savedAt: Date.now(), mode: mode || "" };
+    const ids = Object.keys(c);
+    if (ids.length > AI_CACHE_MAX) {
+      const newest = (e) => Math.max(0, ...Object.values(e).map((v) => v.savedAt || 0));
+      ids.sort((a, b) => newest(c[a]) - newest(c[b]));
+      for (const old of ids.slice(0, ids.length - AI_CACHE_MAX)) delete c[old];
+    }
+    localStorage.setItem(AI_CACHE_KEY, JSON.stringify(c));
+  } catch { /* quota — drop silently */ }
+}
+function savedAgo(ts) {
+  if (!ts) return "";
+  const d = Math.floor((Date.now() - ts) / 86400000);
+  if (d <= 0) return "today";
+  if (d === 1) return "yesterday";
+  if (d < 30) return `${d}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+// ── Engine: one-click Acquisition Memo ───────────────────────────────────────
+// Turns a sourced property into a full institutional investment memo. Grounds the
+// memo in the structured public-records facts we already pulled (so it can't invent
+// the property), and leans on Claude's knowledge / live web only for the market &
+// comps colour. Reuses /api/research's free-form query path — no new endpoint.
+const MEMO_INSTRUCTIONS = `Write a concise, institutional one-page ACQUISITION MEMO for this retail property, in clean markdown using these section headings (omit a section only if you genuinely have nothing for it):
+
+## Executive Summary
+## Investment Highlights
+## Property Overview
+## Ownership & Seller Motivation
+## Tenancy
+## Market Context
+## Comparable Sales
+## Risks & Diligence
+## Recommendation
+
+Treat the VERIFIED FACTS below as ground truth and build the memo around them. For Market Context, Comparable Sales, and Tenancy where facts aren't supplied, draw on your knowledge or live web research and cite sources inline; clearly label any figure you infer as an estimate, and NEVER fabricate specific rents, prices, tenants, or contacts. The Opportunity Score is an internal prospecting signal — reference it under Ownership & Seller Motivation, not as proven intent. Keep it tight and decision-grade (~500–750 words). This is for a professional trophy / high-street retail acquisitions team.`;
+
+function memoFacts(r) {
+  const raw = r.raw || {};
+  const f = [];
+  const push = (k, v) => { if (v != null && v !== "" && v !== 0) f.push(`- ${k}: ${v}`); };
+  const amt = (v) => (v != null && v !== "" && Number(v) ? fmtAmount(v) : null);
+  push("Market", r.marketLabel);
+  push("Address", r.address);
+  push("Owner of record", r.owner);
+  push("Owner mailing address", r.mailing);
+  if (r.absentee) push("Owner location", r.absentee === "out-of-state" ? "Out-of-state (absentee owner)" : "Out-of-area (absentee owner)");
+  push("Use / property type", r.use || raw.use);
+  push("Assessed / stated value", r.value);
+  push("Market value", amt(raw.market_value));
+  const salePrice = amt(raw.last_sale_price || raw.sale_price);
+  if (salePrice) push("Last recorded sale", `${salePrice}${(raw.last_sale_date || raw.sale_date || raw.sale_year) ? ` · ${String(raw.last_sale_date || raw.sale_date || raw.sale_year).slice(0, 4)}` : ""}`);
+  if (raw.years_owned != null) push("Years owned by current owner", `~${raw.years_owned}`);
+  push("Building SF", (raw.bldg_sqft || raw.building_sqft) ? Number(raw.bldg_sqft || raw.building_sqft).toLocaleString() : null);
+  push("Retail SF", raw.retail_sqft ? Number(raw.retail_sqft).toLocaleString() : null);
+  push("Lot SF", raw.lot_sqft ? Number(raw.lot_sqft).toLocaleString() : null);
+  push("Frontage", raw.frontage_ft ? `${raw.frontage_ft} ft on the street` : null);
+  push("Floors", raw.num_floors || raw.stories);
+  push("Year built", raw.year_built || raw.ayb);
+  push("Zoning", raw.zoning || raw.zone || raw.zone_description);
+  push("Commercial overlay", raw.overlay);
+  push("Special district", raw.special_district);
+  if (raw.landmark) push("Landmark", "Yes — facade / alteration restrictions apply");
+  if (raw.tax_lien) push("Distress signal", "On the tax-lien sale list");
+  if (raw.buildable_sqft && Number(raw.buildable_sqft) >= 2500) push("Unused air rights", `~${Number(raw.buildable_sqft).toLocaleString()} SF buildable (development / expansion upside)`);
+  return f.join("\n");
+}
+
+function AcquisitionMemo({ r, score, pw }) {
+  const cached = getAiAnswer(r, "memo"); // saved on this browser from an earlier lookup
+  const [state, setState] = useState(cached ? "done" : "idle"); // idle | loading | done | error
+  const [memo, setMemo] = useState(cached ? cached.text : "");
+  const [savedAt, setSavedAt] = useState(cached ? cached.savedAt : 0);
+  const [err, setErr] = useState("");
+  const run = async (refine = false) => {
+    setState("loading"); setErr("");
+    try {
+      const scoreLine = score
+        ? `\n\nFRONTAGE Opportunity Score (internal prospecting model — a priority signal, NOT confirmed seller intent): ${score.overall}/100 — ${score.rec}. Drivers: ${score.parts.map((p) => `${p.label} ${p.sub}/100 (${p.note})`).join("; ")}.`
+        : "";
+      const query = `${MEMO_INSTRUCTIONS}\n\nVERIFIED FACTS (ground truth — do not contradict):\n${memoFacts(r)}${scoreLine}`;
+      // Honors the Quick/Deep toggle + monthly web cap exactly like every other web call.
+      const m = webResearchMode();
+      const d = await postJSON("/api/research", { query, mode: m, password: pw, ...(refine && memo ? { prior: memo } : {}) });
+      if (m === "web") addScoutSpend(WEB_RUN_COST);
+      const text = d.brief || "";
+      setMemo(text); saveAiAnswer(r, "memo", text, m); setSavedAt(Date.now()); setState("done");
+    } catch (e) { setErr(e.message || "Memo failed."); setState("error"); }
+  };
+  const title = `Acquisition Memo — ${r.address || r.owner || "Property"}`;
+  const webOn = webResearchMode() === "web";
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.gold}`, borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>▤ ACQUISITION MEMO — one-click investment memo</div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {state === "done" && savedAt > 0 && <span style={{ fontSize: 10, color: C.muted }}>saved · {savedAgo(savedAt)}</span>}
+          {state === "done" && <button onClick={() => { if (!openPrintable(title, memo)) alert("Allow pop-ups to open the printable memo."); }} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.line}` }}>⤓ print / PDF</button>}
+          {state === "done" && <button onClick={() => run(true)} title="Re-run, building on the saved memo" className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.line}` }}>↻ refine</button>}
+          {state !== "loading" && <button onClick={() => run(false)} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻ fresh" : "▸ generate"}</button>}
+        </div>
+      </div>
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Builds a full memo — executive summary, highlights, ownership & motivation, market, comps, risks, recommendation — grounded in this property's records{webOn ? ", plus live-web market context (~$0.15 in Deep mode)." : ". Switch Scout to Deep mode for live-web market & comps colour."} Saved on this browser for instant re-open; exports to a printable PDF.</div>}
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Drafting the memo… (a few seconds)</div>}
+      {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+      {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={memo} /></div>}
+    </div>
+  );
+}
+
+// ── Engine: AI Outreach Assistant ────────────────────────────────────────────
+// Drafts a short, personalized owner-outreach email grounded in the same public-records
+// facts — referencing genuine signals (tenure, absentee, portfolio) without sounding
+// scraped. The "reach the owner" half of the North Star, one click from the dossier.
+const OUTREACH_INSTRUCTIONS = `Draft a SHORT, warm, professional cold-outreach EMAIL from a trophy / high-street retail acquisitions firm to the OWNER of the property below, opening a low-pressure conversation about a potential off-market sale.
+
+Output EXACTLY this shape and nothing else:
+Subject: <a specific, non-spammy subject line>
+
+<three short paragraphs, ~120–160 words total>
+
+Guidelines:
+- Personalize from the VERIFIED FACTS — reference genuine signals (how long they've held it, an absentee / out-of-area mailing, their portfolio, the corridor) WITHOUT sounding like you pulled a database. Use ONLY facts provided here or that you can actually verify; NEVER invent a "recent nearby acquisition", a specific number, or a compliment you can't support.
+- Lead with relevance to THIS specific asset, not a generic pitch. Principal-to-principal tone: respectful, credible, concise. No emojis, no hype.
+- Close with a soft ask (a brief call) and end with the signature placeholder exactly: "[Your name] · [Firm] · [phone / email]".
+- If the owner is an LLC with no human named, address "the ownership" naturally rather than guessing a name.`;
+
+function OutreachDraft({ r, score, pw }) {
+  const cached = getAiAnswer(r, "outreach");
+  const [state, setState] = useState(cached ? "done" : "idle"); // idle | loading | done | error
+  const [email, setEmail] = useState(cached ? cached.text : "");
+  const [savedAt, setSavedAt] = useState(cached ? cached.savedAt : 0);
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(false);
+  const run = async (refine = false) => {
+    setState("loading"); setErr("");
+    try {
+      const query = `${OUTREACH_INSTRUCTIONS}\n\nVERIFIED FACTS (ground truth — do not contradict):\n${memoFacts(r)}`;
+      const m = webResearchMode();
+      const d = await postJSON("/api/research", { query, mode: m, password: pw, ...(refine && email ? { prior: email } : {}) });
+      if (m === "web") addScoutSpend(WEB_RUN_COST);
+      const text = d.brief || "";
+      setEmail(text); saveAiAnswer(r, "outreach", text, m); setSavedAt(Date.now()); setState("done");
+    } catch (e) { setErr(e.message || "Draft failed."); setState("error"); }
+  };
+  const copy = () => { if (navigator.clipboard) navigator.clipboard.writeText(email).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {}); };
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>✉ OUTREACH ASSISTANT — draft a personalized owner email</div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {state === "done" && savedAt > 0 && <span style={{ fontSize: 10, color: C.muted }}>saved · {savedAgo(savedAt)}</span>}
+          {state === "done" && <button onClick={copy} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.line}` }}>{copied ? "✓ copied" : "⧉ copy"}</button>}
+          {state === "done" && <button onClick={() => run(true)} title="Re-draft, building on the saved email" className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.line}` }}>↻ refine</button>}
+          {state !== "loading" && <button onClick={() => run(false)} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻ fresh" : "▸ draft"}</button>}
+        </div>
+      </div>
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Writes a short, personal cold-outreach email to this owner — referencing real signals (tenure, absentee, portfolio), with a soft ask and a signature placeholder you fill in. Saved on this browser; verify any claim before sending.</div>}
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Drafting the email…</div>}
+      {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+      {state === "done" && <div style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 12.5, lineHeight: 1.6, color: C.ivory }}>{email}</div>}
     </div>
   );
 }

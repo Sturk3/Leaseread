@@ -2239,6 +2239,11 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
           }
         } catch { /* keep whatever NYC items we have */ }
       }
+      // If you typed a house number, drop suggestions with a DIFFERENT number — geocoders offer
+      // nearby addresses (300 / 2000 …) that aren't your building, which is misleading. Keep
+      // exact-number matches and street-level results (the pick handler adds your number to those).
+      const typedNum = (text.match(/^\s*(\d+)\b/) || [])[1];
+      if (typedNum) items = items.filter((it) => { const m = String(it.label).match(/^\s*(\d+)\b/); return !m || m[1] === typedNum; });
       items = items.slice(0, 8);
       setSugs(items); setOpen(items.length > 0);
     }, 220);

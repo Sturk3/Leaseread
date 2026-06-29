@@ -2914,12 +2914,18 @@ function UnifiedSourcing({ pw, rows, setRows }) {
                     </tr>
                     {openIdx === i && (
                       <tr><td colSpan={5} style={{ padding: r.market === "nyc" || r.market === "web" ? "0" : "4px 14px 18px", background: C.ink }}>
-                        {r.market === "web" ? (
-                          <div style={{ padding: "12px 14px 16px" }}>
-                            <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>No free public-records feed covers this address, but you can still source it. Run AI web research to identify the owner of record, unmask the entity behind it, and pull published contacts — from the live web (~$0.15, only when you click). For deeper work, ask Scout the same.</div>
-                            <ResearchBrief r={{ name: "", entity_type: "", address: r.address, borough: "", contact_address: "", city: "", state: "", last_sale_price: null, last_sale_date: "", years_owned: null }} pw={pw} forceMode="web" />
-                          </div>
-                        ) : r.market === "nyc" ? <PropertyDetail r={r.raw} pw={pw} /> : <AssessorMarketDetail r={r} pw={pw} />}
+                        {r.market === "web" ? (() => {
+                          const parts = (r.address || "").split(",").map((s) => s.trim());
+                          const webR = { name: "", entity_type: "", address: parts[0] || r.address, contact_address: "", city: parts[1] || "", state: (parts[2] || "").split(/\s+/)[0] || "", zip: "", borough: "", last_sale_price: null, last_sale_date: "", years_owned: null };
+                          return (
+                            <div style={{ padding: "12px 14px 16px" }}>
+                              <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>No free public-records feed covers this address, but you can still source it. Run AI web research to identify the owner of record, unmask the entity behind it, and pull published contacts — from the live web (~$0.15, only when you click). For deeper work, ask Scout the same.</div>
+                              <ResearchBrief r={webR} pw={pw} forceMode="web" />
+                              <div style={{ fontSize: 11, color: C.muted, margin: "10px 0 0" }}>No owner of record here, so the skip trace runs on the <strong>property address</strong> — it returns occupants / the operating business (verify before calling). For the actual owner, run the AI research above first.</div>
+                              <ContactReveal r={webR} pw={pw} />
+                            </div>
+                          );
+                        })() : r.market === "nyc" ? <PropertyDetail r={r.raw} pw={pw} /> : <AssessorMarketDetail r={r} pw={pw} />}
                       </td></tr>
                     )}
                   </React.Fragment>))}
@@ -3852,7 +3858,9 @@ function ResearchBrief({ r, pw, forceMode }) {
 // Session cache so a given owner's contact is paid for at most once (owner-dedupe).
 // Key = owner name + mailing zip/state; survives re-opening rows for the session.
 const _skipCache = new Map();
-const skipKey = (r) => `${(r.name || "").toUpperCase().trim()}|${(r.zip || r.state || "").toString().trim()}`;
+// Key by owner name; for nameless rows (web/address-only traces) fall back to the property address
+// so two different addresses don't collide on the same cache slot.
+const skipKey = (r) => `${(r.name || r.address || "").toUpperCase().trim()}|${(r.zip || r.state || "").toString().trim()}`;
 function readSkipSpend() { try { return JSON.parse(localStorage.getItem("fr_skiptrace_spend_v1") || "{}"); } catch { return {}; } }
 function bumpSkipSpend(est) {
   const cur = readSkipSpend();

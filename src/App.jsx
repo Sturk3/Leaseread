@@ -360,7 +360,7 @@ export default function App() {
               ? "Redline an NDA against your playbook — what to leave in, narrow, or strike."
               : view === "skiptrace"
               ? "Trace a name + address straight to graded phones & emails — charged only on a match."
-              : "Source owners & deals from public records — New York City (ACRIS · PLUTO) and Greenwich · CT."}
+              : "Source owners & deals from public records — NYC, Greenwich/CT, the Hamptons, and Nashville — plus an AI web lookup for any other US address."}
           </p>
           {(view === "screener" || view === "agent") && (
             <button onClick={() => setShowSettings((s) => !s)} className="mono lift"
@@ -2794,8 +2794,10 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: mapType(type, "ct"), minPrice: minValue });
         out = (d.properties || []).map(ctRow);
       } else if (det.market === "tn") {
-        // For a specific address, drop the type filter so the one lot isn't excluded by it.
-        const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: det.address ? "any" : mapType(type, "tn"), minValue, ...(det.address ? { address: det.address } : {}) });
+        // A leading house number = a specific building (drop the type filter so it isn't excluded);
+        // a bare street name keeps the type filter (e.g. retail on 12th Ave S).
+        const specific = /^\s*\d+\s/.test(det.address || "");
+        const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: det.address && specific ? "any" : mapType(type, "tn"), minValue, ...(det.address ? { address: det.address } : {}) });
         out = (d.properties || []).map(nashRow);
       } else if (det.market === "web") {
         // Any US address outside the free-data markets: one row that offers AI web research
@@ -2833,7 +2835,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 20px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "SEARCHING…" : "◎ SEARCH"}</button>
           {rows && rows.length > 0 && <button onClick={() => downloadBlob(unifiedCSV(rows), `frontage_${(resolved && resolved.market) || "search"}_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
-          {resolved && <span style={{ fontSize: 11.5, color: C.muted }}>Market: <strong style={{ color: C.gold }}>{resolved.market === "nyc" ? (resolved.borough || "New York City") : resolved.town + (resolved.market === "ct" ? ", CT" : ", NY")}</strong></span>}
+          {resolved && <span style={{ fontSize: 11.5, color: C.muted }}>Market: <strong style={{ color: C.gold }}>{resolved.market === "nyc" ? (resolved.borough || "New York City") : resolved.market === "web" ? "Web research (any US)" : resolved.town + (resolved.market === "ct" ? ", CT" : resolved.market === "tn" ? ", TN" : ", NY")}</strong></span>}
         </div>
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>

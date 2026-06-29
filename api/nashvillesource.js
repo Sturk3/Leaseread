@@ -13,6 +13,16 @@ const addr = (parts) => parts.map(clean).filter(Boolean).join(", ");
 const sqlStr = (s) => clean(s).toUpperCase().replace(/'/g, "''");
 const msYear = (ms) => { const n = Number(ms); return Number.isFinite(n) && n > 0 ? new Date(n).getUTCFullYear() : null; };
 
+// Metro stores street names ABBREVIATED ("12TH AVE S"), but geocoders hand back full words
+// ("12th Avenue South"). Normalize a typed/geocoded street to Metro's form so the LIKE matches.
+const STREET_ABBR = {
+  AVENUE: "AVE", STREET: "ST", DRIVE: "DR", ROAD: "RD", BOULEVARD: "BLVD", LANE: "LN", COURT: "CT",
+  PLACE: "PL", PARKWAY: "PKWY", HIGHWAY: "HWY", CIRCLE: "CIR", TERRACE: "TER", TRAIL: "TRL",
+  SQUARE: "SQ", COVE: "CV", CROSSING: "XING", BEND: "BND", LOOP: "LOOP", PIKE: "PIKE",
+  NORTH: "N", SOUTH: "S", EAST: "E", WEST: "W", NORTHEAST: "NE", NORTHWEST: "NW", SOUTHEAST: "SE", SOUTHWEST: "SW",
+};
+const normStreet = (s) => clean(s).toUpperCase().split(/\s+/).map((w) => STREET_ABBR[w] || w).join(" ").trim();
+
 // Friendly type -> LUDesc LIKE tokens (Nashville land use is granular; OR them together).
 const USE_PATTERNS = {
   any: null,
@@ -53,7 +63,7 @@ export default async function handler(req, res) {
     const typeKey = clean(propertyType).toLowerCase().replace(/[\s/-]+/g, "_");
     const pats = typeKey in USE_PATTERNS ? USE_PATTERNS[typeKey] : (propertyType ? [sqlStr(propertyType)] : null);
     if (pats && pats.length) where.push(`(${pats.map((p) => `UPPER(LUDesc) LIKE '%${p.replace(/'/g, "''")}%'`).join(" OR ")})`);
-    if (address) where.push(`UPPER(PropAddr) LIKE '%${sqlStr(address)}%'`);
+    if (address) where.push(`UPPER(PropAddr) LIKE '%${normStreet(address).replace(/'/g, "''")}%'`);
     const lo = toNum(minValue), hi = toNum(maxValue);
     if (lo != null) where.push(`TotlAppr >= ${lo}`);
     if (hi != null) where.push(`TotlAppr <= ${hi}`);

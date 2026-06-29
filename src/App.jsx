@@ -2795,9 +2795,10 @@ function UnifiedSourcing({ pw, rows, setRows }) {
   const [minValue, setMinValue] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [resolved, setResolved] = useState(null);
   const [openIdx, setOpenIdx] = useState(null);
-  const [sortBy, setSortBy] = useState("opp"); // opp | default
+  const [sortBy, setSortBy] = useState("opp"); // opp | default (distance, for radius searches)
   const points = useSourcingPoints(rows);
   // Render a sorted VIEW but keep each row's ORIGINAL index (`i`) — openIdx, the
   // row id, and map pins (useSourcingPoints keys on the original index) all stay aligned.
@@ -2813,6 +2814,18 @@ function UnifiedSourcing({ pw, rows, setRows }) {
   const run = async () => {
     const det = unifiedDetect(loc, coords);
     if (!det.market) { setError("Try a NYC borough or address (Manhattan · 120 5th Ave…), a CT town (Greenwich, Darien…), a Hamptons town (East Hampton, Southampton…), or Nashville."); return; }
+    // Radius needs an ANCHOR point. Only an NYC address (picked or typed → geocoded) and a
+    // picked Nashville address have one; a borough or a CT/Hamptons town does not, so radius
+    // is silently ignored there — tell the user instead of looking broken.
+    const radiusActive = !!radius && Number(radius) > 0;
+    const usesAnchor = (det.market === "nyc" && (det.kind === "address" || det.kind === "address-text"))
+      || (det.market === "tn" && !!coords);
+    setNotice(radiusActive && !usesAnchor
+      ? "Radius needs a specific address — pick one from the dropdown. A borough or town has no center point, so these results cover the whole area."
+      : "");
+    // A radius search is about an area: show it nearest-first (the engine's order, anchor
+    // pinned) rather than re-ranking by Opportunity Score. Otherwise rank by opportunity.
+    setSortBy(radiusActive && usesAnchor ? "default" : "opp");
     setError(""); setRows(null); setOpenIdx(null); setLoading(true); setResolved(det);
     try {
       let out = [];
@@ -2891,6 +2904,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           {resolved && <span style={{ fontSize: 11.5, color: C.muted }}>Market: <strong style={{ color: C.gold }}>{resolved.market === "nyc" ? (resolved.borough || "New York City") : resolved.market === "web" ? "Web research (any US)" : resolved.town + (resolved.market === "ct" ? ", CT" : resolved.market === "tn" ? ", TN" : ", NY")}</strong></span>}
         </div>
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
+        {notice && <div style={{ marginTop: 12, fontSize: 12, color: C.amber, background: C.goldSoft, border: `1px solid ${C.amber}40`, borderRadius: 8, padding: "9px 12px" }}>{notice}</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
           One bar, every US market. Free public-records dossiers in <strong style={{ color: C.ivory }}>NYC</strong> (21 datasets), <strong style={{ color: C.ivory }}>Greenwich/CT</strong>, <strong style={{ color: C.ivory }}>Hamptons/NY</strong>, and <strong style={{ color: C.ivory }}>Nashville/TN</strong> — and for <strong style={{ color: C.ivory }}>any other US address</strong>, an on-demand AI web lookup that finds the owner + contacts (~$0.15, only when you click). Type a place or address; we route automatically; click <strong style={{ color: C.ivory }}>▸ details</strong> for the record + AI deep dive.
         </div>

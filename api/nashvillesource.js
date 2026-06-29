@@ -103,7 +103,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v4-owner", base: NASH_BASE });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v5-browse250", base: NASH_BASE });
 
     const where = ["IsActive='Y'"];
     // OWNER-PORTFOLIO mode: every Davidson County parcel held by this exact owner (the LLC tracker).
@@ -127,7 +127,7 @@ export default async function handler(req, res) {
     const spatial = (cLat != null && cLon != null) ? { lat: cLat, lon: cLon, distanceMeters: rad && rad > 0 ? rad * 1609.34 : 0 } : null;
     const rows = await arcgis(where.join(" AND "), spatial);
     const minAc = toNum(minAcres), yr = toNum(sinceYear), nowY = new Date().getUTCFullYear();
-    const cap = Math.min(Number(limit) || 100, 400);
+    const cap = Math.min(Number(limit) || 250, 500);
     const out = [];
     for (const r of rows) {
       const acres = toNum(r.Acres);

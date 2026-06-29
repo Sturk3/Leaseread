@@ -2218,15 +2218,15 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
           }
         } catch { /* fall through to backup */ }
       }
-      // 2) Photon (free, no key, CORS-open): NYC-biased for NYC intent, nationwide otherwise — so
-      //    Nashville / CT / Hamptons addresses also appear. No BBL; non-NYC markets route by text/town.
-      if (items.length === 0) {
+      // 2) National Photon (free, no key, CORS-open): runs whenever the NYC results are sparse, so an
+      //    address ANYWHERE in the US surfaces. US-centroid rank bias, but NO bbox — the old NYC bbox
+      //    was excluding every out-of-town address. Merged after the NYC hits (which carry the BBL).
+      if (items.length < 5) {
         try {
-          const nycBias = "&lat=40.75&lon=-73.98&bbox=-74.3,40.49,-73.69,40.92";
-          const r = await fetch(`https://photon.komoot.io/api?q=${encodeURIComponent(text)}&limit=6${nonNyc ? "" : nycBias}`);
+          const r = await fetch(`https://photon.komoot.io/api?q=${encodeURIComponent(text)}&limit=8&lat=39.8&lon=-98.6`);
           if (r.ok) {
             const d = await r.json();
-            items = (d.features || [])
+            const extra = (d.features || [])
               .filter((f) => f.geometry)
               .map((f) => {
                 const p = f.properties || {};
@@ -2235,9 +2235,11 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
                 return { label: label || p.name, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], bbl: null };
               })
               .filter((x) => x.label);
+            for (const e of extra) if (!items.some((x) => x.label === e.label)) items.push(e);
           }
-        } catch { /* leave items empty */ }
+        } catch { /* keep whatever NYC items we have */ }
       }
+      items = items.slice(0, 8);
       setSugs(items); setOpen(items.length > 0);
     }, 220);
   }

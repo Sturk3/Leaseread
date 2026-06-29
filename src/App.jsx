@@ -2555,14 +2555,17 @@ function marketFromText(raw) {
   for (const t of HAMPTON_SET) if (k.includes(t)) return { market: "ny", town: HAMLET_TOWN[t] || titleCase(t) };
   return null;
 }
+const US_STATE_CODES = new Set(["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"]);
+const inNycBox = (lat, lon) => Number.isFinite(lat) && Number.isFinite(lon) && lat >= 40.49 && lat <= 40.92 && lon >= -74.3 && lon <= -73.69;
 function unifiedDetect(loc, coords) {
   const raw = String(loc || "").trim();
   const mt = marketFromText(raw);
-  // A picked autocomplete result carries coords. If its label names a non-NYC market, honor that;
-  // otherwise treat it as the NYC address+radius path (the only market with point search).
+  // A picked autocomplete result carries coords. Non-NYC named market wins; a NYC lot (has BBL or
+  // sits in the NYC box) takes the point-search path; anything else in the US -> web research.
   if (coords) {
     if (mt && mt.market !== "nyc") return { ...mt, kind: "address-text" };
-    return { market: "nyc", kind: "address" };
+    if (coords.bbl || inNycBox(Number(coords.lat), Number(coords.lon))) return { market: "nyc", kind: "address" };
+    return { market: "web", kind: "address", address: raw, coords };
   }
   const k = raw.toLowerCase();
   if (!k) return { market: null };
@@ -2572,6 +2575,9 @@ function unifiedDetect(loc, coords) {
   if (NASHVILLE_SET.has(k)) return { market: "tn", town: "Nashville" };
   // Free text naming a non-NYC market (e.g. "123 Broadway, Nashville") routes there, not to NYC.
   if (mt) return { ...mt, kind: "address-text" };
+  // A typed address naming a non-NY US state (e.g. "500 Main St, Austin, TX") -> nationwide web research.
+  const st = (raw.match(/,\s*([A-Za-z]{2})\b\.?(?:\s+\d{5})?\s*$/) || [])[1];
+  if (st && US_STATE_CODES.has(st.toUpperCase()) && st.toUpperCase() !== "NY") return { market: "web", kind: "address-text", address: raw };
   // Otherwise a bare street address (number/comma) is treated as NYC (the only point-search market).
   if (/\d/.test(raw) || raw.includes(",")) return { market: "nyc", kind: "address-text", nearAddress: raw };
   return { market: null };
@@ -2732,7 +2738,9 @@ function useSourcingPoints(rows) {
         const batch = missing.slice(i, i + 4);
         const got = await Promise.all(batch.map(async (p) => {
           const r = rows[p.id];
-          const g = await geocodeAddress(`${r.address}, ${r.marketLabel || ""}`);
+          // A full address (already has a comma/city) geocodes as-is; a bare street gets its market appended.
+          const q = /,/.test(r.address || "") ? r.address : `${r.address}, ${r.marketLabel || ""}`;
+          const g = await geocodeAddress(q);
           return g ? { id: p.id, ...g } : null;
         }));
         if (!alive) return;
@@ -2787,6 +2795,11 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         // For a specific address, drop the type filter so the one lot isn't excluded by it.
         const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: det.address ? "any" : mapType(type, "tn"), minValue, ...(det.address ? { address: det.address } : {}) });
         out = (d.properties || []).map(nashRow);
+      } else if (det.market === "web") {
+        // Any US address outside the free-data markets: one row that offers AI web research
+        // (gated behind a click in the dossier — never auto-spends).
+        const pt = det.coords || coords || null;
+        out = [{ market: "web", marketLabel: "Web research", owner: "", address: det.address || loc, use: "", value: "", absentee: null, mailing: "", mapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(det.address || loc)}`, raw: { address: det.address || loc, lat: pt ? pt.lat : null, lon: pt ? pt.lon : null } }];
       } else {
         const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: mapType(type, "ny"), minValue });
         out = (d.properties || []).map(nyRow);
@@ -2800,7 +2813,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
   return (
     <div style={{ marginTop: 22 }}>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
-        <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SEARCH ANY MARKET — NYC · GREENWICH/CT · HAMPTONS/NY · NASHVILLE/TN</div>
+        <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SEARCH ANY MARKET — NYC · CT · HAMPTONS · NASHVILLE · ANY US ADDRESS</div>
         <div style={{ display: "grid", gridTemplateColumns: "2.4fr 1fr 1fr 1fr", gap: 12, alignItems: "end" }}>
           <label>
             <div className="mono" style={labelStyle}>WHERE — borough · town · or NYC address</div>
@@ -2808,7 +2821,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
               <AddressAutocomplete value={loc}
                 onChange={(t) => { setLoc(t); setCoords(null); }}
                 onPick={(label, lat, lon, bbl) => { setLoc(label); setCoords({ lat, lon, bbl }); }}
-                placeholder="Manhattan · Greenwich · East Hampton · Nashville · 120 5th Ave…" style={{ ...fieldStyle, width: "100%" }} />
+                placeholder="Manhattan · Greenwich · Nashville · or any US address (500 Main St, Austin TX)…" style={{ ...fieldStyle, width: "100%" }} />
             </div>
           </label>
           <label><div className="mono" style={labelStyle}>TYPE</div><select value={type} onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{UNIFIED_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
@@ -2822,7 +2835,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         </div>
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
-          One bar, four markets. <strong style={{ color: C.ivory }}>NYC</strong> (full owner + dossier of 21 datasets), <strong style={{ color: C.ivory }}>Greenwich/CT</strong> (owner + assessor + entity principals), <strong style={{ color: C.ivory }}>Hamptons/NY</strong> (owner + assessor), <strong style={{ color: C.ivory }}>Nashville/TN</strong> (owner + assessor; ask Scout for the full permits/operator/overlay record). Type a place and we route automatically; click <strong style={{ color: C.ivory }}>▸ details</strong> on a row for the full record + AI deep dive.
+          One bar, every US market. Free public-records dossiers in <strong style={{ color: C.ivory }}>NYC</strong> (21 datasets), <strong style={{ color: C.ivory }}>Greenwich/CT</strong>, <strong style={{ color: C.ivory }}>Hamptons/NY</strong>, and <strong style={{ color: C.ivory }}>Nashville/TN</strong> — and for <strong style={{ color: C.ivory }}>any other US address</strong>, an on-demand AI web lookup that finds the owner + contacts (~$0.15, only when you click). Type a place or address; we route automatically; click <strong style={{ color: C.ivory }}>▸ details</strong> for the record + AI deep dive.
         </div>
       </div>
 
@@ -2858,8 +2871,13 @@ function UnifiedSourcing({ pw, rows, setRows }) {
                       <td style={{ padding: "9px 12px" }}><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ details"}</button></td>
                     </tr>
                     {openIdx === i && (
-                      <tr><td colSpan={5} style={{ padding: r.market === "nyc" ? "0" : "4px 14px 18px", background: C.ink }}>
-                        {r.market === "nyc" ? <PropertyDetail r={r.raw} pw={pw} /> : (<>
+                      <tr><td colSpan={5} style={{ padding: r.market === "nyc" || r.market === "web" ? "0" : "4px 14px 18px", background: C.ink }}>
+                        {r.market === "web" ? (
+                          <div style={{ padding: "12px 14px 16px" }}>
+                            <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>No free public-records feed covers this address, but you can still source it. Run AI web research to identify the owner of record, unmask the entity behind it, and pull published contacts — from the live web (~$0.15, only when you click). For deeper work, ask Scout the same.</div>
+                            <ResearchBrief r={{ name: "", entity_type: "", address: r.address, borough: "", contact_address: "", city: "", state: "", last_sale_price: null, last_sale_date: "", years_owned: null }} pw={pw} forceMode="web" />
+                          </div>
+                        ) : r.market === "nyc" ? <PropertyDetail r={r.raw} pw={pw} /> : (<>
                           <AssessorDetail p={r.raw} market={r.market} />
                           {r.market === "ct" && r.owner && /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|HOLDINGS|REALTY|PROPERTIES)\b/i.test(r.owner) && (
                             <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (CT discloses LLC principals).</div>
@@ -3761,7 +3779,7 @@ function ResearchBriefBody({ text }) {
 
 // Engine 2: on-demand AI web research. Costs an Anthropic call (with web search) only
 // when the user clicks — never automatic.
-function ResearchBrief({ r, pw }) {
+function ResearchBrief({ r, pw, forceMode }) {
   const [state, setState] = useState("idle"); // idle | loading | done | error
   const [brief, setBrief] = useState("");
   const [err, setErr] = useState("");
@@ -3771,7 +3789,7 @@ function ResearchBrief({ r, pw }) {
       // Requests live web mode; api/research transparently downgrades to knowledge until
       // the RESEARCH_LIVE_WEB env flag is set (needs Vercel Pro's 300s timeout). So this is
       // safe on Hobby today and auto-upgrades to real web research the moment Pro is on.
-      const m = webResearchMode();
+      const m = forceMode || webResearchMode();
       const d = await postJSON("/api/research", { mode: m, password: pw, name: r.name, entity_type: r.entity_type, address: r.address, borough: r.borough, contact_address: r.contact_address, city: r.city, state: r.state, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price, years_owned: r.years_owned });
       if (m === "web") addScoutSpend(WEB_RUN_COST);
       setBrief(d.brief || ""); setState("done");

@@ -764,6 +764,7 @@ const TOOL_ROUTES = {
   search_hamptons_properties: { url: "/api/nysource", label: "Searching the Hamptons", body: (a) => ({ town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
   search_ma_properties: { url: "/api/masource", label: "Searching Massachusetts", body: (a) => ({ town: a.town, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
   search_nashville_properties: { url: "/api/nashvillesource", label: "Searching Nashville", body: (a) => ({ propertyType: a.propertyType, address: a.address, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
+  nashville_property_intel: { url: "/api/nashvilleintel", label: "Pulling Nashville records", body: (a) => ({ apn: a.apn, address: a.address }) },
   search_sf_properties: { url: "/api/sfsource", label: "Searching San Francisco", body: (a) => ({ neighborhood: a.neighborhood, address: a.address, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft }) },
   sf_property_intel: { url: "/api/sfintel", label: "Pulling SF records", body: (a) => ({ block: a.block, lot: a.lot, address: a.address }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
@@ -887,6 +888,11 @@ function shapeResult(name, data) {
   if (name === "sf_property_intel") {
     // Endpoint already caps each section; pass through (it's the bounded SF analog of intel).
     return { forModel: data, uiSummary: "SF records" };
+  }
+  if (name === "nashville_property_intel") {
+    // Endpoint already caps each section; pass through (the TN analog of intel).
+    const sig = (data.building_permits?.signals || []).length;
+    return { forModel: data, uiSummary: sig ? `Nashville records (${sig} permit signal${sig === 1 ? "" : "s"})` : "Nashville records" };
   }
   if (name === "property_intel") {
     // Already mostly scalars; just cap the two list fields the model doesn't need in full.

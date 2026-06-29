@@ -60,6 +60,9 @@
     "api/sfintel.js": {
       "maxDuration": 30
     },
+    "api/nashvilleintel.js": {
+      "maxDuration": 30
+    },
     "api/leasecomps.js": {
       "maxDuration": 30
     }

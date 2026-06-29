@@ -229,6 +229,26 @@ const TOOLS = [
     },
   },
   {
+    name: "nashville_property_intel",
+    description:
+      "Consolidated public-records intel for ONE Nashville / Davidson County property (the TN analog of property_intel / " +
+      "sf_property_intel). Pass the APN from search_nashville_properties (plus the address) and it fans out across Metro's data, " +
+      "joining BUILDING-EXACT on the parcel number (TN is open-records, so this goes deep): BUILDING PERMITS (commercial new / " +
+      "rehab / demolition / tenant finish-out / use-&-occupancy / sign — with cost + free-text purpose = active repositioning), " +
+      "PENDING permit applications, TRADE permits (live renovation + contract value), BEER permits (names the operating bar/" +
+      "restaurant + its owning entity — a real operator/tenant lead; a lapsed one = F&B vacancy), short-term-rental permits, 311 " +
+      "codes/condition complaints (distress), ZONING OVERLAYS (historic / contextual / corridor = redevelopment constraints), the " +
+      "FEMA FLOOD zone (diligence), and the Metro land-use POLICY / transect for the site. Use after search_nashville_properties to " +
+      "assess motivation/distress and surface operator contacts. Needs the APN (preferred) and/or address.",
+    input_schema: {
+      type: "object",
+      properties: {
+        apn: { type: "string", description: "Parcel APN from a search_nashville_properties result (e.g. '09306201200'). Preferred — records join exactly on it." },
+        address: { type: "string", description: "Property address (used for the 311 join and display)." },
+      },
+    },
+  },
+  {
     name: "search_sf_properties",
     description:
       "Source properties in SAN FRANCISCO from DataSF's assessor roll. Returns property characteristics (use, building/lot SF, " +
@@ -404,7 +424,7 @@ WHAT YOU DO
 - GREENWICH / CONNECTICUT (and other CT towns): the NYC datasets DON'T exist there, but CT's statewide parcel+assessor data does. Use search_ct_properties — it returns the OWNER of record + mailing (absentee flagged), building SF, value, and latest sale. For an owner LLC, use ct_entity_lookup (FREE) — CT discloses LLC PRINCIPALS (names + locations) — then web_research for contacts. For pricing/underwriting context use ct_sales_comps (FREE) — recent recorded sales with sale amount + sales ratio. The data has owners, so you rarely need paid web research just to find who owns it. CT commercial inventory is modest, so keep filters loose. CT open data has NO deeds/mortgages/liens — for those in Greenwich, point the user to the official land-records portal greenwich.ct.publicsearch.us (a gated site you can't query, but they can search it by owner/address).
 - HAMPTONS (East Hampton / Southampton / Shelter Island, Suffolk County NY — outside NYC): use search_hamptons_properties (NY State assessment roll) for OWNER + mailing (absentee flagged) + class. NY assessed $ are rough (varying town ratios), so lead with owner/address/class and use web_research for value/contacts.
 - MASSACHUSETTS (Boston trophy retail, Nantucket / Martha's Vineyard / Cape luxury, any MA town): use search_ma_properties (MassGIS assessor data) for OWNER + mailing (absentee flagged), use/value, building SF, year, and latest sale. MA keeps owners public and its assessed values track market reasonably. For an owner LLC, use web_research for principals/contacts.
-- NASHVILLE / DAVIDSON COUNTY, TN: use search_nashville_properties (Metro Nashville parcel data, updated daily). FULL owner market — OWNER of record + mailing (absentee flagged), land use, value, last sale + years owned. TN is open-records so owners are public; treat it like NYC/CT/MA. For an owner LLC, use tn_entity_lookup to unmask it — TN SOS registered agent + principals (the Nashville analog of the NY/CT/CA entity lookup; metered web lookup, since TN gates its registry). (No building SF in the data — acreage only.)
+- NASHVILLE / DAVIDSON COUNTY, TN: use search_nashville_properties (Metro Nashville parcel data, updated daily). FULL owner market — OWNER of record + mailing (absentee flagged), land use, value, last sale + years owned. TN is open-records so owners are public; treat it like NYC/CT/MA. Then run nashville_property_intel (pass the APN + address) — the TN analog of property_intel/sf_property_intel: it joins BUILDING-EXACT on the parcel number across building permits (commercial new/rehab/DEMOLITION/tenant finish-out/use-&-occupancy/sign + cost + purpose = active repositioning), pending applications, trade permits (live renovation), BEER permits (names the operating bar/restaurant + its owning entity — a real operator/tenant contact lead; lapsed = F&B vacancy), STR permits, 311 codes/condition complaints (distress), zoning OVERLAYS (historic/contextual/corridor = redevelopment constraints), the FEMA FLOOD zone, and the Metro land-use POLICY/transect. For an owner LLC, use tn_entity_lookup to unmask it — TN SOS registered agent + principals (the Nashville analog of the NY/CT/CA entity lookup; metered web lookup, since TN gates its registry). (The parcel data has acreage + FRONTAGE but no building SF.)
 - SAN FRANCISCO: use search_sf_properties (DataSF assessor roll) for property characteristics + assessed value + block/lot, then sf_property_intel (block+lot+address) for permits, DBI complaints, the active business operator (a real contact lead), eviction notices (Ellis Act / owner move-in / demolition / capital improvement = landlord clearing the building = strong motivation), fire violations, and 311. IMPORTANT: California open data has NO owner-of-record name, so SF is a characteristics+distress market — get the actual OWNER via web_research (from the address), and use the operating business's legal name as a contact lead. Eviction addresses are masked to the block (street/corridor signal, not building-exact). Once you have the owning LLC's name, use ca_entity_lookup to unmask it — the CA SOS registry agent for service of process + principals (the CA analog of the NY/CT entity lookup; it's a metered web lookup because California gates its registry).
 - ANY OTHER US MARKET (no structured connector — most of the country): you can still source there. NEVER say a market is unsupported. For a specific address, web_research works the whole chain from the address alone — it identifies the owner of record, unmasks the parent/firm + principals, maps the portfolio, and pulls published contacts. For a "find me owners in <city>" ask where there's no structured feed, use web_research / web_search to surface candidates (recent trades, known local owners/landlords, brokers), and be upfront: outside NYC/CT/the Hamptons you don't have a parcel database to filter on, so results come from the live web and you can't guarantee completeness — but you can absolutely work any specific property or owner they name. Offer to go deep on the ones that look best.
 

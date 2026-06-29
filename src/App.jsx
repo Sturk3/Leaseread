@@ -957,6 +957,46 @@ const RESEARCH_PLAYBOOKS = [
   ["🛍️ Tenant / brand match", "Deep research: which new or expanding retail brands fit <ADDRESS / CORRIDOR>? Match the space to brands actively opening stores or seeking space, and explain the fit — with sources."],
 ];
 
+// Extract mappable items from a Scout tool result (NYC leads or any market's properties), so the
+// transcript can drop a map under a search. Returns null for non-spatial results (single-property
+// intel, web research, etc.).
+function scoutMapData(fm) {
+  if (!fm || typeof fm !== "object") return null;
+  let items = null;
+  if (Array.isArray(fm.leads)) items = fm.leads.map((l) => ({ address: l.address, city: "New York", lat: l.lat ?? null, lon: l.lon ?? null, label: [l.address, l.name].filter(Boolean).join(" — ") }));
+  else if (Array.isArray(fm.properties)) items = fm.properties.map((p) => ({ address: p.address, city: p.city || p.town || "", lat: p.lat ?? p.latitude ?? null, lon: p.lon ?? p.longitude ?? null, label: [p.address, p.owner].filter(Boolean).join(" — ") }));
+  if (!items || !items.length) return null;
+  return { items, center: fm.center || null };
+}
+
+// Display-only map for Scout's transcript. Uses coords when present (NYC), geocodes the rest.
+function ScoutMap({ items, center }) {
+  const [points, setPoints] = useState(() => items.map((it, i) => ({ id: i, lat: it.lat != null ? Number(it.lat) : null, lon: it.lon != null ? Number(it.lon) : null, label: it.label || it.address })));
+  useEffect(() => {
+    let alive = true;
+    const miss = points.filter((p) => (p.lat == null || p.lon == null) && items[p.id] && items[p.id].address);
+    (async () => {
+      for (let i = 0; i < miss.length && i < 40; i += 4) {
+        const got = await Promise.all(miss.slice(i, i + 4).map(async (p) => {
+          const it = items[p.id];
+          const g = await geocodeAddress(`${it.address}, ${it.city || ""}`);
+          return g ? { id: p.id, ...g } : null;
+        }));
+        if (!alive) return;
+        setPoints((prev) => { const n = prev.slice(); for (const g of got) if (g) { const idx = n.findIndex((x) => x.id === g.id); if (idx >= 0) n[idx] = { ...n[idx], lat: g.lat, lon: g.lon }; } return n; });
+      }
+    })();
+    return () => { alive = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!points.some((p) => p.lat != null && p.lon != null)) return null;
+  return (
+    <div style={{ margin: "8px 0 4px" }}>
+      <div className="mono" style={{ fontSize: 10, color: C.muted, marginBottom: 6 }}>◎ {points.filter((p) => p.lat != null).length} located</div>
+      <PropertyMap points={points} center={center || points.find((p) => p.lat != null)} height={300} />
+    </div>
+  );
+}
+
 function AgentChat({ pw, config }) {
   const [log, setLog] = useState([]);        // render transcript
   const [convo, setConvo] = useState([]);    // raw Anthropic-format messages
@@ -1071,6 +1111,8 @@ function AgentChat({ pw, config }) {
         try {
           const out = await runTool(tu.name, tu.input || {});
           updateTool(id, "done", out.uiSummary);
+          const md = scoutMapData(out.forModel);
+          if (md) setLog((l) => [...l, { kind: "map", items: md.items, center: md.center }]);
           let payload = JSON.stringify(out.forModel);
           if (payload.length > TOOL_RESULT_CHARS) {
             // shapeResult already caps arrays, so this is a rare belt-and-suspenders trim.
@@ -1145,6 +1187,7 @@ function AgentChat({ pw, config }) {
               <ResearchBriefBody text={e.text} />
             </div>
           );
+          if (e.kind === "map") return (<div key={i}><ScoutMap items={e.items} center={e.center} /></div>);
           if (e.kind === "tool") return (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0", fontSize: 11.5, color: C.muted }}>
               <span className="mono" style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: e.status === "error" ? C.red : e.status === "done" ? C.green : C.gold }}>
@@ -2515,6 +2558,145 @@ function AssessorDetail({ p, ny }) {
   );
 }
 
+// ───────────────────────── Map (Leaflet, reusable across Sourcing + Scout) ─────────────────────────
+// Lazy-load Leaflet from CDN once — no build dependency, no API key, free OpenStreetMap/CARTO tiles.
+let _leafletPromise = null;
+function loadLeaflet() {
+  if (typeof window === "undefined") return Promise.resolve(null);
+  if (window.L) return Promise.resolve(window.L);
+  if (_leafletPromise) return _leafletPromise;
+  _leafletPromise = new Promise((resolve, reject) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet"; css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(css);
+    const js = document.createElement("script");
+    js.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"; js.async = true;
+    js.onload = () => resolve(window.L);
+    js.onerror = () => reject(new Error("Leaflet failed to load"));
+    document.head.appendChild(js);
+  });
+  return _leafletPromise;
+}
+function useLeaflet() {
+  const [L, setL] = useState(typeof window !== "undefined" ? window.L || null : null);
+  useEffect(() => {
+    if (L) return; let alive = true;
+    loadLeaflet().then((lib) => { if (alive) setL(lib); }).catch(() => {});
+    return () => { alive = false; };
+  }, [L]);
+  return L;
+}
+
+// Photon geocode (free, no key, CORS-open — same service AddressAutocomplete falls back to) for
+// rows whose dataset has no coordinates (CT/Hamptons). Module-level cache so we never re-geocode.
+const _geoCache = new Map();
+async function geocodeAddress(q) {
+  if (!q) return null;
+  if (_geoCache.has(q)) return _geoCache.get(q);
+  let pt = null;
+  try {
+    const r = await fetch(`https://photon.komoot.io/api?q=${encodeURIComponent(q)}&limit=1`);
+    if (r.ok) {
+      const f = ((await r.json()).features || [])[0];
+      if (f && f.geometry) pt = { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] };
+    }
+  } catch { /* leave null */ }
+  _geoCache.set(q, pt);
+  return pt;
+}
+
+function markerStyle(active) {
+  return { radius: active ? 9 : 6, color: "#ffffff", weight: 2, fillColor: active ? C.amber : C.gold, fillOpacity: active ? 1 : 0.85 };
+}
+
+// Reusable property map. points: [{ id, lat, lon, label }]. Clicking a pin -> onPick(id).
+function PropertyMap({ points, center, activeId, onPick, height = 320 }) {
+  const L = useLeaflet();
+  const elRef = useRef(null);
+  const mapRef = useRef(null);
+  const markersRef = useRef(new Map());
+
+  useEffect(() => {
+    if (!L || !elRef.current || mapRef.current) return;
+    const map = L.map(elRef.current, { scrollWheelZoom: false, attributionControl: true });
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", {
+      maxZoom: 19, subdomains: "abcd", attribution: "© OpenStreetMap © CARTO",
+    }).addTo(map);
+    map.setView([center?.lat || 40.74, center?.lon || -73.98], 13);
+    mapRef.current = map;
+    setTimeout(() => map.invalidateSize(), 60); // size correctly after layout settles
+    return () => { map.remove(); mapRef.current = null; markersRef.current.clear(); };
+  }, [L]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const map = mapRef.current; if (!map || !L) return;
+    markersRef.current.forEach((m) => map.removeLayer(m));
+    markersRef.current.clear();
+    const latlngs = [];
+    for (const p of points || []) {
+      if (p.lat == null || p.lon == null) continue;
+      const m = L.circleMarker([p.lat, p.lon], markerStyle(p.id === activeId));
+      if (onPick) m.on("click", () => onPick(p.id));
+      if (p.label) m.bindTooltip(String(p.label), { direction: "top" });
+      m.addTo(map);
+      markersRef.current.set(p.id, m);
+      latlngs.push([p.lat, p.lon]);
+    }
+    if (latlngs.length === 1) map.setView(latlngs[0], 16);
+    else if (latlngs.length > 1) map.fitBounds(latlngs, { padding: [30, 30], maxZoom: 16 });
+    else if (center) map.setView([center.lat, center.lon], 13);
+  }, [points, L]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const map = mapRef.current; if (!map) return;
+    markersRef.current.forEach((m, id) => m.setStyle(markerStyle(id === activeId)));
+    const am = activeId != null && markersRef.current.get(activeId);
+    if (am) map.panTo(am.getLatLng());
+  }, [activeId]);
+
+  return (
+    <div style={{ borderRadius: 12, overflow: "hidden", border: `1px solid ${C.line}`, position: "relative" }}>
+      <div ref={elRef} style={{ height, width: "100%", background: C.panel2 }} />
+      {!L && <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: C.muted, fontSize: 12 }}>Loading map…</div>}
+    </div>
+  );
+}
+
+// Turn Sourcing rows into map points, filling coordinates: NYC rows already carry lat/lon; CT/
+// Hamptons rows are geocoded (throttled) via Photon. Returns [points, setNothing] live-updating.
+function useSourcingPoints(rows) {
+  const [points, setPoints] = useState([]);
+  useEffect(() => {
+    if (!rows) { setPoints([]); return; }
+    let alive = true;
+    const base = rows.map((r, i) => {
+      const raw = r.raw || {};
+      const lat = raw.lat ?? raw.latitude ?? null, lon = raw.lon ?? raw.longitude ?? null;
+      return { id: i, lat: lat != null ? Number(lat) : null, lon: lon != null ? Number(lon) : null, label: r.address || r.owner };
+    });
+    setPoints(base);
+    const missing = base.filter((p) => (p.lat == null || p.lon == null) && rows[p.id] && rows[p.id].address);
+    (async () => {
+      for (let i = 0; i < missing.length && i < 60; i += 4) {
+        const batch = missing.slice(i, i + 4);
+        const got = await Promise.all(batch.map(async (p) => {
+          const r = rows[p.id];
+          const g = await geocodeAddress(`${r.address}, ${r.marketLabel || ""}`);
+          return g ? { id: p.id, ...g } : null;
+        }));
+        if (!alive) return;
+        setPoints((prev) => {
+          const next = prev.slice();
+          for (const g of got) if (g) { const idx = next.findIndex((x) => x.id === g.id); if (idx >= 0) next[idx] = { ...next[idx], lat: g.lat, lon: g.lon }; }
+          return next;
+        });
+      }
+    })();
+    return () => { alive = false; };
+  }, [rows]);
+  return points;
+}
+
 function UnifiedSourcing({ pw }) {
   const [loc, setLoc] = useState("");
   const [coords, setCoords] = useState(null);
@@ -2526,6 +2708,8 @@ function UnifiedSourcing({ pw }) {
   const [rows, setRows] = useState(null);
   const [resolved, setResolved] = useState(null);
   const [openIdx, setOpenIdx] = useState(null);
+  const points = useSourcingPoints(rows);
+  const pickPin = (id) => { setOpenIdx(id); const el = document.getElementById(`usrc-row-${id}`); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); };
 
   const run = async () => {
     const det = unifiedDetect(loc, coords);
@@ -2588,6 +2772,16 @@ function UnifiedSourcing({ pw }) {
         </div>
       </div>
 
+      {rows && rows.length > 0 && points.some((p) => p.lat != null && p.lon != null) && (
+        <div style={{ marginTop: 18 }}>
+          <div className="mono" style={{ ...labelStyle, marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
+            <span>MAP</span>
+            <span style={{ color: C.muted, textTransform: "none", letterSpacing: 0 }}>{points.filter((p) => p.lat != null).length} of {rows.length} located · click a pin</span>
+          </div>
+          <PropertyMap points={points} center={coords || points.find((p) => p.lat != null)} activeId={openIdx} onPick={pickPin} height={340} />
+        </div>
+      )}
+
       {rows && (
         <div style={{ marginTop: 18 }}>
           <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>{rows.length} PROPERT{rows.length === 1 ? "Y" : "IES"}</div>
@@ -2599,7 +2793,7 @@ function UnifiedSourcing({ pw }) {
                 </tr></thead>
                 <tbody>
                   {rows.map((r, i) => (<React.Fragment key={i}>
-                    <tr style={{ borderBottom: `1px solid ${C.line}` }}>
+                    <tr id={`usrc-row-${i}`} style={{ borderBottom: `1px solid ${C.line}`, background: openIdx === i ? C.goldSoft : "transparent" }}>
                       <td style={{ padding: "9px 12px", fontSize: 13, maxWidth: 240 }}>
                         <div style={{ fontWeight: 700, color: C.ivory }}>{r.owner || "—"}{r.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber, whiteSpace: "nowrap" }}>{r.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}</div>
                         {r.mailing && <div style={{ color: C.muted, fontSize: 11, marginTop: 1 }}>{r.mailing}</div>}

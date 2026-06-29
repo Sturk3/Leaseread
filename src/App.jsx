@@ -3089,6 +3089,31 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           out = (d.properties || []).map(nyRow);
         }
       }
+      // ROBUSTNESS FALLBACK — an address typed WITHOUT its city defaults to NYC, where the geocoder
+      // can FUZZY-MATCH a wrong lot (NYC has a "12 Avenue S" in Brooklyn, so "2222 12th ave south"
+      // returned a house-8 Brooklyn lot, not empty). Detect that: if no returned lot carries the
+      // house number the user typed, the search mis-routed → retry Nashville (then NYC) by exact house.
+      const addrText = (det.address || det.nearAddress || loc || "").trim();
+      const { num: typedNum } = streetBits(addrText);
+      const hasHouseMatch = typedNum ? (out && out.some((r) => houseInAddress(r.address, typedNum, false))) : (out && out.length > 0);
+      if (/\d/.test(addrText) && !hasHouseMatch) {
+        if (det.market !== "tn") {
+          try {
+            const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: "any", address: addrText });
+            let rows = (d.properties || []).map(nashRow);
+            if (typedNum) rows = rows.filter((r) => houseInAddress(r.address, typedNum, false));
+            if (rows.length) { out = typedNum ? rows.slice(0, 1) : rows; setResolved({ market: "tn", town: "Nashville" }); }
+          } catch { /* keep trying */ }
+        }
+        const stillNoMatch = !out || (typedNum && !out.some((r) => houseInAddress(r.address, typedNum, false)));
+        if (stillNoMatch && det.market !== "nyc") {
+          try {
+            const d = await postJSON("/api/source", { password: pw, sources: ["pluto"], assetType: "any", nearAddress: addrText });
+            const rows = (d.leads || []).map(nycRow);
+            if (rows.length) { out = rows; setResolved({ market: "nyc", borough: "" }); }
+          } catch { /* give up gracefully */ }
+        }
+      }
       setRows(out);
       if (out.length === 1) setOpenIdx(0); // single property → open its dossier immediately
     } catch (e) { setError(e.message || "Search failed."); }

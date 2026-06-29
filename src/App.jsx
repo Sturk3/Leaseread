@@ -2647,6 +2647,64 @@ function AssessorDetail({ p, market }) {
   );
 }
 
+// Nashville consolidated intel, shown right in the dossier (the TN analog of NYC's PropertyDetail
+// city-records sections). Auto-loads on expand from /api/nashvilleintel — free public ArcGIS, no cost.
+function NashvilleIntelPanel({ apn, address, pw }) {
+  const [state, setState] = useState("idle"); // idle | loading | done | error
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    if (!apn && !address) { setState("idle"); return; }
+    let alive = true; setState("loading");
+    postJSON("/api/nashvilleintel", { password: pw, apn, address })
+      .then((res) => { if (alive) { setD(res); setState("done"); } })
+      .catch(() => { if (alive) setState("error"); });
+    return () => { alive = false; };
+  }, [apn, address, pw]);
+  const H = ({ children }) => <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "14px 0 6px" }}>{children}</div>;
+  const muted = { color: C.muted }, ivory = { color: C.ivory };
+  if (state === "loading") return <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Loading Nashville city records…</div>;
+  if (state === "error") return <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Nashville city records unavailable right now.</div>;
+  if (state !== "done" || !d) return null;
+  const bp = d.building_permits || {}, tp = d.trade_permits || {}, bz = d.beer_permits || {}, sr = d.service_requests_311 || {};
+  const pa = d.pending_applications || {}, zo = d.zoning_overlays || {}, fl = d.flood, po = d.policy, bld = d.building, bid = d.business_improvement_district;
+  const hasDev = (bp.count || 0) + (tp.count || 0) + (pa.count || 0) > 0;
+  const overlays = (zo.districts || []).map((o) => o.type || o.name).filter(Boolean);
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "12px 0 2px" }}>NASHVILLE CITY RECORDS</div>
+      {(bld || bid) && <>
+        <H>BUILDING{bid ? " · DISTRICT" : ""}</H>
+        {bld && <div style={{ fontSize: 12.5, ...ivory }}><span style={muted}>Size (est): </span>~{bld.est_gross_sqft ? Number(bld.est_gross_sqft).toLocaleString() : "?"} SF{bld.footprint_sqft ? ` · ${Number(bld.footprint_sqft).toLocaleString()} SF footprint` : ""}{bld.est_stories ? ` × ~${bld.est_stories} floors` : ""}{bld.height_ft ? ` · ${bld.height_ft} ft tall` : ""}</div>}
+        {bld && <div style={{ fontSize: 11, ...muted }}>Footprint-derived estimate — Metro publishes no assessor building SF.</div>}
+        {bid && <div style={{ fontSize: 12.5, marginTop: 2 }}><span style={muted}>District: </span><span style={ivory}>{bid}</span></div>}
+      </>}
+      {hasDev && <>
+        <H>DEVELOPMENT ACTIVITY</H>
+        {bp.count > 0 && <div style={{ fontSize: 12.5, ...ivory }}>{bp.count} building permit{bp.count === 1 ? "" : "s"}{bp.signals && bp.signals.length ? <span style={muted}> · {bp.signals.join(", ").replace(/_/g, " ")}</span> : ""}</div>}
+        {(bp.recent || []).slice(0, 3).map((p, i) => (<div key={i} style={{ fontSize: 11.5, ...muted, marginLeft: 8 }}>• {p.type}{p.cost ? ` · $${Number(p.cost).toLocaleString()}` : ""}{p.issued ? ` · ${p.issued}` : ""}</div>))}
+        {pa.count > 0 && <div style={{ fontSize: 12.5, ...ivory, marginTop: 3 }}>{pa.count} pending application{pa.count === 1 ? "" : "s"} <span style={muted}>(forward-looking)</span></div>}
+        {tp.count > 0 && <div style={{ fontSize: 12.5, ...ivory, marginTop: 3 }}>{tp.count} trade permit{tp.count === 1 ? "" : "s"} <span style={muted}>(electrical/plumbing/mechanical = live renovation)</span></div>}
+      </>}
+      {(bz.count || 0) > 0 && <>
+        <H>F&amp;B · BEER PERMITS</H>
+        {(bz.recent || []).slice(0, 4).map((b, i) => (<div key={i} style={{ fontSize: 12 }}><span style={ivory}>{b.business || b.owner}</span>{b.status ? <span style={muted}> · {b.status}</span> : ""}{b.issued ? <span style={muted}> · {b.issued}</span> : ""}</div>))}
+        <div style={{ fontSize: 11, ...muted, marginTop: 2 }}>{bz.active > 0 ? `${bz.active} active — an operating F&B tenant (a contact lead).` : "No active permit — possible F&B vacancy."}</div>
+      </>}
+      {(sr.codes_related || 0) > 0 && <>
+        <H>DISTRESS · 311 CODES COMPLAINTS</H>
+        {(sr.recent_codes || []).slice(0, 4).map((c, i) => (<div key={i} style={{ fontSize: 12 }}><span style={{ color: C.amber }}>{c.type}</span>{c.subtype ? <span style={muted}> · {c.subtype}</span> : ""}{c.status ? <span style={muted}> · {c.status}</span> : ""}</div>))}
+        <div style={{ fontSize: 11, ...muted, marginTop: 2 }}>{sr.codes_related} codes/condition complaint{sr.codes_related === 1 ? "" : "s"} of {sr.total} total 311 requests.</div>
+      </>}
+      {(overlays.length || fl || (po && (po.policy || po.transect))) && <>
+        <H>ZONING / CONTEXT</H>
+        {overlays.length > 0 && <div style={{ fontSize: 12.5 }}><span style={muted}>Overlays: </span><span style={ivory}>{overlays.join(", ")}</span>{zo.historic ? <span style={{ color: C.amber }}> · HISTORIC (constraint)</span> : ""}</div>}
+        {fl && <div style={{ fontSize: 12.5 }}><span style={muted}>Flood: </span><span style={fl.special_flood_hazard ? { color: C.red } : ivory}>Zone {fl.zone || "?"}{fl.special_flood_hazard ? " — SFHA (insurance / diligence cost)" : ` — ${fl.description || "minimal risk"}`}</span></div>}
+        {po && (po.policy || po.transect) && <div style={{ fontSize: 12.5 }}><span style={muted}>Land-use policy: </span><span style={ivory}>{[po.policy, po.transect].filter(Boolean).join(" · ")}</span></div>}
+      </>}
+    </div>
+  );
+}
+
 const ENTITY_RE = /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|HOLDINGS|REALTY|PROPERTIES|GROUP|ENTERPRISES|VENTURES)\b/i;
 // Detail panel for the assessor markets (CT · Hamptons · Nashville): the record, the AI quick take,
 // and the PAID skip trace — the SAME owner-contact workflow NYC has, so it works in every market.
@@ -2667,8 +2725,9 @@ function AssessorMarketDetail({ r, pw }) {
       {r.market === "ct" && r.owner && ENTITY_RE.test(r.owner) && (
         <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (CT discloses LLC principals).</div>
       )}
-      {r.market === "tn" && (
-        <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>For the full record — permits, the beer-permit operator, overlays, flood, building size — ask Scout “full record on {r.address}”{r.owner && ENTITY_RE.test(r.owner) ? `, or “unmask ${r.owner}” to get the principals` : ""}.</div>
+      {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
+      {r.market === "tn" && r.owner && ENTITY_RE.test(r.owner) && (
+        <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “unmask {r.owner}” for the TN registered agent + principals.</div>
       )}
       <ResearchBrief r={contactR} pw={pw} />
       <ContactReveal r={contactR} pw={pw} />

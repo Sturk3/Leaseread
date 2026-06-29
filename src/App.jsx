@@ -118,6 +118,7 @@ export default function App() {
   // Which tool is showing. Defaults to the Agent tab (the Screener is hidden / folded
   // into Scout, so it must NOT be the default or a reload lands on the tabless OM grader).
   const [view, setView] = useState("agent");
+  const [sourcingRows, setSourcingRows] = useState(null); // shared between Scout + the Sourcing tab
 
   function setConfig(updater) {
     setConfigState((prev) => {
@@ -373,12 +374,12 @@ export default function App() {
 
         {view === "agent" && <>
           {showSettings && <Settings config={config} setConfig={setConfig} presets={presets} setPresets={setPresets} onClose={() => setShowSettings(false)} />}
-          <AgentChat pw={pw} config={config} />
+          <AgentChat pw={pw} config={config} onSourced={(ui) => setSourcingRows(ui.rows)} goSourcing={() => setView("sourcing")} />
         </>}
 
         {view === "comps" && <CompTool pw={pw} />}
 
-        {view === "sourcing" && <UnifiedSourcing pw={pw} />}
+        {view === "sourcing" && <UnifiedSourcing pw={pw} rows={sourcingRows} setRows={setSourcingRows} />}
 
         {view === "radar" && <LeaseRadar pw={pw} />}
 
@@ -997,7 +998,19 @@ function ScoutMap({ items, center }) {
   );
 }
 
-function AgentChat({ pw, config }) {
+// Convert a Scout search tool result into Sourcing-tab rows (same shape the manual search uses),
+// so a Scout-driven search populates the Sourcing tab's table + map + dossiers. Null for tools that
+// aren't a mappable property search, or markets the Sourcing tab doesn't render (SF/MA).
+function sourcingRowsFrom(name, data) {
+  if (!data || data.error) return null;
+  if (name === "search_properties") return { market: "nyc", center: data.center || null, rows: (data.leads || []).map(nycRow) };
+  if (name === "search_nashville_properties") return { market: "tn", center: null, rows: (data.properties || []).map(nashRow) };
+  if (name === "search_ct_properties") return { market: "ct", center: null, rows: (data.properties || []).map(ctRow) };
+  if (name === "search_hamptons_properties") return { market: "ny", center: null, rows: (data.properties || []).map(nyRow) };
+  return null;
+}
+
+function AgentChat({ pw, config, onSourced, goSourcing }) {
   const [log, setLog] = useState([]);        // render transcript
   const [convo, setConvo] = useState([]);    // raw Anthropic-format messages
   const [input, setInput] = useState("");
@@ -1085,7 +1098,7 @@ function AgentChat({ pw, config }) {
     if (hit) return { ...hit, uiSummary: `${hit.uiSummary} (cached)` };
     const data = await postJSON(route.url, { password: pw, ...route.body(inputArgs) });
     const out = shapeResult(name, data);
-    if (!data.error) toolCacheRef.current.set(key, out);
+    if (!data.error) { out.ui = sourcingRowsFrom(name, data); toolCacheRef.current.set(key, out); }
     return out;
   };
 
@@ -1113,6 +1126,7 @@ function AgentChat({ pw, config }) {
           updateTool(id, "done", out.uiSummary);
           const md = scoutMapData(out.forModel);
           if (md) setLog((l) => [...l, { kind: "map", items: md.items, center: md.center }]);
+          if (out.ui && out.ui.rows && out.ui.rows.length) { if (onSourced) onSourced(out.ui); setLog((l) => [...l, { kind: "sourced", count: out.ui.rows.length }]); }
           let payload = JSON.stringify(out.forModel);
           if (payload.length > TOOL_RESULT_CHARS) {
             // shapeResult already caps arrays, so this is a rare belt-and-suspenders trim.
@@ -1188,6 +1202,11 @@ function AgentChat({ pw, config }) {
             </div>
           );
           if (e.kind === "map") return (<div key={i}><ScoutMap items={e.items} center={e.center} /></div>);
+          if (e.kind === "sourced") return (
+            <div key={i} onClick={() => goSourcing && goSourcing()} className="lift" style={{ cursor: "pointer", margin: "8px 0", fontSize: 12, color: C.gold, background: C.goldSoft, border: `1px solid ${C.gold}40`, borderRadius: 8, padding: "8px 12px", display: "inline-block" }}>
+              ◎ {e.count} propert{e.count === 1 ? "y" : "ies"} added to the Sourcing tab — open the table, map &amp; dossiers →
+            </div>
+          );
           if (e.kind === "tool") return (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0", fontSize: 11.5, color: C.muted }}>
               <span className="mono" style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: e.status === "error" ? C.red : e.status === "done" ? C.green : C.gold }}>
@@ -2704,7 +2723,7 @@ function useSourcingPoints(rows) {
   return points;
 }
 
-function UnifiedSourcing({ pw }) {
+function UnifiedSourcing({ pw, rows, setRows }) {
   const [loc, setLoc] = useState("");
   const [coords, setCoords] = useState(null);
   const [type, setType] = useState("retail");
@@ -2712,7 +2731,6 @@ function UnifiedSourcing({ pw }) {
   const [minValue, setMinValue] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [rows, setRows] = useState(null);
   const [resolved, setResolved] = useState(null);
   const [openIdx, setOpenIdx] = useState(null);
   const points = useSourcingPoints(rows);
@@ -2794,7 +2812,7 @@ function UnifiedSourcing({ pw }) {
 
       {rows && (
         <div style={{ marginTop: 18 }}>
-          <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>{rows.length} PROPERT{rows.length === 1 ? "Y" : "IES"}</div>
+          <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>{rows.length} PROPERT{rows.length === 1 ? "Y" : "IES"}{!resolved ? " · FROM SCOUT" : ""}</div>
           {rows.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No properties matched. Try a different type or location.</div> : (
             <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>

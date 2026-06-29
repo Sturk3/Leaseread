@@ -2507,12 +2507,14 @@ function HamptonsSourcing({ pw }) {
 const CT_TOWN_SET = new Set(["greenwich", "darien", "new canaan", "westport", "norwalk", "stamford", "wilton", "weston", "fairfield", "ridgefield", "cos cob", "old greenwich", "riverside", "rowayton"]);
 const HAMPTON_SET = new Set(["east hampton", "southampton", "shelter island", "sag harbor", "bridgehampton", "montauk", "amagansett", "water mill", "sagaponack", "wainscott", "westhampton", "westhampton beach", "quogue", "north haven", "springs", "noyac"]);
 const NYC_BORO_SET = { manhattan: "Manhattan", brooklyn: "Brooklyn", queens: "Queens", bronx: "Bronx", "staten island": "Staten Island", "new york": "Manhattan", nyc: "Manhattan" };
+const NASHVILLE_SET = new Set(["nashville", "davidson", "davidson county", "nashville tn", "nashville, tn", "metro nashville"]);
 const HAMLET_TOWN = { montauk: "East Hampton", amagansett: "East Hampton", wainscott: "East Hampton", springs: "East Hampton", "sag harbor": "East Hampton", bridgehampton: "Southampton", "water mill": "Southampton", sagaponack: "Southampton", westhampton: "Southampton", "westhampton beach": "Southampton", quogue: "Southampton", noyac: "Southampton", "north haven": "Southampton" };
 const UNIFIED_TYPES = [["retail", "Retail"], ["commercial", "Commercial / office"], ["multifamily", "Multifamily"], ["residential", "Residential"], ["industrial", "Industrial"], ["vacant", "Vacant / dev site"], ["any", "Any type"]];
 const TYPE_MAP_BY_MARKET = {
   nyc: { retail: "retail", commercial: "office", multifamily: "multifamily", residential: "one_two_family", industrial: "industrial", vacant: "vacant", any: "any" },
   ct: { retail: "commercial", commercial: "commercial", multifamily: "apartments", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
   ny: { retail: "commercial", commercial: "commercial", multifamily: "commercial", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
+  tn: { retail: "retail", commercial: "commercial", multifamily: "apartments", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
 };
 const mapType = (t, m) => (TYPE_MAP_BY_MARKET[m] || {})[t] || "any";
 const titleCase = (s) => String(s || "").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
@@ -2524,6 +2526,7 @@ function unifiedDetect(loc, coords) {
   if (k in NYC_BORO_SET) return { market: "nyc", kind: "borough", borough: NYC_BORO_SET[k] };
   if (CT_TOWN_SET.has(k)) return { market: "ct", town: titleCase(raw) };
   if (HAMPTON_SET.has(k)) return { market: "ny", town: HAMLET_TOWN[k] || titleCase(raw) };
+  if (NASHVILLE_SET.has(k)) return { market: "tn", town: "Nashville" };
   // Free text that looks like a street address (has a number, or a comma) → treat as a
   // NYC address even if it wasn't picked from the dropdown; api/source geocodes it.
   if (/\d/.test(raw) || raw.includes(",")) return { market: "nyc", kind: "address-text", nearAddress: raw };
@@ -2537,14 +2540,18 @@ function unifiedCSV(rows) {
 const nycRow = (l) => ({ market: "nyc", marketLabel: "NYC", owner: l.name, address: l.address, use: l.doc_type ? `class ${l.doc_type}` : (l.retail_sqft ? "Retail" : ""), value: assessedValue(l) != null ? fmtAmount(assessedValue(l)) : "", absentee: l.absentee, mailing: mailing(l), mapsUrl: mapUrl(l), raw: l });
 const ctRow = (p) => ({ market: "ct", marketLabel: `${p.town}, CT`, owner: p.owner, address: p.address, use: p.use, value: p.assessed_value ? fmtAmount(p.assessed_value) : "", absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
 const nyRow = (p) => ({ market: "ny", marketLabel: `${p.town}, NY`, owner: p.owner, address: p.address, use: p.use, value: p.assessed_value ? fmtAmount(p.assessed_value) : "", absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
+const nashRow = (p) => ({ market: "tn", marketLabel: "Nashville, TN", owner: p.owner, address: p.address, use: p.use, value: p.appraised_value ? fmtAmount(p.appraised_value) : (p.assessed_value ? fmtAmount(p.assessed_value) : ""), absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
 
-function AssessorDetail({ p, ny }) {
-  const grid = ny
+function AssessorDetail({ p, market }) {
+  const ny = market === "ny", tn = market === "tn";
+  const grid = tn
+    ? [["Owner", p.owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Appraised", p.appraised_value ? fmtAmount(p.appraised_value) : null], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Land acres", p.acres || null], ["Council dist.", p.council_district || null], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : null], ["Years owned", p.years_owned != null ? `~${p.years_owned}` : null], ["APN", p.apn || null]]
+    : ny
     ? [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Town", p.town], ["County", p.county], ["Use", p.use], ["Class", p.property_class], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Market value", p.market_value ? fmtAmount(p.market_value) : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["School district", p.school_district]]
     : [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Building SF", p.building_sqft ? Number(p.building_sqft).toLocaleString() : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Year built", p.year_built || null], ["Condition", p.condition], ["Grade", p.grade], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_date ? ` · ${p.sale_date}` : ""}` : null]];
   return (
     <div>
-      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "10px 0 8px" }}>{ny ? "NY" : "CT"} ASSESSOR RECORD</div>
+      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "10px 0 8px" }}>{tn ? "TN · NASHVILLE" : ny ? "NY" : "CT"} ASSESSOR RECORD</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: "6px 18px", fontSize: 12.5 }}>
         {grid.filter(([, v]) => v != null && v !== "" && v !== 0).map(([k, v]) => (<div key={k}><span style={{ color: C.muted }}>{k}: </span><span style={{ color: C.ivory }}>{v}</span></div>))}
       </div>
@@ -2713,7 +2720,7 @@ function UnifiedSourcing({ pw }) {
 
   const run = async () => {
     const det = unifiedDetect(loc, coords);
-    if (!det.market) { setError("Try a NYC borough or address (Manhattan · 120 5th Ave…), a CT town (Greenwich, Darien…), or a Hamptons town (East Hampton, Southampton…)."); return; }
+    if (!det.market) { setError("Try a NYC borough or address (Manhattan · 120 5th Ave…), a CT town (Greenwich, Darien…), a Hamptons town (East Hampton, Southampton…), or Nashville."); return; }
     setError(""); setRows(null); setOpenIdx(null); setLoading(true); setResolved(det);
     try {
       let out = [];
@@ -2733,6 +2740,9 @@ function UnifiedSourcing({ pw }) {
       } else if (det.market === "ct") {
         const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: mapType(type, "ct"), minPrice: minValue });
         out = (d.properties || []).map(ctRow);
+      } else if (det.market === "tn") {
+        const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: mapType(type, "tn"), minValue });
+        out = (d.properties || []).map(nashRow);
       } else {
         const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: mapType(type, "ny"), minValue });
         out = (d.properties || []).map(nyRow);
@@ -2746,7 +2756,7 @@ function UnifiedSourcing({ pw }) {
   return (
     <div style={{ marginTop: 22 }}>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
-        <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SEARCH ANY MARKET — NYC · GREENWICH/CT · HAMPTONS/NY</div>
+        <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SEARCH ANY MARKET — NYC · GREENWICH/CT · HAMPTONS/NY · NASHVILLE/TN</div>
         <div style={{ display: "grid", gridTemplateColumns: "2.4fr 1fr 1fr 1fr", gap: 12, alignItems: "end" }}>
           <label>
             <div className="mono" style={labelStyle}>WHERE — borough · town · or NYC address</div>
@@ -2754,7 +2764,7 @@ function UnifiedSourcing({ pw }) {
               <AddressAutocomplete value={loc}
                 onChange={(t) => { setLoc(t); setCoords(null); }}
                 onPick={(label, lat, lon, bbl) => { setLoc(label); setCoords({ lat, lon, bbl }); }}
-                placeholder="Greenwich · East Hampton · Manhattan · 120 5th Ave…" style={{ ...fieldStyle, width: "100%" }} />
+                placeholder="Manhattan · Greenwich · East Hampton · Nashville · 120 5th Ave…" style={{ ...fieldStyle, width: "100%" }} />
             </div>
           </label>
           <label><div className="mono" style={labelStyle}>TYPE</div><select value={type} onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{UNIFIED_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
@@ -2768,7 +2778,7 @@ function UnifiedSourcing({ pw }) {
         </div>
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
-          One bar, three markets. <strong style={{ color: C.ivory }}>NYC</strong> (full owner + dossier of 21 datasets), <strong style={{ color: C.ivory }}>Greenwich/CT</strong> (owner + assessor + entity principals), <strong style={{ color: C.ivory }}>Hamptons/NY</strong> (owner + assessor). Type a place and we route automatically; click <strong style={{ color: C.ivory }}>▸ details</strong> on a row for the full record + AI deep dive.
+          One bar, four markets. <strong style={{ color: C.ivory }}>NYC</strong> (full owner + dossier of 21 datasets), <strong style={{ color: C.ivory }}>Greenwich/CT</strong> (owner + assessor + entity principals), <strong style={{ color: C.ivory }}>Hamptons/NY</strong> (owner + assessor), <strong style={{ color: C.ivory }}>Nashville/TN</strong> (owner + assessor; ask Scout for the full permits/operator/overlay record). Type a place and we route automatically; click <strong style={{ color: C.ivory }}>▸ details</strong> on a row for the full record + AI deep dive.
         </div>
       </div>
 
@@ -2806,11 +2816,14 @@ function UnifiedSourcing({ pw }) {
                     {openIdx === i && (
                       <tr><td colSpan={5} style={{ padding: r.market === "nyc" ? "0" : "4px 14px 18px", background: C.ink }}>
                         {r.market === "nyc" ? <PropertyDetail r={r.raw} pw={pw} /> : (<>
-                          <AssessorDetail p={r.raw} ny={r.market === "ny"} />
+                          <AssessorDetail p={r.raw} market={r.market} />
                           {r.market === "ct" && r.owner && /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|HOLDINGS|REALTY|PROPERTIES)\b/i.test(r.owner) && (
                             <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (CT discloses LLC principals).</div>
                           )}
-                          <ResearchBrief r={{ name: r.owner || "", entity_type: "", address: r.address, borough: r.marketLabel, contact_address: r.mailing || "", city: r.raw.mailing_city || r.raw.town, state: r.raw.mailing_state || (r.market === "ct" ? "CT" : "NY"), last_sale_price: r.raw.sale_price || null, last_sale_date: r.raw.sale_date || "", years_owned: null }} pw={pw} />
+                          {r.market === "tn" && (
+                            <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>For the full record — permits, the beer-permit operator, overlays, flood, building size — ask Scout “full record on {r.address}”{r.owner && /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|HOLDINGS|REALTY|PROPERTIES|PARTNERS)\b/i.test(r.owner) ? `, or “unmask ${r.owner}” to get the principals` : ""}.</div>
+                          )}
+                          <ResearchBrief r={{ name: r.owner || "", entity_type: "", address: r.address, borough: r.marketLabel, contact_address: r.mailing || "", city: r.raw.mailing_city || r.raw.town || (r.market === "tn" ? "Nashville" : ""), state: r.raw.mailing_state || (r.market === "ct" ? "CT" : r.market === "tn" ? "TN" : "NY"), last_sale_price: r.raw.sale_price || null, last_sale_date: r.raw.sale_date || (r.raw.sale_year ? String(r.raw.sale_year) : ""), years_owned: r.raw.years_owned ?? null }} pw={pw} />
                         </>)}
                       </td></tr>
                     )}
@@ -2824,7 +2837,7 @@ function UnifiedSourcing({ pw }) {
 
       {!rows && !loading && (
         <div style={{ marginTop: 22, color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
-          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>One search, every market.</span> Type a NYC borough or address, a CT town (Greenwich, Darien…), or a Hamptons town (East Hampton, Southampton, Shelter Island). FRONTAGE routes to the right public-records engine and returns owners; open <strong style={{ color: C.ivory }}>▸ details</strong> for the full record and the AI deep dive.
+          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>One search, every market.</span> Type a NYC borough or address, a CT town (Greenwich, Darien…), a Hamptons town (East Hampton, Southampton, Shelter Island), or <strong style={{ color: C.ivory }}>Nashville</strong>. FRONTAGE routes to the right public-records engine and returns owners; open <strong style={{ color: C.ivory }}>▸ details</strong> for the full record and the AI deep dive.
         </div>
       )}
     </div>

@@ -2794,11 +2794,20 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: mapType(type, "ct"), minPrice: minValue });
         out = (d.properties || []).map(ctRow);
       } else if (det.market === "tn") {
-        // A leading house number = a specific building (drop the type filter so it isn't excluded);
-        // a bare street name keeps the type filter (e.g. retail on 12th Ave S).
-        const specific = /^\s*\d+\s/.test(det.address || "");
-        const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: det.address && specific ? "any" : mapType(type, "tn"), minValue, ...(det.address ? { address: det.address } : {}) });
-        out = (d.properties || []).map(nashRow);
+        const hasPoint = coords && coords.lat != null && coords.lon != null;
+        if (hasPoint) {
+          // Picked address → SPATIAL search. Radius "off" = just that one lot (type filter off so it
+          // can't be excluded); a radius = the parcels within it (keep the type filter, e.g. retail nearby).
+          const justIt = !radius || Number(radius) === 0;
+          const d = await postJSON("/api/nashvillesource", { password: pw, centerLat: coords.lat, centerLon: coords.lon, radiusMiles: radius || "", propertyType: justIt ? "any" : mapType(type, "tn"), minValue });
+          out = (d.properties || []).map(nashRow);
+        } else {
+          // Typed street (no coords): a leading house number = a specific building (type off);
+          // a bare street name keeps the type filter (e.g. retail on 12th Ave S).
+          const specific = /^\s*\d+\s/.test(det.address || "");
+          const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: det.address && specific ? "any" : mapType(type, "tn"), minValue, ...(det.address ? { address: det.address } : {}) });
+          out = (d.properties || []).map(nashRow);
+        }
       } else if (det.market === "web") {
         // Any US address outside the free-data markets: one row that offers AI web research
         // (gated behind a click in the dossier — never auto-spends).
@@ -2829,7 +2838,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
             </div>
           </label>
           <label><div className="mono" style={labelStyle}>TYPE</div><select value={type} onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{UNIFIED_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
-          <label><div className="mono" style={labelStyle}>RADIUS (NYC addr)</div><select value={radius} onChange={(e) => setRadius(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["", "off · just it"], ["0.1", "0.1 mi"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+          <label><div className="mono" style={labelStyle}>RADIUS (picked address)</div><select value={radius} onChange={(e) => setRadius(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["", "off · just it"], ["0.1", "0.1 mi"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>MIN VALUE</div><input type="number" value={minValue} onChange={(e) => setMinValue(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>

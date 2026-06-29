@@ -38,12 +38,21 @@ const USE_PATTERNS = {
   residential: ["RESIDENTIAL", "SINGLE FAMILY", "DUPLEX", "CONDO", "MOBILE HOME", "APARTMENT"],
 };
 
-async function arcgis(where) {
-  const params = new URLSearchParams({
-    where, outFields: "APN,ParID,Owner,OwnAddr1,OwnAddr2,OwnCity,OwnState,OwnZip,PropAddr,PropCity,PropZip,LUCode,LUDesc,Zoning,LandAppr,ImprAppr,TotlAppr,TotlAssd,Acres,StatedArea,SalePrice,OwnDate,Council",
+// spatial: { lat, lon, distanceMeters } — point-in-polygon (distance 0 = the one lot at that point)
+// or a buffer search around the point (distance > 0 = the lots within radius). Null = attribute-only.
+async function arcgis(where, spatial) {
+  const params = {
+    where: where || "1=1", outFields: "APN,ParID,Owner,OwnAddr1,OwnAddr2,OwnCity,OwnState,OwnZip,PropAddr,PropCity,PropZip,LUCode,LUDesc,Zoning,LandAppr,ImprAppr,TotlAppr,TotlAssd,Acres,StatedArea,SalePrice,OwnDate,Council",
     orderByFields: "TotlAppr DESC", returnGeometry: "false", resultRecordCount: "2000", f: "json",
-  });
-  const r = await fetch(`${NASH_BASE}/query?${params}`);
+  };
+  if (spatial) {
+    params.geometry = JSON.stringify({ x: spatial.lon, y: spatial.lat, spatialReference: { wkid: 4326 } });
+    params.geometryType = "esriGeometryPoint";
+    params.inSR = "4326";
+    params.spatialRel = "esriSpatialRelIntersects";
+    if (spatial.distanceMeters > 0) { params.distance = String(spatial.distanceMeters); params.units = "esriSRUnit_Meter"; }
+  }
+  const r = await fetch(`${NASH_BASE}/query?${new URLSearchParams(params)}`);
   if (!r.ok) return [];
   const j = await r.json().catch(() => ({}));
   return (j.features || []).map((f) => f.attributes || {});
@@ -52,7 +61,7 @@ async function arcgis(where) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, propertyType, address, minValue, maxValue, minAcres, sinceYear, limit, check, debug } = req.body || {};
+    const { password, propertyType, address, minValue, maxValue, minAcres, sinceYear, limit, centerLat, centerLon, radiusMiles, check, debug } = req.body || {};
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
     }
@@ -68,7 +77,11 @@ export default async function handler(req, res) {
     if (lo != null) where.push(`TotlAppr >= ${lo}`);
     if (hi != null) where.push(`TotlAppr <= ${hi}`);
 
-    const rows = await arcgis(where.join(" AND "));
+    // When the caller passes a point (a picked address), search SPATIALLY: radius 0 = the single
+    // parcel at that point ("just it"); radius > 0 = the parcels within that many miles.
+    const cLat = toNum(centerLat), cLon = toNum(centerLon), rad = toNum(radiusMiles);
+    const spatial = (cLat != null && cLon != null) ? { lat: cLat, lon: cLon, distanceMeters: rad && rad > 0 ? rad * 1609.34 : 0 } : null;
+    const rows = await arcgis(where.join(" AND "), spatial);
     const minAc = toNum(minAcres), yr = toNum(sinceYear), nowY = new Date().getUTCFullYear();
     const cap = Math.min(Number(limit) || 100, 400);
     const out = [];

@@ -2617,6 +2617,35 @@ function AssessorDetail({ p, market }) {
   );
 }
 
+const ENTITY_RE = /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|HOLDINGS|REALTY|PROPERTIES|GROUP|ENTERPRISES|VENTURES)\b/i;
+// Detail panel for the assessor markets (CT · Hamptons · Nashville): the record, the AI quick take,
+// and the PAID skip trace — the SAME owner-contact workflow NYC has, so it works in every market.
+function AssessorMarketDetail({ r, pw }) {
+  const raw = r.raw || {};
+  const isCo = ENTITY_RE.test(r.owner || "");
+  const mState = raw.mailing_state || (r.market === "ct" ? "CT" : r.market === "tn" ? "TN" : "NY");
+  // One owner object shared by the AI brief and the skip trace (street = mailing before the first comma).
+  const contactR = {
+    name: r.owner || "", entity_type: isCo ? "company" : "person",
+    contact_address: (r.mailing || "").split(",")[0].trim(), city: raw.mailing_city || raw.town || (r.market === "tn" ? "Nashville" : ""),
+    state: mState, zip: raw.mailing_zip || "", address: r.address, borough: r.marketLabel,
+    last_sale_price: raw.sale_price || null, last_sale_date: raw.sale_date || (raw.sale_year ? String(raw.sale_year) : ""), years_owned: raw.years_owned ?? null,
+  };
+  return (
+    <>
+      <AssessorDetail p={raw} market={r.market} />
+      {r.market === "ct" && r.owner && ENTITY_RE.test(r.owner) && (
+        <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (CT discloses LLC principals).</div>
+      )}
+      {r.market === "tn" && (
+        <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>For the full record — permits, the beer-permit operator, overlays, flood, building size — ask Scout “full record on {r.address}”{r.owner && ENTITY_RE.test(r.owner) ? `, or “unmask ${r.owner}” to get the principals` : ""}.</div>
+      )}
+      <ResearchBrief r={contactR} pw={pw} />
+      <ContactReveal r={contactR} pw={pw} />
+    </>
+  );
+}
+
 // ───────────────────────── Map (Leaflet, reusable across Sourcing + Scout) ─────────────────────────
 // Lazy-load Leaflet from CDN once — no build dependency, no API key, free OpenStreetMap/CARTO tiles.
 let _leafletPromise = null;
@@ -2890,16 +2919,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
                             <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>No free public-records feed covers this address, but you can still source it. Run AI web research to identify the owner of record, unmask the entity behind it, and pull published contacts — from the live web (~$0.15, only when you click). For deeper work, ask Scout the same.</div>
                             <ResearchBrief r={{ name: "", entity_type: "", address: r.address, borough: "", contact_address: "", city: "", state: "", last_sale_price: null, last_sale_date: "", years_owned: null }} pw={pw} forceMode="web" />
                           </div>
-                        ) : r.market === "nyc" ? <PropertyDetail r={r.raw} pw={pw} /> : (<>
-                          <AssessorDetail p={r.raw} market={r.market} />
-                          {r.market === "ct" && r.owner && /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|HOLDINGS|REALTY|PROPERTIES)\b/i.test(r.owner) && (
-                            <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (CT discloses LLC principals).</div>
-                          )}
-                          {r.market === "tn" && (
-                            <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>For the full record — permits, the beer-permit operator, overlays, flood, building size — ask Scout “full record on {r.address}”{r.owner && /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|HOLDINGS|REALTY|PROPERTIES|PARTNERS)\b/i.test(r.owner) ? `, or “unmask ${r.owner}” to get the principals` : ""}.</div>
-                          )}
-                          <ResearchBrief r={{ name: r.owner || "", entity_type: "", address: r.address, borough: r.marketLabel, contact_address: r.mailing || "", city: r.raw.mailing_city || r.raw.town || (r.market === "tn" ? "Nashville" : ""), state: r.raw.mailing_state || (r.market === "ct" ? "CT" : r.market === "tn" ? "TN" : "NY"), last_sale_price: r.raw.sale_price || null, last_sale_date: r.raw.sale_date || (r.raw.sale_year ? String(r.raw.sale_year) : ""), years_owned: r.raw.years_owned ?? null }} pw={pw} />
-                        </>)}
+                        ) : r.market === "nyc" ? <PropertyDetail r={r.raw} pw={pw} /> : <AssessorMarketDetail r={r} pw={pw} />}
                       </td></tr>
                     )}
                   </React.Fragment>))}

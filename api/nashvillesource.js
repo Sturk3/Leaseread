@@ -41,6 +41,10 @@ const USE_PATTERNS = {
   residential: ["RESIDENTIAL", "SINGLE FAMILY", "DUPLEX", "CONDO", "MOBILE HOME", "APARTMENT"],
 };
 
+// LUDesc tokens to DROP from an "any"-type area browse — tax-exempt / institutional uses that
+// aren't acquisition targets. Precise (e.g. "PARK OR REC", not "PARK") so PARKING lots/garages stay.
+const EXCLUDE_USE = ["HOSPITAL", "METRO", "SCHOOL", "COLLEGE", "UNIVERSITY", "CHURCH", "RELIGIOUS", "CEMETERY", "GOVERNMENT", "FEDERAL", "PARK OR REC", "GREENWAY", "EXEMPT", "RIGHT OF WAY", "COMMON ELEMENT", "FIRE HALL", "POLICE"];
+
 // spatial: { lat, lon, distanceMeters } — point-in-polygon (distance 0 = the one lot at that point)
 // or a buffer search around the point (distance > 0 = the lots within radius). Null = attribute-only.
 async function arcgis(where, spatial) {
@@ -103,7 +107,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v5-browse250", base: NASH_BASE });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v6-browse-targets", base: NASH_BASE });
 
     const where = ["IsActive='Y'"];
     // OWNER-PORTFOLIO mode: every Davidson County parcel held by this exact owner (the LLC tracker).
@@ -112,7 +116,15 @@ export default async function handler(req, res) {
     if (!ownerQ) {
       const typeKey = clean(propertyType).toLowerCase().replace(/[\s/-]+/g, "_");
       const pats = typeKey in USE_PATTERNS ? USE_PATTERNS[typeKey] : (propertyType ? [sqlStr(propertyType)] : null);
-      if (pats && pats.length) where.push(`(${pats.map((p) => `UPPER(LUDesc) LIKE '%${p.replace(/'/g, "''")}%'`).join(" OR ")})`);
+      if (pats && pats.length) {
+        where.push(`(${pats.map((p) => `UPPER(LUDesc) LIKE '%${p.replace(/'/g, "''")}%'`).join(" OR ")})`);
+      } else if (!address) {
+        // AREA BROWSE with no type ("any") → drop tax-exempt / institutional uses (government, schools,
+        // hospitals, churches, parks) so the list leads with real acquisition targets, not the convention
+        // center & Vanderbilt. NOT applied to a specific-address lookup (you may be looking one of these up),
+        // and "PARK OR REC" is matched literally so PARKING lots/garages (real targets) stay in.
+        where.push(`NOT (${EXCLUDE_USE.map((p) => `UPPER(LUDesc) LIKE '%${p}%'`).join(" OR ")})`);
+      }
     } else {
       where.push(`UPPER(Owner) LIKE '%${sqlStr(ownerQ)}%'`);
     }

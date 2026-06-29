@@ -2553,10 +2553,29 @@ function marketFromText(raw) {
     const street = String(raw).replace(/,?\s*(metro\s+)?(nashville|davidson county|davidson|tennessee|tn|usa|united states).*$/i, "").replace(/[, ]+$/, "").trim();
     return { market: "tn", town: "Nashville", address: street.length >= 3 ? street : "" };
   }
-  for (const t of CT_TOWN_SET) if (k.includes(t)) return { market: "ct", town: titleCase(t) };
-  for (const t of HAMPTON_SET) if (k.includes(t)) return { market: "ny", town: HAMLET_TOWN[t] || titleCase(t) };
+  for (const t of CT_TOWN_SET) if (k.includes(t)) return { market: "ct", town: titleCase(t), address: firstAddrSeg(raw) };
+  for (const t of HAMPTON_SET) if (k.includes(t)) return { market: "ny", town: HAMLET_TOWN[t] || titleCase(t), address: firstAddrSeg(raw) };
   return null;
 }
+// The street portion of a typed/picked label, ONLY when it names a specific building
+// (has a house number) — lets the town-level markets (CT / Hamptons) pin one property.
+function firstAddrSeg(raw) { const seg = String(raw || "").split(",")[0].trim(); return /\d/.test(seg) ? seg : ""; }
+// Split "100 West Putnam Ave" → { num:"100", core:"WEST PUTNAM" }. `core` is the street name
+// MINUS its trailing type suffix, so a LIKE matches whether the data says AVE/AVENUE, ST/STREET,
+// RD/ROAD, etc. (keeps the full name — not just the first word — so directionals don't truncate it).
+const STREET_SUFFIX = new Set(["AVE", "AVENUE", "ST", "STREET", "RD", "ROAD", "DR", "DRIVE", "LN", "LANE", "BLVD", "BOULEVARD", "CT", "COURT", "PL", "PLACE", "PKWY", "PARKWAY", "HWY", "HIGHWAY", "TER", "TERRACE", "WAY", "CIR", "CIRCLE", "TPKE", "TURNPIKE", "SQ", "SQUARE", "ROW", "PLZ", "PLAZA", "PATH", "WALK", "ALY", "ALLEY", "TRL", "TRAIL", "LOOP", "PIKE", "CV", "COVE"]);
+function streetBits(addr) {
+  const s = String(addr || "").trim();
+  const m = s.match(/^(\d+[A-Za-z]?)\s+(.+)$/);
+  const num = m ? m[1] : "";
+  const toks = (m ? m[2] : s).toUpperCase().trim().split(/\s+/);
+  if (toks.length > 1 && STREET_SUFFIX.has(toks[toks.length - 1])) toks.pop();
+  return { num, core: toks.join(" ") };
+}
+const houseRe = (num) => new RegExp(`(^|\\D)${num}(\\D|$)`); // number-first formats (NYC/TN/Hamptons)
+// CT CAMA `location` is "STREET NAME <padded #>" (e.g. "GREENWICH AVENUE 0200") — pull the
+// trailing (zero-padded, possibly ranged) house number off the end and normalize it.
+const ctTrailingNum = (a) => { const m = String(a || "").match(/(\d+)(?:\s*-\s*\d+)?\s*$/); return m ? String(Number(m[1])) : ""; };
 const US_STATE_CODES = new Set(["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"]);
 const inNycBox = (lat, lon) => Number.isFinite(lat) && Number.isFinite(lon) && lat >= 40.49 && lat <= 40.92 && lon >= -74.3 && lon <= -73.69;
 function unifiedDetect(loc, coords) {
@@ -2818,14 +2837,17 @@ function UnifiedSourcing({ pw, rows, setRows }) {
     // picked Nashville address have one; a borough or a CT/Hamptons town does not, so radius
     // is silently ignored there — tell the user instead of looking broken.
     const radiusActive = !!radius && Number(radius) > 0;
-    const usesAnchor = (det.market === "nyc" && (det.kind === "address" || det.kind === "address-text"))
-      || (det.market === "tn" && !!coords);
-    setNotice(radiusActive && !usesAnchor
+    // A specific building was looked up (so "just it" returns one property, and radius is moot).
+    const anchored = det.kind === "address" || det.kind === "address-text"
+      || !!(det.address && det.address.trim()) || (det.market === "tn" && !!coords);
+    // Radius only does a real area search in the coordinate markets (NYC + picked Nashville).
+    const usesRadius = radiusActive && anchored && (det.market === "nyc" || (det.market === "tn" && !!coords));
+    setNotice(radiusActive && !anchored
       ? "Radius needs a specific address — pick one from the dropdown. A borough or town has no center point, so these results cover the whole area."
       : "");
-    // A radius search is about an area: show it nearest-first (the engine's order, anchor
-    // pinned) rather than re-ranking by Opportunity Score. Otherwise rank by opportunity.
-    setSortBy(radiusActive && usesAnchor ? "default" : "opp");
+    // A radius area search shows nearest-first (the engine's order, anchor pinned); everything
+    // else ranks by Opportunity Score.
+    setSortBy(usesRadius ? "default" : "opp");
     setError(""); setRows(null); setOpenIdx(null); setLoading(true); setResolved(det);
     try {
       let out = [];
@@ -2843,8 +2865,19 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           out = (d.leads || []).map(nycRow);
         }
       } else if (det.market === "ct") {
-        const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: mapType(type, "ct"), minPrice: minValue });
-        out = (d.properties || []).map(ctRow);
+        const addr = (det.address || "").trim(); // a specific building was looked up
+        if (addr) {
+          // "Just it": pin the one property. CT `location` is "STREET NAME <padded #>", so match
+          // on the street core (suffix-agnostic) then keep the parcel whose trailing # is the house.
+          const { num, core } = streetBits(addr);
+          const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: "any", address: core });
+          let rows = (d.properties || []).map(ctRow);
+          if (num) { const exact = rows.filter((r) => ctTrailingNum(r.address) === String(Number(num))); if (exact.length) rows = exact; }
+          out = rows.slice(0, 1);
+        } else {
+          const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: mapType(type, "ct"), minPrice: minValue });
+          out = (d.properties || []).map(ctRow);
+        }
       } else if (det.market === "tn") {
         const hasPoint = coords && coords.lat != null && coords.lon != null;
         const street = (det.address || "").trim(); // the street portion, if the text named one
@@ -2865,14 +2898,33 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           d = await postJSON("/api/nashvillesource", { password: pw, propertyType: street && specific ? "any" : mapType(type, "tn"), minValue, ...(street ? { address: street } : {}) });
         }
         out = (d.properties || []).map(nashRow);
+        // "Just it": a specific building (a street with a house number) + radius off → one property.
+        // A bare-city search (no street) is NOT pinned — it returns the full list.
+        const justItTn = !radius || Number(radius) === 0;
+        if (justItTn && /\d/.test(street)) {
+          const { num } = streetBits(street);
+          if (num) { const exact = out.filter((r) => houseRe(num).test(r.address || "")); if (exact.length) out = exact; }
+          out = out.slice(0, 1);
+        }
       } else if (det.market === "web") {
         // Any US address outside the free-data markets: one row that offers AI web research
         // (gated behind a click in the dossier — never auto-spends).
         const pt = det.coords || coords || null;
         out = [{ market: "web", marketLabel: "Web research", owner: "", address: det.address || loc, use: "", value: "", absentee: null, mailing: "", mapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(det.address || loc)}`, raw: { address: det.address || loc, lat: pt ? pt.lat : null, lon: pt ? pt.lon : null } }];
       } else {
-        const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: mapType(type, "ny"), minValue });
-        out = (d.properties || []).map(nyRow);
+        const addr = (det.address || "").trim(); // a specific building was looked up
+        if (addr) {
+          // "Just it": NY's roll street field has NO house number, so match the street core,
+          // then keep only the parcel whose address carries the looked-up house number.
+          const { num, core } = streetBits(addr);
+          const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: "any", address: core });
+          let rows = (d.properties || []).map(nyRow);
+          if (num) { const exact = rows.filter((r) => houseRe(num).test(r.address || "")); if (exact.length) rows = exact; }
+          out = rows.slice(0, 1);
+        } else {
+          const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: mapType(type, "ny"), minValue });
+          out = (d.properties || []).map(nyRow);
+        }
       }
       setRows(out);
       if (out.length === 1) setOpenIdx(0); // single property → open its dossier immediately

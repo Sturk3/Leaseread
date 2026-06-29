@@ -2185,7 +2185,7 @@ function researchLinks(r) {
 
 // Google-Maps-style address lookup using NYC GeoSearch autocomplete (free, no key,
 // CORS-open so the browser calls it directly). Pick a suggestion -> exact coords.
-function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
+function AddressAutocomplete({ value, onChange, onPick, placeholder, style, onEnter }) {
   const [sugs, setSugs] = useState([]);
   const [open, setOpen] = useState(false);
   const timer = useRef(null);
@@ -2251,7 +2251,9 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style }) {
 
   return (
     <div ref={box} style={{ position: "relative" }}>
-      <input value={value} onChange={(e) => handle(e.target.value)} onFocus={() => sugs.length && setOpen(true)} placeholder={placeholder} autoComplete="off" style={style} />
+      <input value={value} onChange={(e) => handle(e.target.value)} onFocus={() => sugs.length && setOpen(true)}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); setOpen(false); setSugs([]); if (onEnter) onEnter(); } }}
+        placeholder={placeholder} autoComplete="off" style={style} />
       {open && (
         <div style={{ position: "absolute", zIndex: 30, top: "100%", left: 0, right: 0, marginTop: 4, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, boxShadow: "0 10px 28px rgba(20,16,48,0.18)", maxHeight: 240, overflow: "auto" }}>
           {sugs.map((s, i) => (
@@ -3104,6 +3106,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
               <AddressAutocomplete value={loc}
                 onChange={(t) => { setLoc(t); setCoords(null); }}
                 onPick={(label, lat, lon, bbl) => { setLoc(label); setCoords({ lat, lon, bbl }); }}
+                onEnter={run}
                 placeholder="Manhattan · Greenwich · Nashville · or any US address (500 Main St, Austin TX)…" style={{ ...fieldStyle, width: "100%" }} />
             </div>
           </label>

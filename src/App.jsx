@@ -2536,7 +2536,7 @@ const HAMPTON_SET = new Set(["east hampton", "southampton", "shelter island", "s
 const NYC_BORO_SET = { manhattan: "Manhattan", brooklyn: "Brooklyn", queens: "Queens", bronx: "Bronx", "staten island": "Staten Island", "new york": "Manhattan", nyc: "Manhattan" };
 const NASHVILLE_SET = new Set(["nashville", "davidson", "davidson county", "nashville tn", "nashville, tn", "metro nashville"]);
 const HAMLET_TOWN = { montauk: "East Hampton", amagansett: "East Hampton", wainscott: "East Hampton", springs: "East Hampton", "sag harbor": "East Hampton", bridgehampton: "Southampton", "water mill": "Southampton", sagaponack: "Southampton", westhampton: "Southampton", "westhampton beach": "Southampton", quogue: "Southampton", noyac: "Southampton", "north haven": "Southampton" };
-const UNIFIED_TYPES = [["retail", "Retail"], ["commercial", "Commercial / office"], ["multifamily", "Multifamily"], ["residential", "Residential"], ["industrial", "Industrial"], ["vacant", "Vacant / dev site"], ["any", "Any type"]];
+const UNIFIED_TYPES = [["any", "Any type"], ["retail", "Retail"], ["commercial", "Commercial / office"], ["multifamily", "Multifamily"], ["residential", "Residential"], ["industrial", "Industrial"], ["vacant", "Vacant / dev site"]];
 const TYPE_MAP_BY_MARKET = {
   nyc: { retail: "retail", commercial: "office", multifamily: "multifamily", residential: "one_two_family", industrial: "industrial", vacant: "vacant", any: "any" },
   ct: { retail: "commercial", commercial: "commercial", multifamily: "apartments", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
@@ -2958,7 +2958,7 @@ function useSourcingPoints(rows) {
 function UnifiedSourcing({ pw, rows, setRows }) {
   const [loc, setLoc] = useState("");
   const [coords, setCoords] = useState(null);
-  const [type, setType] = useState("retail");
+  const [type, setType] = useState("any"); // default to ANY so a search isn't silently limited to retail
   const [radius, setRadius] = useState("");
   const [minValue, setMinValue] = useState("");
   const [loading, setLoading] = useState(false);

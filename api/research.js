@@ -12,7 +12,7 @@ const RESEARCH_MODEL = process.env.RESEARCH_MODEL || "claude-sonnet-4-6";
 // Pro (300s) can go deeper for a richer brief — default 5, override RESEARCH_MAX_SEARCHES.
 // Only used in WEB mode (knowledge mode runs no searches), so this is inert until the
 // frontend is flipped to mode:"web" (which only makes sense on Pro's higher timeout).
-const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 3;
+const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 5;
 
 function buildSystem() {
   return `You are an off-market real estate acquisitions research analyst for a firm that buys trophy / high-street RETAIL property (primarily NYC, expanding nationwide). You are given a PROPERTY (an address, and often — but not always — its owner of record). Use the web_search tool to find WHO owns it, their PORTFOLIO, and HOW TO REACH them, then write a tight intelligence brief.
@@ -31,7 +31,7 @@ Format in markdown (omit a section only if you truly found nothing):
 - **Signals** — news, financing/maturing debt, litigation, distress, redevelopment plans — anything hinting at motivation to sell.
 - **Bottom line** — 1–2 sentences: plausible motivated seller? worth the team's time?
 
-Rules: Ground every claim in what you found and name the source inline. For "Contacts found": include ONLY phone numbers, emails, or sites you LITERALLY saw in a result, each with its source — NEVER guess or pattern-construct an email/number (no firstname@company.com), and never present an unconfirmed contact as real. If something is thin or unconfirmed, say so plainly — never fabricate. Concise (aim under ~450 words). This is for professional real-estate sourcing.`;
+Rules: Ground every claim in what you found and name the source inline. For "Contacts found": include ONLY phone numbers, emails, or sites you LITERALLY saw in a result, each with its source — NEVER guess or pattern-construct an email/number (no firstname@company.com), and never present an unconfirmed contact as real. If something is thin or unconfirmed, say so plainly — never fabricate. Be thorough and decision-grade: surface every contact and signal you actually found (aim ~600 words, more if the findings genuinely warrant it — don't pad). This is for professional real-estate sourcing.`;
 }
 
 // Knowledge-only brief (no web). Fast, but the model only knows public, well-known
@@ -131,7 +131,7 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: RESEARCH_MODEL,
-          max_tokens: freeQuery ? 3200 : 2600,
+          max_tokens: freeQuery ? 4096 : 3600,
           system: systemPrompt,
           ...(useWeb ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_SEARCHES }] } : {}),
           messages,

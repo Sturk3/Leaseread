@@ -21,7 +21,21 @@ const AGENT_MODEL = process.env.AGENT_MODEL || "claude-sonnet-4-6";
 // Deep Research runs on the strongest model for sharper reasoning/synthesis (opt-in; the
 // token tracker costs it correctly). Routine Scout stays on the cheaper Sonnet.
 const AGENT_MODEL_DEEP = process.env.AGENT_MODEL_DEEP || "claude-opus-4-8";
-const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 8000;
+// Raised from 8000: adaptive thinking (below) spends tokens that count toward this cap, so a tight
+// ceiling truncated the synthesis turn. 16000 is the skill's non-streaming default and stays within
+// Vercel's 60s (one Claude turn per call). Env-overridable for cost tuning.
+const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 16000;
+// Adaptive thinking sharpens the JUDGEMENT part of the answer — ranking targets, weighing motivation
+// signals, deciding which tool to call next — which is exactly where a flat no-thinking proxy was weakest.
+// "adaptive" lets Claude self-moderate (little thinking on routine tool-planning turns, more on
+// synthesis), so it's cost-aware by design, and it auto-enables interleaved thinking across tool calls
+// (the browser loop already echoes the full `content` array back, so thinking blocks are preserved).
+// Set AGENT_THINKING=0 to fall back to no-thinking if latency/cost ever bites.
+const THINKING_ON = process.env.AGENT_THINKING !== "0";
+// Effort governs thinking depth + overall token spend. Deep Research goes hard (high); routine Scout
+// stays balanced (medium) to respect the cost discipline the system prompt preaches.
+const EFFORT_DEEP = process.env.AGENT_EFFORT_DEEP || "high";
+const EFFORT_ROUTINE = process.env.AGENT_EFFORT || "medium";
 
 // Tool catalog. Each tool maps 1:1 to an existing FRONTAGE endpoint; the browser owns
 // the name->endpoint routing (see TOOL_ROUTES in src/App.jsx) and injects the password.
@@ -457,7 +471,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, deepModel: AGENT_MODEL_DEEP, tools: TOOLS.map((t) => t.name), build: "agent-v24-tn-entity" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, deepModel: AGENT_MODEL_DEEP, thinking: THINKING_ON, effort: { routine: EFFORT_ROUTINE, deep: EFFORT_DEEP }, maxTokens: MAX_TOKENS, tools: TOOLS.map((t) => t.name), build: "agent-v25-thinking" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {
@@ -491,6 +505,10 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: deepResearch ? AGENT_MODEL_DEEP : AGENT_MODEL,
         max_tokens: MAX_TOKENS,
+        // Adaptive thinking + effort. NOTE for future edits: with thinking on, temperature/top_p/top_k
+        // are not allowed (they 400 on Opus 4.8 / Sonnet 4.6) — none are set, keep it that way.
+        ...(THINKING_ON ? { thinking: { type: "adaptive" } } : {}),
+        output_config: { effort: deepResearch ? EFFORT_DEEP : EFFORT_ROUTINE },
         system: [{ type: "text", text: buildSystem(deepResearch), cache_control: { type: "ephemeral" } }],
         tools: cachedTools,
         messages: cachedMessages,

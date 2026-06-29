@@ -794,8 +794,15 @@ function addSpend(amount) { try { const cur = Number(localStorage.getItem(SPEND_
 // estimate, ~$0.15 per live web run). Resets automatically each calendar month.
 const SCOUT_SPEND_KEY = "fr_scout_spend_v1", SCOUT_CAP_KEY = "fr_scout_cap_v1", SCOUT_MODE_KEY = "fr_scout_mode_v1";
 const WEB_RUN_COST = 0.15;
-const MAX_AGENT_STEPS = 6; // cap tool steps per request (was 10) to bound cost/runaway
+const MAX_AGENT_STEPS = 10; // cap tool steps per request. The system prompt tells Scout to chain
+// search -> intel/history/foot_traffic -> portfolio -> web_research and "go deep"; 6 cut routine
+// dossiers off mid-chain (esp. when calls run one-at-a-time). Free tools dominate, so 10 buys depth
+// without much cost; web calls are still gated by the prompt.
 const DEEP_RESEARCH_STEPS = 24; // higher budget in Deep Research mode (opt-in, exhaustive)
+// Final guard on how much of a (already array-bounded by shapeResult) tool result the model sees.
+// Was a blind 14k .slice() that could cut mid-JSON and silently drop whole layers of rich free
+// intel; raised + made truncation explicit so the model never reasons over malformed/half-dropped data.
+const TOOL_RESULT_CHARS = 30000;
 const SCOUT_DEEP_KEY = "fr_scout_deepresearch_v1";
 const curMonth = () => new Date().toISOString().slice(0, 7);
 function scoutSpend() { try { const o = JSON.parse(localStorage.getItem(SCOUT_SPEND_KEY) || "{}"); return o.month === curMonth() ? (Number(o.spent) || 0) : 0; } catch { return 0; } }
@@ -1058,7 +1065,13 @@ function AgentChat({ pw, config }) {
         try {
           const out = await runTool(tu.name, tu.input || {});
           updateTool(id, "done", out.uiSummary);
-          results.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out.forModel).slice(0, 14000) });
+          let payload = JSON.stringify(out.forModel);
+          if (payload.length > TOOL_RESULT_CHARS) {
+            // shapeResult already caps arrays, so this is a rare belt-and-suspenders trim.
+            // Tell the model explicitly rather than handing it silently-cut JSON.
+            payload = payload.slice(0, TOOL_RESULT_CHARS) + ' …[result truncated for length — ask to narrow if you need the rest]';
+          }
+          results.push({ type: "tool_result", tool_use_id: tu.id, content: payload });
         } catch (e) {
           updateTool(id, "error", e.message);
           results.push({ type: "tool_result", tool_use_id: tu.id, is_error: true, content: e.message });

@@ -2218,9 +2218,40 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style, onEn
           }
         } catch { /* fall through to backup */ }
       }
-      // 2) National Photon (free, no key, CORS-open): runs whenever the NYC results are sparse, so an
+      // 1b) NASHVILLE — pull real addresses straight from Metro's parcel layer (PropAddr), so typing
+      //     "2222 12th" suggests "2222 12TH AVE S" with the house number (Photon only gives the street).
+      //     Runs for an explicit Nashville search OR any bare numbered address — so a Nashville address
+      //     pops up even without typing "nashville" (wrong-number / other-city hits get dropped by the
+      //     house-number filter below; the user disambiguates by the ", Nashville, TN" in the label).
+      const isTn = nonNyc && nonNyc.market === "tn";
+      if (isTn || (!nonNyc && /^\s*\d/.test(text.trim()))) {
+        try {
+          const street = ((nonNyc && nonNyc.address) || text).trim();
+          const m = street.match(/^(\d+)\s+(\S+)/); // house number + first street word
+          const prefix = (m ? `${m[1]} ${m[2]}` : street).toUpperCase().replace(/'/g, "''");
+          const url = `https://maps.nashville.gov/arcgis/rest/services/Cadastral/Parcels/MapServer/0/query?where=${encodeURIComponent(`UPPER(PropAddr) LIKE '${prefix}%'`)}&outFields=PropAddr&orderByFields=PropAddr&returnGeometry=true&outSR=4326&resultRecordCount=8&f=json`;
+          const r = await fetch(url);
+          if (r.ok) {
+            const d = await r.json();
+            const seen = new Set();
+            const nash = [];
+            for (const f of (d.features || [])) {
+              const addr = String((f.attributes && f.attributes.PropAddr) || "").replace(/\s+/g, " ").trim();
+              if (!addr || seen.has(addr)) continue;
+              seen.add(addr);
+              let lat = null, lon = null;
+              const rings = f.geometry && f.geometry.rings;
+              if (rings && rings[0] && rings[0].length) { let sx = 0, sy = 0; for (const [x, y] of rings[0]) { sx += x; sy += y; } lon = sx / rings[0].length; lat = sy / rings[0].length; }
+              nash.push({ label: `${addr}, Nashville, TN`, lon, lat, bbl: null });
+            }
+            if (isTn) items = nash; // Metro parcel addresses are authoritative for an explicit Nashville search
+            else for (const e of nash) if (!items.some((x) => x.label === e.label)) items.push(e); // else merge with NYC hits
+          }
+        } catch { /* fall through to Photon */ }
+      }
+      // 2) National Photon (free, no key, CORS-open): runs whenever results are sparse, so an
       //    address ANYWHERE in the US surfaces. US-centroid rank bias, but NO bbox — the old NYC bbox
-      //    was excluding every out-of-town address. Merged after the NYC hits (which carry the BBL).
+      //    was excluding every out-of-town address. Merged after the NYC/Nashville hits.
       if (items.length < 5) {
         try {
           const r = await fetch(`https://photon.komoot.io/api?q=${encodeURIComponent(text)}&limit=8&lat=39.8&lon=-98.6`);

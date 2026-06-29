@@ -2667,7 +2667,8 @@ function NashvilleIntelPanel({ apn, address, pw }) {
   if (state !== "done" || !d) return null;
   const bp = d.building_permits || {}, tp = d.trade_permits || {}, bz = d.beer_permits || {}, sr = d.service_requests_311 || {};
   const pa = d.pending_applications || {}, zo = d.zoning_overlays || {}, fl = d.flood, po = d.policy, bld = d.building, bid = d.business_improvement_district;
-  const hasDev = (bp.count || 0) + (tp.count || 0) + (pa.count || 0) > 0;
+  const cv = d.code_violations || {}, rz = d.rezonings || {};
+  const hasDev = (bp.count || 0) + (tp.count || 0) + (pa.count || 0) + (rz.count || 0) > 0;
   const overlays = (zo.districts || []).map((o) => o.type || o.name).filter(Boolean);
   return (
     <div style={{ marginTop: 6 }}>
@@ -2684,11 +2685,20 @@ function NashvilleIntelPanel({ apn, address, pw }) {
         {(bp.recent || []).slice(0, 3).map((p, i) => (<div key={i} style={{ fontSize: 11.5, ...muted, marginLeft: 8 }}>• {p.type}{p.cost ? ` · $${Number(p.cost).toLocaleString()}` : ""}{p.issued ? ` · ${p.issued}` : ""}</div>))}
         {pa.count > 0 && <div style={{ fontSize: 12.5, ...ivory, marginTop: 3 }}>{pa.count} pending application{pa.count === 1 ? "" : "s"} <span style={muted}>(forward-looking)</span></div>}
         {tp.count > 0 && <div style={{ fontSize: 12.5, ...ivory, marginTop: 3 }}>{tp.count} trade permit{tp.count === 1 ? "" : "s"} <span style={muted}>(electrical/plumbing/mechanical = live renovation)</span></div>}
+        {rz.count > 0 && <div style={{ marginTop: 4 }}>
+          {(rz.recent || []).slice(0, 3).map((z, i) => (<div key={i} style={{ fontSize: 12 }}><span style={ivory}>{z.type}</span>{z.from_zone && z.to_zone ? <span style={muted}> · {z.from_zone} → {z.to_zone}</span> : ""}{z.status ? <span style={muted}> · {z.status}</span> : ""}{z.filed ? <span style={muted}> · {z.filed}</span> : ""}</div>))}
+          <div style={{ fontSize: 11, ...muted }}>Planning case{rz.count === 1 ? "" : "s"} touching this parcel (rezoning / SP / PUD = active repositioning).</div>
+        </div>}
       </>}
       {(bz.count || 0) > 0 && <>
         <H>F&amp;B · BEER PERMITS</H>
         {(bz.recent || []).slice(0, 4).map((b, i) => (<div key={i} style={{ fontSize: 12 }}><span style={ivory}>{b.business || b.owner}</span>{b.status ? <span style={muted}> · {b.status}</span> : ""}{b.issued ? <span style={muted}> · {b.issued}</span> : ""}</div>))}
         <div style={{ fontSize: 11, ...muted, marginTop: 2 }}>{bz.active > 0 ? `${bz.active} active — an operating F&B tenant (a contact lead).` : "No active permit — possible F&B vacancy."}</div>
+      </>}
+      {(cv.count || 0) > 0 && <>
+        <H>DISTRESS · CODE VIOLATIONS</H>
+        {(cv.recent || []).slice(0, 4).map((v, i) => (<div key={i} style={{ fontSize: 12 }}><span style={{ color: /closed|resolved|complete/i.test(v.status || "") ? C.muted : C.red }}>{v.problem}</span>{v.status ? <span style={muted}> · {v.status}</span> : ""}{v.received ? <span style={muted}> · {v.received}</span> : ""}</div>))}
+        <div style={{ fontSize: 11, ...muted, marginTop: 2 }}>{cv.open} open of {cv.count} Property-Standards violation{cv.count === 1 ? "" : "s"} — the parcel-exact distress this property's grade uses.</div>
       </>}
       {(sr.codes_related || 0) > 0 && <>
         <H>DISTRESS · 311 CODES COMPLAINTS</H>
@@ -2701,6 +2711,37 @@ function NashvilleIntelPanel({ apn, address, pw }) {
         {fl && <div style={{ fontSize: 12.5 }}><span style={muted}>Flood: </span><span style={fl.special_flood_hazard ? { color: C.red } : ivory}>Zone {fl.zone || "?"}{fl.special_flood_hazard ? " — SFHA (insurance / diligence cost)" : ` — ${fl.description || "minimal risk"}`}</span></div>}
         {po && (po.policy || po.transect) && <div style={{ fontSize: 12.5 }}><span style={muted}>Land-use policy: </span><span style={ivory}>{[po.policy, po.transect].filter(Boolean).join(" · ")}</span></div>}
       </>}
+    </div>
+  );
+}
+
+// Inline Nashville LLC "finder" — TN gates its business registry (no free Socrata dataset like
+// CT/NY), so this is the same metered web lookup Scout's tn_entity_lookup runs: TNBear + OpenCorporates
+// → the entity's registered agent + any principals. One click from the dossier.
+function TnLlcFinder({ owner, pw }) {
+  const [state, setState] = useState("idle"); // idle | loading | done | error
+  const [text, setText] = useState("");
+  const [err, setErr] = useState("");
+  const run = async () => {
+    setState("loading"); setErr("");
+    try {
+      const query = `Look up the Tennessee business entity "${owner}" in the Tennessee Secretary of State business registry (TNBear / tncab.tnsos.gov) and OpenCorporates (opencorporates.com/companies/us_tn). Report exactly what the records show: the precise entity name, SOS control number, type (LLC / corporation), status (active / inactive / dissolved), formation date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC), the principal office / mailing address, and any listed officers / members / managers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.`;
+      const m = webResearchMode();
+      const d = await postJSON("/api/research", { mode: m, password: pw, query });
+      if (m === "web") addScoutSpend(WEB_RUN_COST);
+      setText(d.brief || ""); setState("done");
+    } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
+  };
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>🔎 UNMASK LLC — TN registered agent + principals</div>
+        {state !== "loading" && <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻ re-run" : "▸ unmask"}</button>}
+      </div>
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>TN gates its business registry (no free dataset like NY/CT), so this is a web lookup of TNBear + OpenCorporates for <strong style={{ color: C.ivory }}>{owner}</strong> — the registered agent + any principals. Metered like other web research.</div>}
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Looking up the entity…</div>}
+      {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+      {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={text} /></div>}
     </div>
   );
 }
@@ -2726,9 +2767,7 @@ function AssessorMarketDetail({ r, pw }) {
         <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (CT discloses LLC principals).</div>
       )}
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
-      {r.market === "tn" && r.owner && ENTITY_RE.test(r.owner) && (
-        <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “unmask {r.owner}” for the TN registered agent + principals.</div>
-      )}
+      {r.market === "tn" && r.owner && ENTITY_RE.test(r.owner) && <TnLlcFinder owner={r.owner} pw={pw} />}
       <ResearchBrief r={contactR} pw={pw} />
       <ContactReveal r={contactR} pw={pw} />
     </>
@@ -3375,9 +3414,16 @@ const OPP_SIGNALS = [
     sub: (r) => absSub(r.absentee),
     note: (r) => (r.absentee ? r.absentee.replace(/-/g, " ") + " owner" : "local owner") },
   { id: "distress", label: "Distress", weight: 25,
-    applies: (r) => r.market === "nyc",
-    sub: (r) => (r.raw && r.raw.tax_lien ? 100 : 0),
-    note: (r) => (r.raw && r.raw.tax_lien ? "tax lien on record" : "no tax lien") },
+    // NYC: tax-lien sale list. Nashville: open Property-Standards code violations (parcel-exact).
+    applies: (r) => r.market === "nyc" || (r.market === "tn" && r.raw && r.raw.open_violations != null),
+    sub: (r) => {
+      if (r.market === "nyc") return r.raw && r.raw.tax_lien ? 100 : 0;
+      const v = Number(r.raw && r.raw.open_violations) || 0; return v >= 3 ? 100 : v >= 1 ? 70 : 0;
+    },
+    note: (r) => {
+      if (r.market === "nyc") return r.raw && r.raw.tax_lien ? "tax lien on record" : "no tax lien";
+      const v = Number(r.raw && r.raw.open_violations) || 0; return v > 0 ? `${v} open code violation${v === 1 ? "" : "s"}` : "no open violations";
+    } },
   { id: "air_rights", label: "Air rights", weight: 15,
     applies: (r) => r.market === "nyc",
     sub: (r) => airSub(r.raw && r.raw.buildable_sqft),

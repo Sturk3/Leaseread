@@ -95,18 +95,20 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v1", maps: MAPS, hub: HUB });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v2-violations-rezonings", maps: MAPS, hub: HUB });
 
     const ap = clean(apn);
     if (!ap && !address) return res.status(400).json({ error: "Need an APN (preferred) or address." });
     const parcelWhere = ap ? `Parcel='${apnSql(ap)}'` : null;
+    const violWhere = ap ? `Property_APN='${apnSql(ap)}'` : null;       // code-violation layer keys on Property_APN
+    const rezWhere = ap ? `Parcels LIKE '%${apnSql(ap)}%'` : null;       // dev-tracker Parcels is a list → LIKE
     const { num, street } = addrParts(address);
     const a311Where = num && street ? `UPPER(Address) LIKE '%${num}%${street}%'` : (street ? `UPPER(Address) LIKE '%${street}%'` : null);
 
     // Centroid first (overlays need it); then fan everything else out in parallel.
     const centroid = ap ? await parcelGeomCentroid(ap) : null;
 
-    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows] = await Promise.all([
+    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows, violations, rezonings] = await Promise.all([
       parcelWhere ? agQuery(`${HUB}/Building_Permits_Issued_2/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Address,Purpose,Contact,Date_Issued,Date_Entered,Lat,Lon", orderByFields: "Date_Entered DESC", resultRecordCount: "30" }) : [],
       parcelWhere ? agQuery(`${HUB}/Building_Permit_Applications_Feature_Layer_view/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Purpose,Contact,Date_Entered,Date_Issued", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
       parcelWhere ? agQuery(`${HUB}/Trade_Permits_View/FeatureServer/0`, { where: parcelWhere, outFields: "PermitNumber,Trade,Permit_Subtype_Description,Contract_Value,Purpose,Case_Status,Date_Entered", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
@@ -121,6 +123,10 @@ export default async function handler(req, res) {
       centroid ? pointInLayer(`${HUB}/Building_Footprints_view/FeatureServer/0`, centroid.lon, centroid.lat, "BuildingType,Height,RoofType,Shape__Area") : [],
       // Business Improvement District (e.g. the downtown Central BID) — a managed-district / retail-quality signal.
       centroid ? pointInLayer(`${HUB}/Business_Improvement_Districts_view/FeatureServer/0`, centroid.lon, centroid.lat, "Name") : [],
+      // Property Standards (code) violations — the dedicated, owner-named distress layer (cleaner than 311).
+      violWhere ? agQuery(`${HUB}/Property_Standards_Violations_2/FeatureServer/0`, { where: violWhere, outFields: "Request_Nbr,Reported_Problem,Subtype_Description,Status,Date_Received,Violations_Noted", orderByFields: "Date_Received DESC", resultRecordCount: "30" }) : [],
+      // Planning Development Tracker — rezonings / SP plans / PUDs touching this parcel (existing → new zoning).
+      rezWhere ? agQuery(`${HUB}/Development_Tracker_Cases_view/FeatureServer/0`, { where: rezWhere, outFields: "CASE_TYPE_DESC,SUB_TYPE_DESC,PROJECT_DESC,ExistingZoning,NewZoning,DATE_ACCEPTED,PSTAT,CAPTION", orderByFields: "DATE_ACCEPTED DESC", resultRecordCount: "10" }) : [],
     ]);
 
     // Building permits — recent, with the repositioning signal tagged.
@@ -194,6 +200,20 @@ export default async function handler(req, res) {
     }
     const bid = bidRows && bidRows[0] ? clean(bidRows[0].Name) || null : null;
 
+    // Property Standards code violations (owner-named distress). Open = not closed/resolved.
+    const violList = (violations || []).map((v) => ({
+      problem: clean(v.Reported_Problem) || clean(v.Subtype_Description) || null,
+      noted: clean(v.Violations_Noted) || null, status: clean(v.Status) || null, received: dayMs(v.Date_Received),
+    })).filter((v) => v.problem || v.noted);
+    const openViol = violList.filter((v) => !/closed|resolved|complete/i.test(v.status || ""));
+
+    // Rezonings / SP / PUD cases touching the parcel (existing → new zoning = active repositioning).
+    const rezList = (rezonings || []).map((z) => ({
+      type: clean(z.CASE_TYPE_DESC) || clean(z.SUB_TYPE_DESC) || null,
+      from_zone: clean(z.ExistingZoning) || null, to_zone: clean(z.NewZoning) || null,
+      project: clean(z.PROJECT_DESC || z.CAPTION).slice(0, 140) || null, status: clean(z.PSTAT) || null, filed: dayMs(z.DATE_ACCEPTED),
+    })).filter((z) => z.type || z.project);
+
     return res.status(200).json({
       apn: ap || null, address: clean(address) || null, centroid,
       building, business_improvement_district: bid,
@@ -203,6 +223,8 @@ export default async function handler(req, res) {
       beer_permits: { count: beerRows.length, active: activeBeer.length, recent: beerRows.slice(0, 8) },
       short_term_rentals: { count: strList.length, recent: strList.slice(0, 5) },
       service_requests_311: { total: c311Rows.length, codes_related: codes311.length, recent_codes: codes311.slice(0, 8) },
+      code_violations: { count: violList.length, open: openViol.length, recent: violList.slice(0, 8) },
+      rezonings: { count: rezList.length, recent: rezList.slice(0, 6) },
       zoning_overlays: { historic: historicOverlay, districts: overlayList },
       flood: floodInfo,
       policy: policyInfo,

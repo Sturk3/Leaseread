@@ -6,6 +6,9 @@
 
 const NASH_BASE = process.env.NASH_PARCELS_URL ||
   "https://maps.nashville.gov/arcgis/rest/services/Cadastral/Parcels/MapServer/0";
+// Metro's ArcGIS-Hub org (permits, code violations) — for the parcel-exact distress / activity
+// enrichment that feeds the Opportunity Score, joined by APN in ONE batched query per layer.
+const NASH_HUB = process.env.NASH_HUB_URL || "https://services2.arcgis.com/HdTo6HJqh92wn4D8/arcgis/rest/services";
 
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
 const toNum = (v) => { if (v == null || v === "") return null; const n = Number(String(v).replace(/[$,]/g, "")); return Number.isFinite(n) ? n : null; };
@@ -58,6 +61,40 @@ async function arcgis(where, spatial) {
   return (j.features || []).map((f) => f.attributes || {});
 }
 
+// Generic ArcGIS-Hub query → attribute rows; never throws (a dead layer just yields no enrichment).
+async function hubQuery(layer, params) {
+  try {
+    const r = await fetch(`${NASH_HUB}/${layer}/FeatureServer/0/query?${new URLSearchParams({ returnGeometry: "false", f: "json", ...params })}`);
+    if (!r.ok) return [];
+    const j = await r.json().catch(() => ({}));
+    return (j.features || []).map((f) => f.attributes || {});
+  } catch { return []; }
+}
+
+// Attach a parcel-exact DISTRESS + development-activity read to each lead, so the grade can use it.
+// Two batched queries (open code violations by Property_APN, building permits by Parcel) for the
+// top `cap` parcels — joined by APN in memory. Bounded so a big result set can't blow the budget.
+const REPOSITION_RE = /demolition|commercial - new|tenant finish|finish out|rehab|addition|use & occupancy/i;
+async function enrichNashville(props, cap = 60) {
+  const targets = props.filter((p) => p.apn).slice(0, cap);
+  if (!targets.length) return;
+  const inList = targets.map((p) => `'${String(p.apn).replace(/'/g, "''")}'`).join(",");
+  const [viol, perms] = await Promise.all([
+    hubQuery("Property_Standards_Violations_2", { where: `Property_APN IN (${inList}) AND Status<>'Closed'`, outFields: "Property_APN,Reported_Problem,Status", resultRecordCount: "2000" }),
+    hubQuery("Building_Permits_Issued_2", { where: `Parcel IN (${inList})`, outFields: "Parcel,Permit_Type_Description,Date_Issued", orderByFields: "Date_Issued DESC", resultRecordCount: "2000" }),
+  ]);
+  const vByApn = {}, pByApn = {};
+  for (const v of viol) { const k = clean(v.Property_APN); if (k) (vByApn[k] = vByApn[k] || []).push(clean(v.Reported_Problem)); }
+  for (const p of perms) { const k = clean(p.Parcel); if (k) (pByApn[k] = pByApn[k] || []).push(clean(p.Permit_Type_Description)); }
+  for (const p of targets) {
+    const vs = vByApn[p.apn] || [], ps = pByApn[p.apn] || [];
+    p.open_violations = vs.length;
+    p.violation_types = [...new Set(vs.filter(Boolean))].slice(0, 4);
+    p.permit_count = ps.length;
+    p.repositioning = ps.some((t) => REPOSITION_RE.test(t));
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
@@ -66,7 +103,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v2-frontage", base: NASH_BASE });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v3-distress", base: NASH_BASE });
 
     const where = ["IsActive='Y'"];
     const typeKey = clean(propertyType).toLowerCase().replace(/[\s/-]+/g, "_");
@@ -111,6 +148,10 @@ export default async function handler(req, res) {
       });
       if (out.length >= cap) break;
     }
+
+    // Parcel-exact distress + activity enrichment (open code violations / building permits),
+    // so the Opportunity Score can grade Nashville on distress like NYC's tax-lien signal.
+    await enrichNashville(out).catch(() => {});
 
     return res.status(200).json({
       count: out.length, county: "Davidson (Nashville)",

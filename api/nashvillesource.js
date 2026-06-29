@@ -42,7 +42,7 @@ const USE_PATTERNS = {
 // or a buffer search around the point (distance > 0 = the lots within radius). Null = attribute-only.
 async function arcgis(where, spatial) {
   const params = {
-    where: where || "1=1", outFields: "APN,ParID,Owner,OwnAddr1,OwnAddr2,OwnCity,OwnState,OwnZip,PropAddr,PropCity,PropZip,LUCode,LUDesc,Zoning,LandAppr,ImprAppr,TotlAppr,TotlAssd,Acres,StatedArea,SalePrice,OwnDate,Council",
+    where: where || "1=1", outFields: "APN,ParID,Owner,OwnAddr1,OwnAddr2,OwnCity,OwnState,OwnZip,PropAddr,PropCity,PropZip,LUCode,LUDesc,Zoning,LandAppr,ImprAppr,TotlAppr,TotlAssd,Acres,StatedArea,Front,Side,SalePrice,OwnDate,Council",
     orderByFields: "TotlAppr DESC", returnGeometry: "false", resultRecordCount: "2000", f: "json",
   };
   if (spatial) {
@@ -66,7 +66,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v1", base: NASH_BASE });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v2-frontage", base: NASH_BASE });
 
     const where = ["IsActive='Y'"];
     const typeKey = clean(propertyType).toLowerCase().replace(/[\s/-]+/g, "_");
@@ -104,6 +104,7 @@ export default async function handler(req, res) {
         use: clean(r.LUDesc), use_code: clean(r.LUCode), zone: clean(r.Zoning),
         appraised_value: toNum(r.TotlAppr), land_value: toNum(r.LandAppr), improvement_value: toNum(r.ImprAppr),
         assessed_value: toNum(r.TotlAssd), acres, council_district: clean(r.Council),
+        frontage_ft: toNum(r.Front) || null, depth_ft: toNum(r.Side) || null,
         sale_price: toNum(r.SalePrice) || null, sale_year: saleYear,
         years_owned: saleYear ? nowY - saleYear : null,
         maps_url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(property + ", " + (clean(r.PropCity) || "Nashville") + " TN")}`,

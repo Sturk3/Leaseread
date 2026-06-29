@@ -2627,7 +2627,7 @@ const nashRow = (p) => ({ market: "tn", marketLabel: "Nashville, TN", owner: p.o
 function AssessorDetail({ p, market }) {
   const ny = market === "ny", tn = market === "tn";
   const grid = tn
-    ? [["Owner", p.owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Appraised", p.appraised_value ? fmtAmount(p.appraised_value) : null], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Land acres", p.acres || null], ["Council dist.", p.council_district || null], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : null], ["Years owned", p.years_owned != null ? `~${p.years_owned}` : null], ["APN", p.apn || null]]
+    ? [["Owner", p.owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Appraised", p.appraised_value ? fmtAmount(p.appraised_value) : null], ["Land value", p.land_value ? fmtAmount(p.land_value) : null], ["Building value", p.improvement_value ? fmtAmount(p.improvement_value) : null], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Depth", p.depth_ft ? `${p.depth_ft} ft` : null], ["Land acres", p.acres || null], ["Council dist.", p.council_district || null], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : null], ["Years owned", p.years_owned != null ? `~${p.years_owned}` : null], ["APN", p.apn || null]]
     : ny
     ? [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Town", p.town], ["County", p.county], ["Use", p.use], ["Class", p.property_class], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Market value", p.market_value ? fmtAmount(p.market_value) : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["School district", p.school_district]]
     : [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Building SF", p.building_sqft ? Number(p.building_sqft).toLocaleString() : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Year built", p.year_built || null], ["Condition", p.condition], ["Grade", p.grade], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_date ? ` · ${p.sale_date}` : ""}` : null]];
@@ -3323,6 +3323,14 @@ const OPP_SIGNALS = [
     applies: (r) => r.market === "nyc",
     sub: (r) => airSub(r.raw && r.raw.buildable_sqft),
     note: (r) => { const n = Number(r.raw && r.raw.buildable_sqft) || 0; return n >= 2500 ? `~${n.toLocaleString()} SF unused` : "fully built"; } },
+  // Redevelopment: where the assessor splits land vs building value (TN/CT), a high LAND share
+  // means the building contributes little — a value-add / teardown / reposition candidate. The
+  // out-of-NYC analog of air rights. Only counts where that split exists, so it enriches those
+  // grades without affecting NYC (whose leads carry no land/building split).
+  { id: "redevelopment", label: "Redevelopment", weight: 15,
+    applies: (r) => r.raw && Number(r.raw.land_value) > 0 && Number(r.raw.improvement_value) >= 0 && (Number(r.raw.land_value) + Number(r.raw.improvement_value)) > 0,
+    sub: (r) => { const land = Number(r.raw.land_value) || 0, impr = Number(r.raw.improvement_value) || 0; const share = land / (land + impr); return share >= 0.75 ? 100 : share >= 0.6 ? 70 : share >= 0.45 ? 40 : share >= 0.35 ? 20 : 0; },
+    note: (r) => { const land = Number(r.raw.land_value) || 0, impr = Number(r.raw.improvement_value) || 0; const tot = land + impr; return tot > 0 ? `land ${Math.round((100 * land) / tot)}% of value` : "—"; } },
 ];
 function opportunityScore(r) {
   if (!r || !r.raw || r.market === "web") return null;

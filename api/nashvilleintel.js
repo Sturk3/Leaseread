@@ -95,13 +95,12 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v2-violations-rezonings", maps: MAPS, hub: HUB });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v3-rezoning-spatial", maps: MAPS, hub: HUB });
 
     const ap = clean(apn);
     if (!ap && !address) return res.status(400).json({ error: "Need an APN (preferred) or address." });
     const parcelWhere = ap ? `Parcel='${apnSql(ap)}'` : null;
     const violWhere = ap ? `Property_APN='${apnSql(ap)}'` : null;       // code-violation layer keys on Property_APN
-    const rezWhere = ap ? `Parcels LIKE '%${apnSql(ap)}%'` : null;       // dev-tracker Parcels is a list → LIKE
     const { num, street } = addrParts(address);
     const a311Where = num && street ? `UPPER(Address) LIKE '%${num}%${street}%'` : (street ? `UPPER(Address) LIKE '%${street}%'` : null);
 
@@ -125,8 +124,10 @@ export default async function handler(req, res) {
       centroid ? pointInLayer(`${HUB}/Business_Improvement_Districts_view/FeatureServer/0`, centroid.lon, centroid.lat, "Name") : [],
       // Property Standards (code) violations — the dedicated, owner-named distress layer (cleaner than 311).
       violWhere ? agQuery(`${HUB}/Property_Standards_Violations_2/FeatureServer/0`, { where: violWhere, outFields: "Request_Nbr,Reported_Problem,Subtype_Description,Status,Date_Received,Violations_Noted", orderByFields: "Date_Received DESC", resultRecordCount: "30" }) : [],
-      // Planning Development Tracker — rezonings / SP plans / PUDs touching this parcel (existing → new zoning).
-      rezWhere ? agQuery(`${HUB}/Development_Tracker_Cases_view/FeatureServer/0`, { where: rezWhere, outFields: "CASE_TYPE_DESC,SUB_TYPE_DESC,PROJECT_DESC,ExistingZoning,NewZoning,DATE_ACCEPTED,PSTAT,CAPTION", orderByFields: "DATE_ACCEPTED DESC", resultRecordCount: "10" }) : [],
+      // Planning Development Tracker — rezonings / SP plans / PUDs touching this parcel (existing → new
+      // zoning). The Parcels field is human-readable ("Map 175, Parcel(s) 143-146"), NOT the APN, so
+      // join SPATIALLY (point-in-polygon on the case footprint) instead of a text match.
+      centroid ? pointInLayer(`${HUB}/Development_Tracker_Cases_view/FeatureServer/0`, centroid.lon, centroid.lat, "CASE_TYPE_DESC,SUB_TYPE_DESC,PROJECT_DESC,ExistingZoning,NewZoning,DATE_ACCEPTED,PSTAT,CAPTION") : [],
     ]);
 
     // Building permits — recent, with the repositioning signal tagged.

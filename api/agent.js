@@ -238,8 +238,10 @@ const TOOLS = [
       "PENDING permit applications, TRADE permits (live renovation + contract value), BEER permits (names the operating bar/" +
       "restaurant + its owning entity — a real operator/tenant lead; a lapsed one = F&B vacancy), short-term-rental permits, 311 " +
       "codes/condition complaints (distress), ZONING OVERLAYS (historic / contextual / corridor = redevelopment constraints), the " +
-      "FEMA FLOOD zone (diligence), and the Metro land-use POLICY / transect for the site. Use after search_nashville_properties to " +
-      "assess motivation/distress and surface operator contacts. Needs the APN (preferred) and/or address.",
+      "FEMA FLOOD zone (diligence), the Metro land-use POLICY / transect, a footprint-derived BUILDING size estimate (footprint sqft " +
+      "+ height → est. stories & gross SF, since Metro publishes no assessor building area), and whether the lot sits in a BUSINESS " +
+      "IMPROVEMENT DISTRICT (retail-quality signal). Use after search_nashville_properties to assess motivation/distress and surface " +
+      "operator contacts. Needs the APN (preferred) and/or address.",
     input_schema: {
       type: "object",
       properties: {

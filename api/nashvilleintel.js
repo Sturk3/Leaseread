@@ -106,7 +106,7 @@ export default async function handler(req, res) {
     // Centroid first (overlays need it); then fan everything else out in parallel.
     const centroid = ap ? await parcelGeomCentroid(ap) : null;
 
-    const [permits, applications, trade, beer, str, c311, overlays, flood, policy] = await Promise.all([
+    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows] = await Promise.all([
       parcelWhere ? agQuery(`${HUB}/Building_Permits_Issued_2/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Address,Purpose,Contact,Date_Issued,Date_Entered,Lat,Lon", orderByFields: "Date_Entered DESC", resultRecordCount: "30" }) : [],
       parcelWhere ? agQuery(`${HUB}/Building_Permit_Applications_Feature_Layer_view/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Purpose,Contact,Date_Entered,Date_Issued", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
       parcelWhere ? agQuery(`${HUB}/Trade_Permits_View/FeatureServer/0`, { where: parcelWhere, outFields: "PermitNumber,Trade,Permit_Subtype_Description,Contract_Value,Purpose,Case_Status,Date_Entered", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
@@ -116,6 +116,11 @@ export default async function handler(req, res) {
       centroid ? pointInLayer(`${MAPS}/Zoning_Landuse/ZoningOverlayDistricts/MapServer/0`, centroid.lon, centroid.lat, "ZONE_DESC,NAME,CASE_NO,ORD_DATE") : [],
       centroid ? pointInLayer(`${MAPS}/Hydrography/FEMA_FloodHazardAreas/MapServer/0`, centroid.lon, centroid.lat, "FloodZone,SFHA_TF,ZoneDescription") : [],
       centroid ? pointInLayer(`${MAPS}/Planning/CCM/MapServer/2`, centroid.lon, centroid.lat, "PolicyCode,PolicyDesc,Transect") : [],
+      // Building footprint at the parcel (TN State Plane ft, so Shape__Area is already sqft) — a
+      // building-SF proxy, since the parcel/CAMA gross-area is NOT in Metro's open data.
+      centroid ? pointInLayer(`${HUB}/Building_Footprints_view/FeatureServer/0`, centroid.lon, centroid.lat, "BuildingType,Height,RoofType,Shape__Area") : [],
+      // Business Improvement District (e.g. the downtown Central BID) — a managed-district / retail-quality signal.
+      centroid ? pointInLayer(`${HUB}/Business_Improvement_Districts_view/FeatureServer/0`, centroid.lon, centroid.lat, "Name") : [],
     ]);
 
     // Building permits — recent, with the repositioning signal tagged.
@@ -152,7 +157,9 @@ export default async function handler(req, res) {
     })).filter((s) => s.number || s.owner);
 
     // 311: condition/codes complaints. Tag the property/codes-relevant ones.
-    const codesRe = /codes|property|zoning|junk|trash|debris|weed|overgrow|abandon|illegal|nuisance|dumping|graffiti|building|stormwater|drainage/i;
+    // Property-CONDITION / codes complaints only (a distress proxy). Deliberately NOT a bare
+    // "property" token — that caught "Public Safety / Lost-Stolen Property" etc.
+    const codesRe = /codes|property standard|zoning viol|junk|trash|recycl|litter|debris|weed|overgrow|abandon|illegal dump|dumping|nuisance|graffiti|stormwater|drainage|standing water|rodent|sewer|dilapidat|unsafe|substandard/i;
     const c311Rows = c311.map((c) => ({
       type: clean(c.Request_Type), subtype: clean(c.Subrequest_Type) || null, status: clean(c.Status) || null, opened: dayMs(c.Date_Time_Opened),
     }));
@@ -170,8 +177,26 @@ export default async function handler(req, res) {
     const policyRow = policy && policy[0] ? policy[0] : null;
     const policyInfo = policyRow ? { code: clean(policyRow.PolicyCode) || null, policy: clean(policyRow.PolicyDesc) || null, transect: clean(policyRow.Transect) || null } : null;
 
+    // Building footprint — pick the largest footprint intersecting the centroid (the main building).
+    // Shape__Area is in sq ft (TN State Plane). Estimate stories from height (~12 ft/floor) and
+    // gross building area = footprint x stories. Clearly an ESTIMATE — Metro publishes no CAMA GBA.
+    const fp = (footprints || []).slice().sort((a, b) => (toNum(b.Shape__Area) || 0) - (toNum(a.Shape__Area) || 0))[0] || null;
+    let building = null;
+    if (fp) {
+      const footSqft = toNum(fp.Shape__Area) ? Math.round(toNum(fp.Shape__Area)) : null;
+      const height = toNum(fp.Height);
+      const stories = height && height > 0 ? Math.max(1, Math.round(height / 12)) : null;
+      building = {
+        type: clean(fp.BuildingType) || null, footprint_sqft: footSqft, height_ft: height || null, roof: clean(fp.RoofType) || null,
+        est_stories: stories, est_gross_sqft: footSqft && stories ? footSqft * stories : footSqft,
+        note: "footprint-derived estimate (Metro publishes no assessor gross building area)",
+      };
+    }
+    const bid = bidRows && bidRows[0] ? clean(bidRows[0].Name) || null : null;
+
     return res.status(200).json({
       apn: ap || null, address: clean(address) || null, centroid,
+      building, business_improvement_district: bid,
       building_permits: { count: permits.length, signals: permitSignals, recent: permitList.slice(0, 10) },
       pending_applications: { count: pendingApps.length, recent: pendingApps.slice(0, 6) },
       trade_permits: { count: trade.length, recent: tradeList.slice(0, 8) },
@@ -181,7 +206,7 @@ export default async function handler(req, res) {
       zoning_overlays: { historic: historicOverlay, districts: overlayList },
       flood: floodInfo,
       policy: policyInfo,
-      note: "Nashville / Davidson County consolidated intel. Records join BUILDING-EXACT on the parcel APN (no fuzzy matching) — TN is open-records, so this is deep. BUILDING_PERMITS signal tags: demolition / new_construction / tenant_buildout (a tenant fitting out space) / use_occupancy (recently delivered & occupied) / major_structural / rehab / signage — a demo or commercial-new permit = active repositioning = motivation. PENDING_APPLICATIONS = filed, not yet issued = forward-looking activity. TRADE_PERMITS (electrical/plumbing/mechanical) with a contract value = live renovation. BEER_PERMITS: an ACTIVE permit names the operating bar/restaurant + its owner (a real tenant/operator contact lead); a lapsed permit on a former F&B space is a vacancy signal. 311 codes_related = property-condition / codes complaints (distress). ZONING_OVERLAYS: historic overlay = redevelopment constraint (and a possible push-to-sell). FLOOD: special_flood_hazard true = FEMA SFHA = real diligence/insurance cost. POLICY = Metro's land-use vision for the site (transect/policy). For the OWNER of record + mailing + sale + frontage, use search_nashville_properties; to unmask an owner LLC to its principals, use tn_entity_lookup; for principals/contacts on the web, web_research.",
+      note: "Nashville / Davidson County consolidated intel. Records join BUILDING-EXACT on the parcel APN (no fuzzy matching) — TN is open-records, so this is deep. BUILDING = footprint-derived size: Metro publishes NO assessor gross building area, so footprint_sqft (real) + est_stories (from height ÷ ~12ft) give est_gross_sqft — present it as an estimate, not a measured figure. BUSINESS_IMPROVEMENT_DISTRICT = the property sits in a managed BID (e.g. downtown Central BID) = a foot-traffic / retail-quality signal. BUILDING_PERMITS signal tags: demolition / new_construction / tenant_buildout (a tenant fitting out space) / use_occupancy (recently delivered & occupied) / major_structural / rehab / signage — a demo or commercial-new permit = active repositioning = motivation. PENDING_APPLICATIONS = filed, not yet issued = forward-looking activity. TRADE_PERMITS (electrical/plumbing/mechanical) with a contract value = live renovation. BEER_PERMITS: an ACTIVE permit names the operating bar/restaurant + its owner (a real tenant/operator contact lead); a lapsed permit on a former F&B space is a vacancy signal. 311 codes_related = property-condition / codes complaints (distress). ZONING_OVERLAYS: historic overlay = redevelopment constraint (and a possible push-to-sell). FLOOD: special_flood_hazard true = FEMA SFHA = real diligence/insurance cost. POLICY = Metro's land-use vision for the site (transect/policy). For the OWNER of record + mailing + sale + frontage, use search_nashville_properties; to unmask an owner LLC to its principals, use tn_entity_lookup; for principals/contacts on the web, web_research.",
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "nashvilleintel" });

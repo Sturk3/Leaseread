@@ -3057,6 +3057,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
     setError(""); setRows(null); setOpenIdx(null); setLoading(true); setResolved(det);
     try {
       let out = [];
+      let tnBroadened = false; // set when a missing Nashville house number is broadened to the whole street
       if (det.market === "nyc") {
         if (det.kind === "address" && coords) {
           // nearAddress must be sent too — api/source only sets the property anchor when
@@ -3109,8 +3110,21 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         // "Just it": pin to the single building matching the house number (TN addresses are number-first).
         if (justIt && houseNum) {
           const exact = out.filter((r) => houseInAddress(r.address, houseNum, false));
-          if (exact.length) out = exact;
-          out = out.slice(0, 1);
+          if (exact.length) {
+            out = exact.slice(0, 1);
+          } else {
+            // Exact house number isn't in Metro's records (a numbering gap / combined or vacant lot) →
+            // show the rest of the STREET so the user can find the right parcel instead of getting nothing.
+            const streetOnly = street.replace(/^\s*\d+[A-Za-z]?\s+/, "").trim();
+            if (streetOnly) {
+              try {
+                const d2 = await postJSON("/api/nashvillesource", { password: pw, propertyType: "any", address: streetOnly });
+                const rows = (d2.properties || []).map(nashRow);
+                if (rows.length) { out = rows; tnBroadened = true; setNotice(`No "${street}" in Metro's records (the numbering skips it). Showing all of ${streetOnly} — pick the right parcel.`); }
+                else out = [];
+              } catch { out = []; }
+            } else out = [];
+          }
         }
       } else if (det.market === "web") {
         // Any US address outside the free-data markets: one row that offers AI web research
@@ -3140,7 +3154,8 @@ function UnifiedSourcing({ pw, rows, setRows }) {
       const { num: typedNum } = streetBits(addrText);
       const hasHouseMatch = typedNum ? (out && out.some((r) => houseInAddress(r.address, typedNum, false))) : (out && out.length > 0);
       // Only when AUTO-detecting — a locked market must not silently jump to another (that's the point).
-      if (market === "auto" && /\d/.test(addrText) && !hasHouseMatch) {
+      // Also skip when we intentionally broadened a Nashville street (that result is what we want to show).
+      if (market === "auto" && !tnBroadened && /\d/.test(addrText) && !hasHouseMatch) {
         if (det.market !== "tn") {
           try {
             const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: "any", address: addrText });

@@ -3003,6 +3003,7 @@ function useSourcingPoints(rows) {
 function UnifiedSourcing({ pw, rows, setRows }) {
   const [loc, setLoc] = useState("");
   const [coords, setCoords] = useState(null);
+  const [market, setMarket] = useState("auto"); // auto-detect, or lock to a market so a bare address can't mis-route
   const [type, setType] = useState("any"); // default to ANY so a search isn't silently limited to retail
   const [radius, setRadius] = useState("");
   const [minValue, setMinValue] = useState("");
@@ -3025,7 +3026,18 @@ function UnifiedSourcing({ pw, rows, setRows }) {
   const pickPin = (id) => { setOpenIdx(id); const el = document.getElementById(`usrc-row-${id}`); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); };
 
   const run = async () => {
-    const det = unifiedDetect(loc, coords);
+    let det = unifiedDetect(loc, coords);
+    // MARKET LOCK — if the user pinned a market, force the route there so a bare address can't
+    // mis-route (e.g. a Nashville address fuzzy-matching a Brooklyn lot). Auto = detect from the text.
+    if (market !== "auto") {
+      const raw = (loc || "").trim();
+      const addr = raw.split(",")[0].trim(); // street portion
+      const hasNum = /\d/.test(addr);
+      if (market === "nyc") det = hasNum ? { market: "nyc", kind: "address-text", nearAddress: addr } : (NYC_BORO_SET[raw.toLowerCase()] ? { market: "nyc", kind: "borough", borough: NYC_BORO_SET[raw.toLowerCase()] } : { market: "nyc", kind: "address-text", nearAddress: raw });
+      else if (market === "tn") det = { market: "tn", town: "Nashville", address: hasNum ? addr : "", kind: "address-text" };
+      else if (market === "ct") det = { market: "ct", town: CT_TOWN_SET.has(raw.toLowerCase()) ? titleCase(raw) : "Greenwich", address: hasNum ? addr : "", kind: "address-text" };
+      else if (market === "ny") det = { market: "ny", town: HAMPTON_SET.has(raw.toLowerCase()) ? (HAMLET_TOWN[raw.toLowerCase()] || titleCase(raw)) : "East Hampton", address: hasNum ? addr : "", kind: "address-text" };
+    }
     if (!det.market) { setError("Try a NYC borough or address (Manhattan · 120 5th Ave…), a CT town (Greenwich, Darien…), a Hamptons town (East Hampton, Southampton…), or Nashville."); return; }
     // Radius needs an ANCHOR point. Only an NYC address (picked or typed → geocoded) and a
     // picked Nashville address have one; a borough or a CT/Hamptons town does not, so radius
@@ -3127,7 +3139,8 @@ function UnifiedSourcing({ pw, rows, setRows }) {
       const addrText = (det.address || det.nearAddress || loc || "").trim();
       const { num: typedNum } = streetBits(addrText);
       const hasHouseMatch = typedNum ? (out && out.some((r) => houseInAddress(r.address, typedNum, false))) : (out && out.length > 0);
-      if (/\d/.test(addrText) && !hasHouseMatch) {
+      // Only when AUTO-detecting — a locked market must not silently jump to another (that's the point).
+      if (market === "auto" && /\d/.test(addrText) && !hasHouseMatch) {
         if (det.market !== "tn") {
           try {
             const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: "any", address: addrText });
@@ -3155,9 +3168,9 @@ function UnifiedSourcing({ pw, rows, setRows }) {
     <div style={{ marginTop: 22 }}>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
         <div className="mono" style={{ ...labelStyle, marginBottom: 10 }}>SEARCH ANY MARKET — NYC · CT · HAMPTONS · NASHVILLE · ANY US ADDRESS</div>
-        <div style={{ display: "grid", gridTemplateColumns: "2.4fr 1fr 1fr 1fr", gap: 12, alignItems: "end" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1.1fr 1fr 1fr 1fr", gap: 12, alignItems: "end" }}>
           <label>
-            <div className="mono" style={labelStyle}>WHERE — borough · town · or NYC address</div>
+            <div className="mono" style={labelStyle}>WHERE — borough · town · or address</div>
             <div style={{ marginTop: 4 }}>
               <AddressAutocomplete value={loc}
                 onChange={(t) => { setLoc(t); setCoords(null); }}
@@ -3166,6 +3179,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
                 placeholder="Manhattan · Greenwich · Nashville · or any US address (500 Main St, Austin TX)…" style={{ ...fieldStyle, width: "100%" }} />
             </div>
           </label>
+          <label><div className="mono" style={labelStyle}>MARKET</div><select value={market} onChange={(e) => setMarket(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["auto", "Auto-detect"], ["nyc", "New York City"], ["tn", "Nashville · TN"], ["ct", "Greenwich · CT"], ["ny", "Hamptons · NY"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>TYPE</div><select value={type} onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{UNIFIED_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>RADIUS (picked address)</div><select value={radius} onChange={(e) => setRadius(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["", "off · just it"], ["0.1", "0.1 mi"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>MIN VALUE</div><input type="number" value={minValue} onChange={(e) => setMinValue(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>

@@ -131,7 +131,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v6-tdot-traffic", maps: MAPS, hub: HUB });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v7-crime-datefix", maps: MAPS, hub: HUB });
 
     const ap = clean(apn);
     if (!ap && !address) return res.status(400).json({ error: "Need an APN (preferred) or address." });
@@ -142,6 +142,9 @@ export default async function handler(req, res) {
 
     // Centroid first (overlays need it); then fan everything else out in parallel.
     const centroid = ap ? await parcelGeomCentroid(ap) : null;
+    // Crime recency cutoff (~24 months). Incident_Occurred is an ArcGIS DATE field, so it needs
+    // TIMESTAMP 'YYYY-MM-DD ...' syntax — a raw epoch-ms comparison is rejected by the service.
+    const crimeCut = new Date(Date.now() - 730 * 86400 * 1000).toISOString().slice(0, 10);
 
     const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows, violations, rezonings, tif, redevelopment, pedestrian, historic, crime, bcycle, foodstores, hood, traffic] = await Promise.all([
       parcelWhere ? agQuery(`${HUB}/Building_Permits_Issued_2/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Address,Purpose,Contact,Date_Issued,Date_Entered,Lat,Lon", orderByFields: "Date_Entered DESC", resultRecordCount: "30" }) : [],
@@ -177,7 +180,7 @@ export default async function handler(req, res) {
       // constraint (design review) and sometimes a push-to-sell.
       ap ? agQuery(`${HUB}/Historic_Districts_and_Properties/FeatureServer/0`, { where: `ParcelID='${apnSql(ap)}'`, outFields: "Status,YearConstructed,THC_Survey,Notes,Address", resultRecordCount: "5" }) : [],
       // CRIME / SAFETY — MNPD incidents within ~0.25mi over the last ~24 months (corridor-safety read).
-      centroid ? nearLayer(`${HUB}/Metro_Nashville_Police_Department_Incidents_view/FeatureServer/0`, centroid.lon, centroid.lat, 400, "Offense_Description,Incident_Occurred,Offense_NIBRS", 500, `Incident_Occurred >= ${Date.now() - 730 * 86400 * 1000}`) : [],
+      centroid ? nearLayer(`${HUB}/Metro_Nashville_Police_Department_Incidents_view/FeatureServer/0`, centroid.lon, centroid.lat, 400, "Offense_Description,Incident_Occurred,Offense_NIBRS", 500, `Incident_Occurred >= TIMESTAMP '${crimeCut} 00:00:00'`) : [],
       // WALKABILITY — nearest BCycle bike-share stations within ~0.75mi (micromobility / walkable-district proxy).
       centroid ? nearLayer(`${HUB}/BCycle_Locations_view/FeatureServer/0`, centroid.lon, centroid.lat, 1200, "StationName,Address", 20) : [],
       // RETAIL CONTEXT — food/grocery/convenience stores within ~0.3mi + their operating flag (amenity density + a vacancy read).

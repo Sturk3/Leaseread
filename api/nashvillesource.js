@@ -155,7 +155,7 @@ export default async function handler(req, res) {
       out.push({
         owner: clean(r.Owner),
         mailing: addr([r.OwnAddr1, r.OwnAddr2, r.OwnCity, r.OwnState, r.OwnZip]),
-        mailing_city: clean(r.OwnCity), mailing_state: mState, absentee,
+        mailing_city: clean(r.OwnCity), mailing_state: mState, mailing_zip: clean(r.OwnZip), absentee,
         address: property, city: clean(r.PropCity) || "Nashville", apn: clean(r.APN),
         use: clean(r.LUDesc), use_code: clean(r.LUCode), zone: clean(r.Zoning),
         appraised_value: toNum(r.TotlAppr), land_value: toNum(r.LandAppr), improvement_value: toNum(r.ImprAppr),

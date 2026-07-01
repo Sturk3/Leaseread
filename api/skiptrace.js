@@ -284,13 +284,25 @@ export default async function handler(req, res) {
     if (!mailStreet && !propStreet) return res.status(400).json({ error: "Need a mailing or property address to trace." });
     const ownerName = clean(name);
 
+    // The PROPERTY's own city/state — needed for the fallback so a non-NYC market (Nashville,
+    // Greenwich, the Hamptons) isn't forced to "NY". `borough` carries the market label, which
+    // for assessor markets ends in a state code ("Nashville, TN" → TN); NYC borough names map
+    // to New York. Falls back to the mailing state only if the label has no code.
+    const boroughStr = clean(borough);
+    const isNycBorough = !!NYC_CITY[boroughStr.toLowerCase()];
+    const labelState = (boroughStr.match(/\b([A-Z]{2})\b\s*$/) || [])[1];
+    const propState = isNycBorough ? "NY" : (labelState || clean(state) || "NY");
+    const propCity = isNycBorough
+      ? NYC_CITY[boroughStr.toLowerCase()]
+      : (boroughStr.replace(/,?\s*[A-Z]{2}\s*$/, "").trim() || clean(city));
+
     // Owner's MAILING address (their home/office — resolves the actual OWNER), as a coherent
     // unit. The PROPERTY address is the fallback (may return building occupants).
     const mailingInput = mailStreet ? {
       name: ownerName, street: mailStreet, city: clean(city) || clean(borough), state: clean(state) || "NY", zip: clean(zip),
     } : null;
     const propertyInput = propStreet ? {
-      name: ownerName, street: propStreet, city: NYC_CITY[clean(borough).toLowerCase()] || clean(borough) || clean(city), state: "NY", zip: "",
+      name: ownerName, street: propStreet, city: propCity || clean(city), state: propState, zip: "",
     } : null;
 
     const business = isCompany(name, entity_type);

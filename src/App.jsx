@@ -330,7 +330,7 @@ export default function App() {
         </div>
         <nav className="rail-nav" style={{ padding: "28px 18px", display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
           <div className="rail-label" style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2.4px", textTransform: "uppercase", color: "#555f76", padding: "4px 14px 12px" }}>Engines</div>
-          {[["agent", "Agent", "✦"], ["sourcing", "Sourcing", "◎"], ["comps", "Comp Sheet", "≣"], ["skiptrace", "Skip Trace", "🔎"]].map(([v, lab, ic]) => (
+          {[["agent", "Agent", "✦"], ["sourcing", "Sourcing", "◎"], ["pipeline", "Pipeline", "★"], ["comps", "Comp Sheet", "≣"], ["skiptrace", "Skip Trace", "🔎"]].map(([v, lab, ic]) => (
             <button key={v} onClick={() => setView(v)} className={view === v ? "rail-item active" : "rail-item"}>
               <span className="ic">{ic}</span> {lab}
             </button>
@@ -345,7 +345,7 @@ export default function App() {
       <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: C.ink }}>
         <header className="main-top" style={{ padding: "20px 40px", borderBottom: `1px solid ${C.line}`, display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap", background: C.panel }}>
           <h1 style={{ fontSize: 12, fontWeight: 600, letterSpacing: "2px", textTransform: "uppercase", color: C.ivory, margin: 0 }}>
-            {view === "agent" ? "Agent" : view === "sourcing" ? "Sourcing" : view === "comps" ? "Comp Sheet" : view === "screener" ? "Screener" : view === "skiptrace" ? "Skip Trace" : view === "nda" ? "NDA Review" : "Lease Radar"}
+            {view === "agent" ? "Agent" : view === "sourcing" ? "Sourcing" : view === "pipeline" ? "Pipeline" : view === "comps" ? "Comp Sheet" : view === "screener" ? "Screener" : view === "skiptrace" ? "Skip Trace" : view === "nda" ? "NDA Review" : "Lease Radar"}
           </h1>
           <p style={{ fontSize: 13, color: C.muted, fontWeight: 300, margin: 0, flex: "1 1 240px" }}>
             {view === "agent"
@@ -358,6 +358,8 @@ export default function App() {
               ? "Scan a corridor for leases estimated to be coming available — off-market, before they list."
               : view === "nda"
               ? "Redline an NDA against your playbook — what to leave in, narrow, or strike."
+              : view === "pipeline"
+              ? "Your saved leads as a working list — status, notes, and the full dossier + owner contact in one place."
               : view === "skiptrace"
               ? "Trace a name + address straight to graded phones & emails — charged only on a match."
               : "Source owners & deals from public records — NYC, Greenwich/CT, the Hamptons, and Nashville — plus an AI web lookup for any other US address."}
@@ -383,6 +385,7 @@ export default function App() {
 
         {view === "radar" && <LeaseRadar pw={pw} />}
 
+        {view === "pipeline" && <Pipeline pw={pw} />}
         {view === "skiptrace" && <ManualSkipTrace pw={pw} />}
 
         {view === "nda" && <NDAReview pw={pw} />}
@@ -3357,7 +3360,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
                       <td style={{ padding: "9px 12px", fontSize: 12.5 }}><a href={r.mapsUrl} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{r.address || "—"} ↗</a></td>
                       <td style={{ padding: "9px 12px", fontSize: 12, color: C.muted }}>{r.use}</td>
                       <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, textAlign: "right" }}>{r.value || "—"}</td>
-                      <td style={{ padding: "9px 12px" }}><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ details"}</button></td>
+                      <td style={{ padding: "9px 12px" }}><div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end" }}><SaveLeadButton r={r} opp={opp} /><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ details"}</button></div></td>
                     </tr>
                     {openIdx === i && (
                       <tr><td colSpan={6} style={{ padding: r.market === "nyc" || r.market === "web" ? "0" : "4px 14px 18px", background: C.ink }}>
@@ -4435,6 +4438,136 @@ function savedAgo(ts) {
   if (d === 1) return "yesterday";
   if (d < 30) return `${d}d ago`;
   return new Date(ts).toLocaleDateString();
+}
+
+// ── Saved List / Pipeline (browser-local; shaped for a shared DB later) ───────
+// Same storage pattern as the AI answer cache: ONE localStorage object keyed by the
+// property id (aiCacheId = ADDRESS|OWNER), so a saved lead lines up with its cached AI
+// answers and migrating to a shared Supabase/Neon table later is a BACKEND SWAP, not a
+// rewrite of the call sites. Each lead stores the denormalized display fields + status +
+// notes + the full normalized row (`row`) so the dossier can be re-rendered from the pipeline.
+const PIPELINE_KEY = "fr_pipeline_v1";
+const PIPELINE_MAX = 400; // cap so localStorage (~5MB) can't overflow; evict oldest
+const PIPELINE_STATUSES = [["watching", "Watching"], ["contacted", "Contacted"], ["pursuing", "Pursuing"], ["passed", "Passed"]];
+const statusLabel = (s) => (PIPELINE_STATUSES.find(([v]) => v === s) || [, "—"])[1];
+const statusColor = (s) => (s === "pursuing" ? C.green : s === "contacted" ? C.gold : s === "passed" ? C.muted : C.ivory);
+function loadPipeline() { try { return JSON.parse(localStorage.getItem(PIPELINE_KEY) || "{}") || {}; } catch { return {}; } }
+function writePipeline(p) { try { localStorage.setItem(PIPELINE_KEY, JSON.stringify(p)); } catch { /* quota — drop silently */ } }
+function isSavedLead(r) { const id = aiCacheId(r); return !!(id && loadPipeline()[id]); }
+function saveLead(r, opp) {
+  const id = aiCacheId(r); if (!id) return;
+  const p = loadPipeline();
+  if (p[id]) return; // already saved
+  p[id] = {
+    id, market: r.market || "", marketLabel: r.marketLabel || "", owner: r.owner || "",
+    address: r.address || "", mailing: r.mailing || "", use: r.use || "", value: r.value || "",
+    absentee: r.absentee || null, mapsUrl: r.mapsUrl || "",
+    opp: opp ? { overall: opp.overall, rec: opp.rec } : null,
+    status: "watching", notes: "", savedAt: Date.now(), updatedAt: Date.now(), row: r,
+  };
+  const ids = Object.keys(p);
+  if (ids.length > PIPELINE_MAX) { ids.sort((a, b) => (p[a].savedAt || 0) - (p[b].savedAt || 0)); for (const old of ids.slice(0, ids.length - PIPELINE_MAX)) delete p[old]; }
+  writePipeline(p);
+}
+function unsaveLead(id) { const p = loadPipeline(); if (p[id]) { delete p[id]; writePipeline(p); } }
+function updateLead(id, patch) { const p = loadPipeline(); if (p[id]) { p[id] = { ...p[id], ...patch, updatedAt: Date.now() }; writePipeline(p); } }
+
+// Star toggle shown on each sourcing result — save/unsave the lead to the Pipeline.
+function SaveLeadButton({ r, opp }) {
+  const [saved, setSaved] = useState(() => isSavedLead(r));
+  const toggle = (e) => {
+    e.stopPropagation();
+    if (saved) { unsaveLead(aiCacheId(r)); setSaved(false); }
+    else { saveLead(r, opp); setSaved(true); }
+  };
+  return (
+    <button onClick={toggle} title={saved ? "Saved to Pipeline — click to remove" : "Save to Pipeline"} className="mono lift"
+      style={{ cursor: "pointer", fontSize: 12, padding: "4px 9px", borderRadius: 7, border: `1px solid ${saved ? C.gold : C.line}`, background: saved ? C.goldSoft : C.panel, color: saved ? C.gold : C.muted, whiteSpace: "nowrap" }}>
+      {saved ? "★" : "☆"}
+    </button>
+  );
+}
+
+function pipelineCSV(leads) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const cols = [["Status", (l) => statusLabel(l.status)], ["Opportunity", (l) => (l.opp ? l.opp.overall : "")], ["Grade", (l) => (l.opp ? l.opp.rec : "")], ["Market", (l) => l.marketLabel], ["Owner", (l) => l.owner], ["Address", (l) => l.address], ["Mailing", (l) => l.mailing], ["Use", (l) => l.use], ["Value", (l) => l.value], ["Absentee", (l) => l.absentee || ""], ["Notes", (l) => l.notes], ["Saved", (l) => new Date(l.savedAt).toLocaleDateString()]];
+  return cols.map((c) => esc(c[0])).join(",") + "\n" + leads.map((l) => cols.map((c) => esc(c[1](l))).join(",")).join("\n");
+}
+
+// The Pipeline tab — saved leads as a WORKING list: status, notes, and the full dossier
+// (re-rendered from the saved row) so you research + reach owners without re-searching.
+function Pipeline({ pw }) {
+  const [leads, setLeads] = useState(() => Object.values(loadPipeline()));
+  const [filter, setFilter] = useState("all");
+  const [openId, setOpenId] = useState(null);
+  const refresh = () => setLeads(Object.values(loadPipeline()));
+
+  const counts = {}; for (const l of leads) counts[l.status] = (counts[l.status] || 0) + 1;
+  const sorted = [...leads].sort((a, b) => (b.opp?.overall ?? -1) - (a.opp?.overall ?? -1) || (b.savedAt || 0) - (a.savedAt || 0));
+  const shown = filter === "all" ? sorted : sorted.filter((l) => l.status === filter);
+  const tab = (v, label, n) => (
+    <button key={v} onClick={() => setFilter(v)} className="mono" style={{ cursor: "pointer", fontSize: 11, padding: "5px 11px", borderRadius: 7, border: `1px solid ${filter === v ? C.gold : C.line}`, background: filter === v ? C.goldSoft : "transparent", color: filter === v ? C.gold : C.muted }}>{label}{n != null ? ` ${n}` : ""}</button>
+  );
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {tab("all", "All", leads.length)}
+          {PIPELINE_STATUSES.map(([v, l]) => tab(v, l, counts[v] || 0))}
+        </div>
+        {leads.length > 0 && <button onClick={() => downloadBlob(pipelineCSV(shown), `pipeline_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
+      </div>
+      {leads.length === 0 ? (
+        <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, marginTop: 8 }}>
+          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>Your pipeline is empty.</span> In <strong style={{ color: C.ivory }}>Sourcing</strong>, hit the <span style={{ color: C.gold }}>☆</span> on any result to save it here. Then set a status (Watching → Contacted → Pursuing → Passed), add notes, and work the dossier + owner contact — all in one place. <span style={{ color: C.muted }}>Saved on this device only; a shared team list comes later.</span>
+        </div>
+      ) : shown.length === 0 ? (
+        <div style={{ color: C.muted, fontSize: 13 }}>No leads with this status.</div>
+      ) : (
+        shown.map((l) => <PipelineRow key={l.id} lead={l} pw={pw} open={openId === l.id} onToggle={() => setOpenId(openId === l.id ? null : l.id)} onChange={refresh} onRemove={() => { unsaveLead(l.id); if (openId === l.id) setOpenId(null); refresh(); }} />)
+      )}
+    </div>
+  );
+}
+
+function PipelineRow({ lead, pw, open, onToggle, onChange, onRemove }) {
+  const [status, setStatusLocal] = useState(lead.status);
+  const [notes, setNotesLocal] = useState(lead.notes || "");
+  const r = lead.row || {};
+  const opp = (r.market && r.market !== "web") ? opportunityScore(r) : null;
+  const changeStatus = (s) => { setStatusLocal(s); updateLead(lead.id, { status: s }); onChange(); };
+  const saveNotes = () => { if (notes !== (lead.notes || "")) { updateLead(lead.id, { notes }); onChange(); } };
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: "12px 14px", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+        {opp && <div style={{ flexShrink: 0 }}><GradeCell g={opp} /></div>}
+        <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+          <div style={{ fontWeight: 700, color: C.ivory, fontSize: 13 }}>{lead.owner || "—"}{lead.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber }}>{lead.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}</div>
+          <div style={{ fontSize: 12.5, marginTop: 1 }}>{lead.mapsUrl ? <a href={lead.mapsUrl} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{lead.address || "—"} ↗</a> : (lead.address || "—")}</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{[lead.marketLabel, lead.use, lead.value].filter(Boolean).join(" · ")}{lead.mailing ? ` · ${lead.mailing}` : ""}</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <select value={status} onChange={(e) => changeStatus(e.target.value)} style={{ ...fieldStyle, fontSize: 12, padding: "6px 10px", color: statusColor(status) }}>
+            {PIPELINE_STATUSES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          <button onClick={onRemove} title="Remove from pipeline" className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "5px 9px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.muted }}>✕</button>
+        </div>
+      </div>
+      <textarea value={notes} onChange={(e) => setNotesLocal(e.target.value)} onBlur={saveNotes} placeholder="Notes — call outcomes, next step, terms…" rows={2}
+        style={{ ...fieldStyle, width: "100%", marginTop: 10, resize: "vertical", fontFamily: "inherit", fontSize: 12.5 }} />
+      <div style={{ marginTop: 8 }}>
+        <button onClick={onToggle} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "5px 12px", borderRadius: 7, border: `1px solid ${open ? C.gold : C.line}`, background: open ? C.goldSoft : C.panel, color: open ? C.gold : C.ivory }}>{open ? "▾ hide" : "▸ work this lead"}</button>
+      </div>
+      {open && (
+        <div style={{ marginTop: 10, borderTop: `1px solid ${C.line}`, paddingTop: 4 }}>
+          {opp && <OppBreakdown g={opp} />}
+          {r.market !== "web" && <><AcquisitionMemo r={r} score={opp} pw={pw} /><OutreachDraft r={r} score={opp} pw={pw} /></>}
+          {r.market === "nyc" ? <PropertyDetail r={r.raw} pw={pw} /> : r.market === "web" ? <ContactReveal r={{ name: "", entity_type: "", address: (lead.address || "").split(",")[0], contact_address: "", city: "", state: "", zip: "", borough: "" }} pw={pw} /> : <AssessorMarketDetail r={r} pw={pw} />}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Engine: one-click Acquisition Memo ───────────────────────────────────────

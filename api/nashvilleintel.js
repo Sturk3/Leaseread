@@ -24,6 +24,10 @@ const HUB = process.env.NASH_HUB_URL || "https://services2.arcgis.com/HdTo6HJqh9
 // ArcGIS layer; its latest column is ~2015 (fresher counts are only in TDOT's non-API MS2 system),
 // so it's a directional corridor-traffic signal with an explicit year, not a current count.
 const TDOT_TRAFFIC = process.env.TDOT_TRAFFIC_URL || "https://services1.arcgis.com/HLC8bAygObK4fhPW/arcgis/rest/services/Traffic_History_TDOT/FeatureServer/0";
+// WeGo Public Transit — the real system-wide bus-stop layer (Metro's org only has corridor-specific
+// stop layers). Layer 0 = Stops (points: StopName, RoutesServed, ADACompliant). Transit access = a
+// walkability / retail-catchment signal.
+const WEGO_STOPS = process.env.WEGO_STOPS_URL || "https://services7.arcgis.com/EGmB20G57rbr4fjI/arcgis/rest/services/WeGo_Transit_Stops_and_Routes/FeatureServer/0";
 
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
 const toNum = (v) => { if (v == null || v === "") return null; const n = Number(String(v).replace(/[$,]/g, "")); return Number.isFinite(n) ? n : null; };
@@ -131,7 +135,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v7-crime-datefix", maps: MAPS, hub: HUB });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v8-wego-bza-dtc-adult", maps: MAPS, hub: HUB });
 
     const ap = clean(apn);
     if (!ap && !address) return res.status(400).json({ error: "Need an APN (preferred) or address." });
@@ -146,7 +150,7 @@ export default async function handler(req, res) {
     // TIMESTAMP 'YYYY-MM-DD ...' syntax — a raw epoch-ms comparison is rejected by the service.
     const crimeCut = new Date(Date.now() - 730 * 86400 * 1000).toISOString().slice(0, 10);
 
-    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows, violations, rezonings, tif, redevelopment, pedestrian, historic, crime, bcycle, foodstores, hood, traffic] = await Promise.all([
+    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows, violations, rezonings, tif, redevelopment, pedestrian, historic, crime, bcycle, foodstores, hood, traffic, wego, bza, dtc, adult] = await Promise.all([
       parcelWhere ? agQuery(`${HUB}/Building_Permits_Issued_2/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Address,Purpose,Contact,Date_Issued,Date_Entered,Lat,Lon", orderByFields: "Date_Entered DESC", resultRecordCount: "30" }) : [],
       parcelWhere ? agQuery(`${HUB}/Building_Permit_Applications_Feature_Layer_view/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Purpose,Contact,Date_Entered,Date_Issued", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
       parcelWhere ? agQuery(`${HUB}/Trade_Permits_View/FeatureServer/0`, { where: parcelWhere, outFields: "PermitNumber,Trade,Permit_Subtype_Description,Contract_Value,Purpose,Case_Status,Date_Entered", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
@@ -189,6 +193,15 @@ export default async function handler(req, res) {
       centroid ? pointInLayer(`${HUB}/Neighborhood_Boundaries/FeatureServer/0`, centroid.lon, centroid.lat, "Name") : [],
       // TRAFFIC (STATE) — nearest TDOT AADT count station within ~0.4mi = retail visibility (cars/day).
       centroid ? nearLayer(TDOT_TRAFFIC, centroid.lon, centroid.lat, 650, "*", 10) : [],
+      // TRANSIT — WeGo bus stops within ~0.4mi (routes served + count = transit access / catchment).
+      centroid ? nearLayer(WEGO_STOPS, centroid.lon, centroid.lat, 650, "StopName,RoutesServed,ShelterCount,ADACompliant", 20) : [],
+      // ZONING APPEALS — Board of Zoning Appeals cases on the parcel (keyed by APN) = variance /
+      // entitlement activity (someone worked the zoning here).
+      ap ? agQuery(`${HUB}/Board_of_Zoning_Appeals_Cases_view/FeatureServer/0`, { where: `APN='${apnSql(ap)}'`, outFields: "CASE_NUMBER,APPEALTYPE,BZAACTION_DESC,PERSTATUS,PURPOSE,BZA_DATE", orderByFields: "BZA_DATE DESC", resultRecordCount: "10" }) : [],
+      // DOWNTOWN CODE — the DTC subdistrict + use area (point-in-polygon), the granular downtown zoning.
+      centroid ? pointInLayer(`${HUB}/Downtown_Code_Subdistricts_and_Use_Areas_view/FeatureServer/0`, centroid.lon, centroid.lat, "Subdistrict,UseArea") : [],
+      // ADULT BUSINESSES — sexually-oriented permitted businesses within ~0.25mi (a negative retail-adjacency flag).
+      centroid ? nearLayer(`${HUB}/Sexually_Oriented_Permitted_Businesses_view/FeatureServer/0`, centroid.lon, centroid.lat, 400, "Business_Name", 10) : [],
     ]);
 
     // Building permits — recent, with the repositioning signal tagged.
@@ -331,6 +344,31 @@ export default async function handler(req, res) {
     }).filter(Boolean).sort((a, b) => (a.dist_mi ?? 9) - (b.dist_mi ?? 9));
     const trafficInfo = trafficStations.length ? { nearest: trafficStations[0], stations: trafficStations.slice(0, 3) } : null;
 
+    // TRANSIT — WeGo bus stops near the parcel: nearest stop (+ its routes) and how many within reach.
+    const stopList = (wego || []).map((s) => ({
+      name: clean(s.StopName), routes: clean(s.RoutesServed) || null, ada: /^(y|t|1)/i.test(clean(s.ADACompliant)),
+      dist_mi: distMi(s._geom, centroid && centroid.lat, centroid && centroid.lon),
+    })).filter((s) => s.name).sort((a, b) => (a.dist_mi ?? 9) - (b.dist_mi ?? 9));
+    const routeSet = new Set();
+    for (const s of stopList) for (const r of (s.routes || "").split(/[,\s]+/).filter(Boolean)) routeSet.add(r);
+    const transit = stopList.length ? { nearest: stopList[0], stops_nearby: stopList.length, routes: [...routeSet].slice(0, 12) } : null;
+
+    // ZONING APPEALS — BZA cases on the parcel (variance / entitlement activity).
+    const bzaList = (bza || []).map((z) => ({
+      case: clean(z.CASE_NUMBER) || null, type: clean(z.APPEALTYPE) || null, action: clean(z.BZAACTION_DESC) || null,
+      status: clean(z.PERSTATUS) || null, purpose: clean(z.PURPOSE).slice(0, 120) || null, date: dayMs(z.BZA_DATE),
+    })).filter((z) => z.case || z.type);
+    const bzaInfo = bzaList.length ? { count: bzaList.length, recent: bzaList.slice(0, 4) } : null;
+
+    // DOWNTOWN CODE subdistrict + use area (granular downtown zoning).
+    const dtcRow = dtc && dtc[0] ? dtc[0] : null;
+    const downtownCode = dtcRow ? { subdistrict: clean(dtcRow.Subdistrict) || null, use_area: clean(dtcRow.UseArea) || null } : null;
+
+    // ADULT businesses within ~0.25mi (a negative retail-adjacency flag).
+    const adultList = (adult || []).map((s) => ({ name: clean(s.Business_Name), dist_mi: distMi(s._geom, centroid && centroid.lat, centroid && centroid.lon) }))
+      .filter((s) => s.name).sort((a, b) => (a.dist_mi ?? 9) - (b.dist_mi ?? 9));
+    const adultBusinesses = adultList.length ? { count: adultList.length, nearest: adultList[0] } : null;
+
     return res.status(200).json({
       apn: ap || null, address: clean(address) || null, centroid,
       building, business_improvement_district: bid,
@@ -351,6 +389,10 @@ export default async function handler(req, res) {
       food_stores: foodStores,
       neighborhood,
       traffic: trafficInfo,
+      transit,
+      bza: bzaInfo,
+      downtown_code: downtownCode,
+      adult_businesses: adultBusinesses,
       zoning_overlays: { historic: historicOverlay, districts: overlayList },
       flood: floodInfo,
       policy: policyInfo,

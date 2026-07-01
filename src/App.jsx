@@ -2794,6 +2794,7 @@ function NashvilleIntelPanel({ apn, address, pw }) {
   const cv = d.code_violations || {}, rz = d.rezonings || {};
   const tif = d.tif || {}, redev = d.redevelopment_district, ped = d.pedestrian_zone, hist = d.historic_property;
   const crime = d.crime, walk = d.walkability, food = d.food_stores, hood = d.neighborhood, traffic = d.traffic;
+  const transit = d.transit, bza = d.bza, dtc = d.downtown_code, adult = d.adult_businesses;
   const hasDev = (bp.count || 0) + (tp.count || 0) + (pa.count || 0) + (rz.count || 0) > 0;
   const overlays = (zo.districts || []).map((o) => o.type || o.name).filter(Boolean);
   return (
@@ -2831,9 +2832,11 @@ function NashvilleIntelPanel({ apn, address, pw }) {
         {(sr.recent_codes || []).slice(0, 4).map((c, i) => (<div key={i} style={{ fontSize: 12 }}><span style={{ color: C.amber }}>{c.type}</span>{c.subtype ? <span style={muted}> · {c.subtype}</span> : ""}{c.status ? <span style={muted}> · {c.status}</span> : ""}</div>))}
         <div style={{ fontSize: 11, ...muted, marginTop: 2 }}>{sr.codes_related} codes/condition complaint{sr.codes_related === 1 ? "" : "s"} of {sr.total} total 311 requests.</div>
       </>}
-      {(overlays.length || fl || (po && (po.policy || po.transect))) && <>
+      {(overlays.length || fl || (po && (po.policy || po.transect)) || (dtc && (dtc.subdistrict || dtc.use_area)) || bza) && <>
         <H>ZONING / CONTEXT</H>
         {overlays.length > 0 && <div style={{ fontSize: 12.5 }}><span style={muted}>Overlays: </span><span style={ivory}>{overlays.join(", ")}</span>{zo.historic ? <span style={{ color: C.amber }}> · HISTORIC (constraint)</span> : ""}</div>}
+        {dtc && (dtc.subdistrict || dtc.use_area) && <div style={{ fontSize: 12.5 }}><span style={muted}>Downtown Code: </span><span style={ivory}>{[dtc.subdistrict, dtc.use_area].filter(Boolean).join(" · ")}</span></div>}
+        {bza && <div style={{ fontSize: 12.5 }}><span style={muted}>Zoning appeals (BZA): </span><span style={ivory}>{bza.count} case{bza.count === 1 ? "" : "s"}</span>{bza.recent && bza.recent[0] ? <span style={muted}> · {[bza.recent[0].type, bza.recent[0].action, bza.recent[0].date].filter(Boolean).join(" · ")}</span> : ""}</div>}
         {fl && <div style={{ fontSize: 12.5 }}><span style={muted}>Flood: </span><span style={fl.special_flood_hazard ? { color: C.red } : ivory}>Zone {fl.zone || "?"}{fl.special_flood_hazard ? " — SFHA (insurance / diligence cost)" : ` — ${fl.description || "minimal risk"}`}</span></div>}
         {po && (po.policy || po.transect) && <div style={{ fontSize: 12.5 }}><span style={muted}>Land-use policy: </span><span style={ivory}>{[po.policy, po.transect].filter(Boolean).join(" · ")}</span></div>}
       </>}
@@ -2844,13 +2847,15 @@ function NashvilleIntelPanel({ apn, address, pw }) {
         {ped && <div style={{ fontSize: 12.5 }}><span style={muted}>Pedestrian benefit zone: </span><span style={ivory}>{ped.zone}{ped.description ? ` · ${ped.description}` : ""}</span><span style={muted}> — walkable, reduced parking minimums</span></div>}
         {hist && <div style={{ fontSize: 12.5 }}><span style={{ color: C.amber }}>Historic: </span><span style={ivory}>{[hist.status, hist.year_built ? `built ${hist.year_built}` : "", hist.survey].filter(Boolean).join(" · ")}</span><span style={muted}> — landmark/district design-review constraint</span></div>}
       </>}
-      {(crime || walk || hood || traffic) && <>
+      {(crime || walk || hood || traffic || transit || adult) && <>
         <H>LOCATION / SAFETY</H>
         {hood && <div style={{ fontSize: 12.5 }}><span style={muted}>Neighborhood: </span><span style={ivory}>{hood}</span></div>}
         {traffic && <div style={{ fontSize: 12.5 }}><span style={muted}>Traffic (TDOT): </span><span style={ivory}>~{Number(traffic.nearest.aadt).toLocaleString()} vehicles/day</span><span style={muted}>{traffic.nearest.location ? ` · ${traffic.nearest.location}` : ""}{traffic.nearest.dist_mi != null ? ` · ${traffic.nearest.dist_mi} mi` : ""} · AADT {traffic.nearest.year} (latest published count)</span></div>}
+        {transit && <div style={{ fontSize: 12.5 }}><span style={muted}>Transit: </span><span style={ivory}>WeGo “{transit.nearest.name}”{transit.nearest.dist_mi != null ? ` ${transit.nearest.dist_mi} mi` : ""}</span><span style={muted}> · {transit.stops_nearby} stop{transit.stops_nearby === 1 ? "" : "s"} nearby{transit.routes && transit.routes.length ? ` · routes ${transit.routes.join(", ")}` : ""}</span></div>}
         {walk && <div style={{ fontSize: 12.5 }}><span style={muted}>Walkability: </span><span style={ivory}>BCycle “{walk.nearest_bcycle.name}”{walk.nearest_bcycle.dist_mi != null ? ` ${walk.nearest_bcycle.dist_mi} mi` : ""}</span><span style={muted}> · {walk.bcycle_within_075mi} station{walk.bcycle_within_075mi === 1 ? "" : "s"} within ¾ mi</span></div>}
         {crime && <div style={{ fontSize: 12.5 }}><span style={muted}>Crime (~¼ mi, 24 mo): </span><span style={crime.violent > 0 ? { color: C.amber } : ivory}>{crime.count}{crime.capped ? "+" : ""} incident{crime.count === 1 ? "" : "s"}{crime.violent ? ` · ${crime.violent} violent` : ""}</span>{crime.top_offenses && crime.top_offenses.length ? <span style={muted}> · {crime.top_offenses.slice(0, 3).map((o) => `${o.offense.toLowerCase()} (${o.count})`).join(", ")}</span> : ""}</div>}
         {crime && <div style={{ fontSize: 10.5, ...muted }}>MNPD incidents, masked to ~block — context, not a precise rate.</div>}
+        {adult && <div style={{ fontSize: 12 }}><span style={{ color: C.amber }}>⚠ {adult.count} adult-oriented business{adult.count === 1 ? "" : "es"} within ¼ mi</span>{adult.nearest && adult.nearest.dist_mi != null ? <span style={muted}> · nearest {adult.nearest.dist_mi} mi</span> : ""}</div>}
       </>}
       {food && <>
         <H>RETAIL CONTEXT · NEARBY STORES</H>

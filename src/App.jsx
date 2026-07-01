@@ -1634,7 +1634,7 @@ function NYCompSheet({ pw }) {
 const NASH_COMP_TYPES = [["retail", "Retail"], ["commercial", "Commercial (retail / office)"], ["office", "Office"], ["apartments", "Apartments"], ["industrial", "Industrial"], ["any", "Any type"]];
 function nashCompCSV(rows) {
   const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
-  const cols = [["Address", (r) => r.address], ["Owner", (r) => r.owner], ["Use", (r) => r.use], ["Sale price", (r) => r._price], ["Sold", (r) => r.sale_year], ["Acres", (r) => r.acres], ["$/acre", (r) => (r._ppa ? Math.round(r._ppa) : "")], ["Frontage ft", (r) => r.frontage_ft || ""], ["Appraised", (r) => r.appraised_value || ""]];
+  const cols = [["Address", (r) => r.address], ["Owner", (r) => r.owner], ["Use", (r) => r.use], ["Sale price", (r) => r._price], ["Sold", (r) => r.sale_year], ["Building SF", (r) => r.building_sqft || ""], ["$/SF", (r) => (r._ppsf ? Math.round(r._ppsf) : "")], ["Year built", (r) => r.year_built || ""], ["Acres", (r) => r.acres], ["$/acre", (r) => (r._ppa ? Math.round(r._ppa) : "")], ["Frontage ft", (r) => r.frontage_ft || ""], ["Appraised", (r) => r.appraised_value || ""]];
   return cols.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => cols.map((c) => esc(c[1](r))).join(",")).join("\n");
 }
 // Nashville / Davidson County sale comps. TN's parcel data DOES carry recorded sale price +
@@ -1654,12 +1654,13 @@ function NashCompSheet({ pw }) {
       const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: type, address: area.trim() || undefined, sinceYear, limit: 500 });
       const cutoff = Number(sinceYear || 0);
       const comps = (d.properties || []).filter((p) => p.sale_price && p.sale_year)
-        .map((p) => ({ ...p, _price: p.sale_price, _year: Number(p.sale_year), _ppa: (p.acres && p.acres > 0) ? p.sale_price / p.acres : null }))
-        .filter((c) => c._price >= 50000 && (!cutoff || c._year >= cutoff))
+        .map((p) => ({ ...p, _price: p.sale_price, _year: Number(p.sale_year), _ppa: (p.acres && p.acres > 0) ? p.sale_price / p.acres : null, _ppsf: (p.building_sqft && p.building_sqft > 0) ? p.sale_price / p.building_sqft : null }))
+        .filter((c) => c._price >= 50000 && (!cutoff || c._year >= cutoff) && (!c._ppsf || (c._ppsf >= 20 && c._ppsf <= 20000)))
         .sort((a, b) => (b._year || 0) - (a._year || 0) || (b._price || 0) - (a._price || 0));
       const prices = comps.map((c) => c._price);
       const ppas = comps.map((c) => c._ppa).filter((x) => x != null);
-      setData({ comps, stats: { count: comps.length, medPrice: median(prices), avgPrice: prices.length ? prices.reduce((s, x) => s + x, 0) / prices.length : null, medPpa: median(ppas) } });
+      const ppsfs = comps.map((c) => c._ppsf).filter((x) => x != null);
+      setData({ comps, stats: { count: comps.length, medPrice: median(prices), medPpsf: median(ppsfs), ppsfCount: ppsfs.length, medPpa: median(ppas) } });
     } catch (e) { setError(e.message || "Failed."); }
     finally { setLoading(false); }
   };
@@ -1677,27 +1678,27 @@ function NashCompSheet({ pw }) {
           {data && data.comps.length > 0 && <button onClick={() => downloadBlob(nashCompCSV(data.comps), `comps_nashville_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
         </div>
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red }}>{error}</div>}
-        <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>Nashville / Davidson County recorded sales (Metro parcel data) for {type === "any" ? "all traded" : type} properties. TN parcel data has <strong style={{ color: C.ivory }}>no building SF</strong>, so comps are <strong style={{ color: C.ivory }}>sale price + $/acre</strong>, not $/SF. Top 500 by value; recorded prices can include non-arm's-length transfers — verify outliers.</div>
+        <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>Nashville / Davidson County recorded sales (Metro parcel data) for {type === "any" ? "all traded" : type} properties. <strong style={{ color: C.ivory }}>$/SF</strong> uses Metro's assessor building area (improved SF), on the higher-value parcels; <strong style={{ color: C.ivory }}>$/acre</strong> covers the rest. Top 500 by value; recorded prices can include non-arm's-length transfers — verify outliers.</div>
       </div>
       {data && (<div style={{ marginTop: 18 }}>
         {data.comps.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No recorded sales matched. Widen the year, clear the corridor, or change the type.</div> : (<>
           <div style={{ display: "flex", border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden", marginBottom: 14 }}>
-            {[["COMPS", st.count], ["MEDIAN PRICE", st.medPrice != null ? fmtAmount(st.medPrice) : "—"], ["AVG PRICE", st.avgPrice != null ? fmtAmount(st.avgPrice) : "—"], ["MEDIAN $/ACRE", st.medPpa != null ? `$${Math.round(st.medPpa).toLocaleString()}` : "—"]].map(([k, v], i) => (
-              <div key={k} style={{ flex: 1, padding: "10px 12px", borderLeft: i ? `1px solid ${C.line}` : "none", background: C.ink }}><div className="mono" style={{ fontSize: 9, color: C.muted, letterSpacing: "0.12em" }}>{k}</div><div style={{ fontSize: 16, fontWeight: 700, marginTop: 3 }}>{v}</div></div>
+            {[["COMPS", st.count], ["MEDIAN PRICE", st.medPrice != null ? fmtAmount(st.medPrice) : "—"], ["MEDIAN $/SF", st.medPpsf != null ? `$${Math.round(st.medPpsf).toLocaleString()}` : "—", st.ppsfCount ? `${st.ppsfCount} w/ SF` : ""], ["MEDIAN $/ACRE", st.medPpa != null ? `$${Math.round(st.medPpa).toLocaleString()}` : "—"]].map(([k, v, sub], i) => (
+              <div key={k} style={{ flex: 1, padding: "10px 12px", borderLeft: i ? `1px solid ${C.line}` : "none", background: C.ink }}><div className="mono" style={{ fontSize: 9, color: C.muted, letterSpacing: "0.12em" }}>{k}</div><div style={{ fontSize: 16, fontWeight: 700, marginTop: 3 }}>{v}</div>{sub ? <div className="mono" style={{ fontSize: 8.5, color: C.muted, marginTop: 1 }}>{sub}</div> : null}</div>
             ))}
           </div>
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>{["Address", "Owner", "Use", "Sale", "Sold", "Acres", "$/acre", "Frontage"].map((h, i) => <th key={h} style={{ textAlign: i >= 3 && i <= 6 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}</tr></thead>
+              <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>{["Address", "Owner", "Use", "Sale", "Sold", "Bldg SF", "$/SF", "$/acre"].map((h, i) => <th key={h} style={{ textAlign: i >= 3 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}</tr></thead>
               <tbody>{data.comps.map((c, i) => (<tr key={i} style={{ borderBottom: `1px solid ${C.line}` }}>
-                <td style={{ padding: "8px 12px", fontSize: 12.5 }}>{c.address}</td>
+                <td style={{ padding: "8px 12px", fontSize: 12.5 }}>{c.address}{c.year_built ? <span className="mono" style={{ fontSize: 9.5, color: C.muted, marginLeft: 6 }}>’{String(c.year_built).slice(-2)}</span> : null}</td>
                 <td style={{ padding: "8px 12px", fontSize: 12, color: C.muted, maxWidth: 180 }}>{c.owner}</td>
                 <td style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>{c.use}</td>
                 <td className="mono" style={{ padding: "8px 12px", fontSize: 12.5, textAlign: "right" }}>{fmtAmount(c._price)}</td>
                 <td className="mono" style={{ padding: "8px 12px", fontSize: 12, textAlign: "right", color: C.muted }}>{c.sale_year || "—"}</td>
-                <td className="mono" style={{ padding: "8px 12px", fontSize: 12, textAlign: "right", color: C.muted }}>{c.acres != null ? c.acres : "—"}</td>
-                <td className="mono" style={{ padding: "8px 12px", fontSize: 12.5, textAlign: "right", fontWeight: 700, color: C.gold }}>{c._ppa ? `$${Math.round(c._ppa).toLocaleString()}` : "—"}</td>
-                <td className="mono" style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>{c.frontage_ft ? `${c.frontage_ft} ft` : "—"}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12, textAlign: "right", color: C.muted }}>{c.building_sqft ? Number(c.building_sqft).toLocaleString() : "—"}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12.5, textAlign: "right", fontWeight: 700, color: C.gold }}>{c._ppsf ? `$${Math.round(c._ppsf).toLocaleString()}` : "—"}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12, textAlign: "right", color: C.muted }}>{c._ppa ? `$${Math.round(c._ppa).toLocaleString()}` : "—"}</td>
               </tr>))}</tbody>
             </table>
           </div>
@@ -2750,7 +2751,7 @@ const nashRow = (p) => ({ market: "tn", marketLabel: "Nashville, TN", owner: p.o
 function AssessorDetail({ p, market }) {
   const ny = market === "ny", tn = market === "tn";
   const grid = tn
-    ? [["Owner", p.owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Appraised", p.appraised_value ? fmtAmount(p.appraised_value) : null], ["Land value", p.land_value ? fmtAmount(p.land_value) : null], ["Building value", p.improvement_value ? fmtAmount(p.improvement_value) : null], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Depth", p.depth_ft ? `${p.depth_ft} ft` : null], ["Land acres", p.acres || null], ["Council dist.", p.council_district || null], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : null], ["Years owned", p.years_owned != null ? `~${p.years_owned}` : null], ["APN", p.apn || null]]
+    ? [["Owner", p.owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Appraised", p.appraised_value ? fmtAmount(p.appraised_value) : null], ["Land value", p.land_value ? fmtAmount(p.land_value) : null], ["Building value", p.improvement_value ? fmtAmount(p.improvement_value) : null], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Building SF", p.building_sqft ? Number(p.building_sqft).toLocaleString() : null], ["Retail SF", p.retail_sqft ? Number(p.retail_sqft).toLocaleString() : null], ["Year built", p.year_built || null], ["Structures", (p.structure_types || []).join(", ") || null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Depth", p.depth_ft ? `${p.depth_ft} ft` : null], ["Land acres", p.acres || null], ["Council dist.", p.council_district || null], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : null], ["Years owned", p.years_owned != null ? `~${p.years_owned}` : null], ["APN", p.apn || null]]
     : ny
     ? [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Town", p.town], ["County", p.county], ["Use", p.use], ["Class", p.property_class], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Market value", p.market_value ? fmtAmount(p.market_value) : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["School district", p.school_district]]
     : [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Building SF", p.building_sqft ? Number(p.building_sqft).toLocaleString() : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Year built", p.year_built || null], ["Condition", p.condition], ["Grade", p.grade], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_date ? ` · ${p.sale_date}` : ""}` : null]];

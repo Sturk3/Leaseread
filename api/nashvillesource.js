@@ -75,17 +75,58 @@ async function hubQuery(layer, params) {
   } catch { return []; }
 }
 
-// Attach a parcel-exact DISTRESS + development-activity read to each lead, so the grade can use it.
-// Two batched queries (open code violations by Property_APN, building permits by Parcel) for the
-// top `cap` parcels — joined by APN in memory. Bounded so a big result set can't blow the budget.
+const chunk = (arr, n) => { const o = []; for (let i = 0; i < arr.length; i += n) o.push(arr.slice(i, i + n)); return o; };
+
+// BUILDING SIZE — Metro's assessor Building Characteristics layer (Parcels_with_Building_
+// Characteristics_view) DOES carry FinishedArea (improved SF) + YearBuilt, keyed by APN, with
+// one row per structure/card. It fills the long-standing "no building SF" gap (the parcel layer
+// only has acreage), so leads/comps get real $/SF and a building age. Chunked APN IN() query
+// (URLs stay short), aggregated per parcel.
+const RETAIL_STRUCT = /RETAIL|SHOPPING|STORE|RESTAURANT/;
+async function buildingCharByApn(apns) {
+  const ids = [...new Set(apns.filter(Boolean).map(String))];
+  if (!ids.length) return {};
+  const byApn = {};
+  const groups = await Promise.all(chunk(ids, 80).map((g) => {
+    const inList = g.map((a) => `'${a.replace(/'/g, "''")}'`).join(",");
+    return hubQuery("Parcels_with_Building_Characteristics_view", { where: `APN IN (${inList})`, outFields: "APN,StructureType,FinishedArea,YearBuilt", resultRecordCount: "5000" });
+  }));
+  for (const rows of groups) for (const b of rows) { const k = clean(b.APN); if (k) (byApn[k] = byApn[k] || []).push(b); }
+  return byApn;
+}
+// Aggregate a parcel's structure rows → total improved SF, retail SF, the main structure's year.
+function summarizeBuilding(rows) {
+  let total = 0, retail = 0, main = null;
+  for (const b of rows) {
+    const sf = toNum(b.FinishedArea) || 0;
+    const st = clean(b.StructureType).toUpperCase();
+    total += sf;
+    if (RETAIL_STRUCT.test(st) && !/APARTMENT|RESIDENTIAL/.test(st)) retail += sf; // ground-floor retail, not "apt with retail"
+    if (!main || sf > (toNum(main.FinishedArea) || 0)) main = b; // largest structure = the main building
+  }
+  return {
+    building_sqft: total || null,
+    retail_sqft: retail || null,
+    year_built: main ? (toNum(main.YearBuilt) || null) : null,
+    structure_types: [...new Set(rows.map((b) => clean(b.StructureType)).filter(Boolean))].slice(0, 6),
+  };
+}
+
+// Attach a parcel-exact DISTRESS + development-activity read to each lead, so the grade can use it,
+// plus BUILDING SIZE (improved SF + year built) so comps/leads get $/SF and an age signal.
+// Distress (violations/permits) is bounded to the top `cap` parcels; building size — a single
+// cheap layer — covers a wider set so the comp sheet's $/SF isn't limited to the first 60.
 const REPOSITION_RE = /demolition|commercial - new|tenant finish|finish out|rehab|addition|use & occupancy/i;
 async function enrichNashville(props, cap = 60) {
-  const targets = props.filter((p) => p.apn).slice(0, cap);
-  if (!targets.length) return;
+  const withApn = props.filter((p) => p.apn);
+  const targets = withApn.slice(0, cap);
+  const bcTargets = withApn.slice(0, 250);
+  if (!targets.length && !bcTargets.length) return;
   const inList = targets.map((p) => `'${String(p.apn).replace(/'/g, "''")}'`).join(",");
-  const [viol, perms] = await Promise.all([
-    hubQuery("Property_Standards_Violations_2", { where: `Property_APN IN (${inList}) AND Status<>'Closed'`, outFields: "Property_APN,Reported_Problem,Status", resultRecordCount: "2000" }),
-    hubQuery("Building_Permits_Issued_2", { where: `Parcel IN (${inList})`, outFields: "Parcel,Permit_Type_Description,Date_Issued", orderByFields: "Date_Issued DESC", resultRecordCount: "2000" }),
+  const [viol, perms, bByApn] = await Promise.all([
+    targets.length ? hubQuery("Property_Standards_Violations_2", { where: `Property_APN IN (${inList}) AND Status<>'Closed'`, outFields: "Property_APN,Reported_Problem,Status", resultRecordCount: "2000" }) : [],
+    targets.length ? hubQuery("Building_Permits_Issued_2", { where: `Parcel IN (${inList})`, outFields: "Parcel,Permit_Type_Description,Date_Issued", orderByFields: "Date_Issued DESC", resultRecordCount: "2000" }) : [],
+    buildingCharByApn(bcTargets.map((p) => p.apn)),
   ]);
   const vByApn = {}, pByApn = {};
   for (const v of viol) { const k = clean(v.Property_APN); if (k) (vByApn[k] = vByApn[k] || []).push(clean(v.Reported_Problem)); }
@@ -97,6 +138,10 @@ async function enrichNashville(props, cap = 60) {
     p.permit_count = ps.length;
     p.repositioning = ps.some((t) => REPOSITION_RE.test(t));
   }
+  for (const p of bcTargets) {
+    const bs = bByApn[p.apn];
+    if (bs && bs.length) Object.assign(p, summarizeBuilding(bs));
+  }
 }
 
 export default async function handler(req, res) {
@@ -107,7 +152,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v6-browse-targets", base: NASH_BASE });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvillesource-v7-building-sf", base: NASH_BASE });
 
     const where = ["IsActive='Y'"];
     // OWNER-PORTFOLIO mode: every Davidson County parcel held by this exact owner (the LLC tracker).
@@ -174,7 +219,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       count: out.length, county: "Davidson (Nashville)",
-      note: "Metro Nashville / Davidson County parcel + ownership data (maps.nashville.gov, updated daily). Owner of record + mailing (absentee flagged), land use, value, last sale, and years owned — TN is an open-records state, so owners are public. No building SF in this dataset (land acreage only). For an owner LLC, use web_research for principals/contacts.",
+      note: "Metro Nashville / Davidson County parcel + ownership data (maps.nashville.gov, updated daily). Owner of record + mailing (absentee flagged), land use, value, last sale, years owned, frontage, and land-vs-improvement value split — TN is an open-records state, so owners are public. building_sqft / retail_sqft / year_built come from Metro's assessor Building Characteristics layer (improved area by structure), present on the top ~250 results — enables $/SF. For an owner LLC, use web_research for principals/contacts.",
       properties: out,
     });
   } catch (e) {

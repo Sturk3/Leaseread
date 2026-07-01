@@ -65,6 +65,31 @@ async function pointInLayer(layerUrl, lon, lat, outFields) {
   });
 }
 
+// Radius search on a POINT layer: features within `meters` of (lon,lat), with geometry so we can
+// compute each one's distance. Optional `where` (e.g. a recency filter) narrows server-side.
+async function nearLayer(layerUrl, lon, lat, meters, outFields, count = 15, where) {
+  if (lon == null || lat == null) return [];
+  const params = {
+    geometry: JSON.stringify({ x: lon, y: lat, spatialReference: { wkid: 4326 } }),
+    geometryType: "esriGeometryPoint", inSR: "4326", distance: String(meters), units: "esriSRUnit_Meter",
+    spatialRel: "esriSpatialRelIntersects", outFields, returnGeometry: "true", outSR: "4326", resultRecordCount: String(count), f: "json",
+  };
+  if (where) params.where = where;
+  try {
+    const r = await fetch(`${layerUrl}/query?${new URLSearchParams(params)}`);
+    if (!r.ok) return [];
+    const j = await r.json().catch(() => ({}));
+    return (j.features || []).map((f) => ({ ...(f.attributes || {}), _geom: f.geometry || null }));
+  } catch { return []; }
+}
+const milesBetween = (lat1, lon1, lat2, lon2) => {
+  const R = 3958.8, toR = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toR, dLon = (lon2 - lon1) * toR;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toR) * Math.cos(lat2 * toR) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+};
+const distMi = (g, lat, lon) => (g && g.y != null && g.x != null && lat != null) ? Math.round(milesBetween(lat, lon, g.y, g.x) * 100) / 100 : null;
+
 // "<houseNumber>" + primary street token out of a free-form address, for the 311 LIKE join.
 function addrParts(address) {
   const a = clean(address);
@@ -95,7 +120,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v4-tif-redev-historic-ped", maps: MAPS, hub: HUB });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v5-crime-walk-food-hood", maps: MAPS, hub: HUB });
 
     const ap = clean(apn);
     if (!ap && !address) return res.status(400).json({ error: "Need an APN (preferred) or address." });
@@ -107,7 +132,7 @@ export default async function handler(req, res) {
     // Centroid first (overlays need it); then fan everything else out in parallel.
     const centroid = ap ? await parcelGeomCentroid(ap) : null;
 
-    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows, violations, rezonings, tif, redevelopment, pedestrian, historic] = await Promise.all([
+    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows, violations, rezonings, tif, redevelopment, pedestrian, historic, crime, bcycle, foodstores, hood] = await Promise.all([
       parcelWhere ? agQuery(`${HUB}/Building_Permits_Issued_2/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Address,Purpose,Contact,Date_Issued,Date_Entered,Lat,Lon", orderByFields: "Date_Entered DESC", resultRecordCount: "30" }) : [],
       parcelWhere ? agQuery(`${HUB}/Building_Permit_Applications_Feature_Layer_view/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Purpose,Contact,Date_Entered,Date_Issued", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
       parcelWhere ? agQuery(`${HUB}/Trade_Permits_View/FeatureServer/0`, { where: parcelWhere, outFields: "PermitNumber,Trade,Permit_Subtype_Description,Contract_Value,Purpose,Case_Status,Date_Entered", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
@@ -140,6 +165,14 @@ export default async function handler(req, res) {
       // Historic designation (keyed by ParcelID = APN) — a landmark/district property = redevelopment
       // constraint (design review) and sometimes a push-to-sell.
       ap ? agQuery(`${HUB}/Historic_Districts_and_Properties/FeatureServer/0`, { where: `ParcelID='${apnSql(ap)}'`, outFields: "Status,YearConstructed,THC_Survey,Notes,Address", resultRecordCount: "5" }) : [],
+      // CRIME / SAFETY — MNPD incidents within ~0.25mi over the last ~24 months (corridor-safety read).
+      centroid ? nearLayer(`${HUB}/Metro_Nashville_Police_Department_Incidents_view/FeatureServer/0`, centroid.lon, centroid.lat, 400, "Offense_Description,Incident_Occurred,Offense_NIBRS", 500, `Incident_Occurred >= ${Date.now() - 730 * 86400 * 1000}`) : [],
+      // WALKABILITY — nearest BCycle bike-share stations within ~0.75mi (micromobility / walkable-district proxy).
+      centroid ? nearLayer(`${HUB}/BCycle_Locations_view/FeatureServer/0`, centroid.lon, centroid.lat, 1200, "StationName,Address", 20) : [],
+      // RETAIL CONTEXT — food/grocery/convenience stores within ~0.3mi + their operating flag (amenity density + a vacancy read).
+      centroid ? nearLayer(`${HUB}/FoodStores_Total_view/FeatureServer/0`, centroid.lon, centroid.lat, 500, "StoreName,BusinessType,USER_Currently_Operational__Yes", 25) : [],
+      // SUBMARKET — the named neighborhood the parcel sits in (blank downtown, populated elsewhere).
+      centroid ? pointInLayer(`${HUB}/Neighborhood_Boundaries/FeatureServer/0`, centroid.lon, centroid.lat, "Name") : [],
     ]);
 
     // Building permits — recent, with the repositioning signal tagged.
@@ -245,6 +278,35 @@ export default async function handler(req, res) {
       survey: clean(histRow.THC_Survey) || null, notes: clean(histRow.Notes).slice(0, 160) || null,
     } : null;
 
+    // CRIME / SAFETY — MNPD incidents in the last ~24 months within ~0.25mi. Count + violent share +
+    // the top offense types (a corridor-safety read; MNPD masks each point to ~block level).
+    const VIOLENT_RE = /homicide|murder|robbery|assault|shooting|weapon|rape|kidnap|carjack/i;
+    const crimeRows = (crime || []).map((c) => ({ offense: clean(c.Offense_Description), when: dayMs(c.Incident_Occurred) })).filter((c) => c.offense);
+    const offCounts = {};
+    for (const c of crimeRows) offCounts[c.offense] = (offCounts[c.offense] || 0) + 1;
+    const crimeInfo = crimeRows.length ? {
+      count: crimeRows.length, capped: crimeRows.length >= 500, radius_mi: 0.25, months: 24,
+      violent: crimeRows.filter((c) => VIOLENT_RE.test(c.offense)).length,
+      top_offenses: Object.entries(offCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([offense, n]) => ({ offense, count: n })),
+    } : null;
+
+    // WALKABILITY — nearest BCycle stations (with distance). Nearest one + how many within ~0.75mi.
+    const bcList = (bcycle || []).map((b) => ({ name: clean(b.StationName), address: clean(b.Address) || null, dist_mi: distMi(b._geom, centroid && centroid.lat, centroid && centroid.lon) }))
+      .filter((b) => b.name).sort((a, b) => (a.dist_mi ?? 9) - (b.dist_mi ?? 9));
+    const walkability = bcList.length ? { nearest_bcycle: bcList[0], bcycle_within_075mi: bcList.length } : null;
+
+    // RETAIL CONTEXT — nearby food/grocery/convenience operators + how many are currently operating
+    // (amenity density; a cluster of closed stores near a target is a soft vacancy read).
+    const foodList = (foodstores || []).map((s) => ({
+      name: clean(s.StoreName), type: clean(s.BusinessType) || null,
+      operating: /^y/i.test(clean(s.USER_Currently_Operational__Yes)),
+      dist_mi: distMi(s._geom, centroid && centroid.lat, centroid && centroid.lon),
+    })).filter((s) => s.name).sort((a, b) => (a.dist_mi ?? 9) - (b.dist_mi ?? 9));
+    const foodStores = foodList.length ? { count: foodList.length, operating: foodList.filter((s) => s.operating).length, nearest: foodList.slice(0, 6) } : null;
+
+    // SUBMARKET — the named neighborhood containing the parcel.
+    const neighborhood = hood && hood[0] ? clean(hood[0].Name) || null : null;
+
     return res.status(200).json({
       apn: ap || null, address: clean(address) || null, centroid,
       building, business_improvement_district: bid,
@@ -260,6 +322,10 @@ export default async function handler(req, res) {
       redevelopment_district: redevelopmentDistrict,
       pedestrian_zone: pedestrianZone,
       historic_property: historicProperty,
+      crime: crimeInfo,
+      walkability,
+      food_stores: foodStores,
+      neighborhood,
       zoning_overlays: { historic: historicOverlay, districts: overlayList },
       flood: floodInfo,
       policy: policyInfo,

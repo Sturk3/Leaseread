@@ -2792,6 +2792,7 @@ function NashvilleIntelPanel({ apn, address, pw }) {
   const bp = d.building_permits || {}, tp = d.trade_permits || {}, bz = d.beer_permits || {}, sr = d.service_requests_311 || {};
   const pa = d.pending_applications || {}, zo = d.zoning_overlays || {}, fl = d.flood, po = d.policy, bld = d.building, bid = d.business_improvement_district;
   const cv = d.code_violations || {}, rz = d.rezonings || {};
+  const tif = d.tif || {}, redev = d.redevelopment_district, ped = d.pedestrian_zone, hist = d.historic_property;
   const hasDev = (bp.count || 0) + (tp.count || 0) + (pa.count || 0) + (rz.count || 0) > 0;
   const overlays = (zo.districts || []).map((o) => o.type || o.name).filter(Boolean);
   return (
@@ -2834,6 +2835,13 @@ function NashvilleIntelPanel({ apn, address, pw }) {
         {overlays.length > 0 && <div style={{ fontSize: 12.5 }}><span style={muted}>Overlays: </span><span style={ivory}>{overlays.join(", ")}</span>{zo.historic ? <span style={{ color: C.amber }}> · HISTORIC (constraint)</span> : ""}</div>}
         {fl && <div style={{ fontSize: 12.5 }}><span style={muted}>Flood: </span><span style={fl.special_flood_hazard ? { color: C.red } : ivory}>Zone {fl.zone || "?"}{fl.special_flood_hazard ? " — SFHA (insurance / diligence cost)" : ` — ${fl.description || "minimal risk"}`}</span></div>}
         {po && (po.policy || po.transect) && <div style={{ fontSize: 12.5 }}><span style={muted}>Land-use policy: </span><span style={ivory}>{[po.policy, po.transect].filter(Boolean).join(" · ")}</span></div>}
+      </>}
+      {((tif.count || 0) > 0 || redev || ped || hist) && <>
+        <H>INCENTIVES / DISTRICTS</H>
+        {(tif.count || 0) > 0 && <div style={{ fontSize: 12.5 }}><span style={{ color: C.green }}>TIF: </span><span style={ivory}>{(tif.projects || []).map((t) => `${t.name || "project"}${t.amount ? ` ($${Number(t.amount).toLocaleString()})` : ""}${t.year ? ` ${t.year}` : ""}${t.paid_off ? " · paid off" : ""}`).join("; ")}</span><span style={muted}> — tax-increment financing (redevelopment incentive)</span></div>}
+        {redev && <div style={{ fontSize: 12.5 }}><span style={muted}>Redevelopment district: </span><span style={{ color: C.gold }}>{redev}</span><span style={muted}> (MDHA urban renewal — design review + incentives)</span></div>}
+        {ped && <div style={{ fontSize: 12.5 }}><span style={muted}>Pedestrian benefit zone: </span><span style={ivory}>{ped.zone}{ped.description ? ` · ${ped.description}` : ""}</span><span style={muted}> — walkable, reduced parking minimums</span></div>}
+        {hist && <div style={{ fontSize: 12.5 }}><span style={{ color: C.amber }}>Historic: </span><span style={ivory}>{[hist.status, hist.year_built ? `built ${hist.year_built}` : "", hist.survey].filter(Boolean).join(" · ")}</span><span style={muted}> — landmark/district design-review constraint</span></div>}
       </>}
     </div>
   );

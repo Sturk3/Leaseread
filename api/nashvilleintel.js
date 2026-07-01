@@ -95,7 +95,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v3-rezoning-spatial", maps: MAPS, hub: HUB });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v4-tif-redev-historic-ped", maps: MAPS, hub: HUB });
 
     const ap = clean(apn);
     if (!ap && !address) return res.status(400).json({ error: "Need an APN (preferred) or address." });
@@ -107,7 +107,7 @@ export default async function handler(req, res) {
     // Centroid first (overlays need it); then fan everything else out in parallel.
     const centroid = ap ? await parcelGeomCentroid(ap) : null;
 
-    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows, violations, rezonings] = await Promise.all([
+    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows, violations, rezonings, tif, redevelopment, pedestrian, historic] = await Promise.all([
       parcelWhere ? agQuery(`${HUB}/Building_Permits_Issued_2/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Address,Purpose,Contact,Date_Issued,Date_Entered,Lat,Lon", orderByFields: "Date_Entered DESC", resultRecordCount: "30" }) : [],
       parcelWhere ? agQuery(`${HUB}/Building_Permit_Applications_Feature_Layer_view/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Purpose,Contact,Date_Entered,Date_Issued", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
       parcelWhere ? agQuery(`${HUB}/Trade_Permits_View/FeatureServer/0`, { where: parcelWhere, outFields: "PermitNumber,Trade,Permit_Subtype_Description,Contract_Value,Purpose,Case_Status,Date_Entered", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
@@ -128,6 +128,18 @@ export default async function handler(req, res) {
       // zoning). The Parcels field is human-readable ("Map 175, Parcel(s) 143-146"), NOT the APN, so
       // join SPATIALLY (point-in-polygon on the case footprint) instead of a text match.
       centroid ? pointInLayer(`${HUB}/Development_Tracker_Cases_view/FeatureServer/0`, centroid.lon, centroid.lat, "CASE_TYPE_DESC,SUB_TYPE_DESC,PROJECT_DESC,ExistingZoning,NewZoning,DATE_ACCEPTED,PSTAT,CAPTION") : [],
+      // TIF — Tax-Increment Financing projects on the parcel (keyed by Parcel = APN, same as permits).
+      // Public redevelopment financing here = a value-add / entitlement signal.
+      parcelWhere ? agQuery(`${HUB}/Tax_Increment_Financing_Projects/FeatureServer/0`, { where: parcelWhere, outFields: "Name,Amount_of_TIF,Year_of_Project,Date_Paid_Off,Description", resultRecordCount: "10" }) : [],
+      // MDHA Redevelopment District (point-in-polygon) — an urban-renewal district with its own
+      // design review / incentives (e.g. Capitol Mall, Rutledge Hill) = repositioning context.
+      centroid ? pointInLayer(`${HUB}/MDHA_Redevelopment_Districts/FeatureServer/0`, centroid.lon, centroid.lat, "DistrictName") : [],
+      // Pedestrian Benefit Zone (point-in-polygon) — a designated walkable district where parking
+      // minimums are reduced ("in-lieu" area) = a pro-retail, pro-density location signal.
+      centroid ? pointInLayer(`${HUB}/Pedestrian_Benefit_Zones_View/FeatureServer/0`, centroid.lon, centroid.lat, "Zone,Description,InLieuArea") : [],
+      // Historic designation (keyed by ParcelID = APN) — a landmark/district property = redevelopment
+      // constraint (design review) and sometimes a push-to-sell.
+      ap ? agQuery(`${HUB}/Historic_Districts_and_Properties/FeatureServer/0`, { where: `ParcelID='${apnSql(ap)}'`, outFields: "Status,YearConstructed,THC_Survey,Notes,Address", resultRecordCount: "5" }) : [],
     ]);
 
     // Building permits — recent, with the repositioning signal tagged.
@@ -215,6 +227,24 @@ export default async function handler(req, res) {
       project: clean(z.PROJECT_DESC || z.CAPTION).slice(0, 140) || null, status: clean(z.PSTAT) || null, filed: dayMs(z.DATE_ACCEPTED),
     })).filter((z) => z.type || z.project);
 
+    // TIF projects on the parcel (redevelopment financing = value-add signal).
+    const tifList = (tif || []).map((t) => ({
+      name: clean(t.Name) || null, amount: toNum(t.Amount_of_TIF), year: toNum(t.Year_of_Project),
+      paid_off: !!(clean(t.Date_Paid_Off) && clean(t.Date_Paid_Off) !== "0"),
+      description: clean(t.Description).slice(0, 160) || null,
+    })).filter((t) => t.name || t.amount);
+    // MDHA urban-renewal district containing the parcel.
+    const redevelopmentDistrict = redevelopment && redevelopment[0] ? clean(redevelopment[0].DistrictName) || null : null;
+    // Pedestrian Benefit Zone (walkable, reduced-parking district) containing the parcel.
+    const pedRow = pedestrian && pedestrian[0] ? pedestrian[0] : null;
+    const pedestrianZone = pedRow ? { zone: clean(pedRow.Zone) || null, description: clean(pedRow.Description) || null } : null;
+    // Historic designation on the parcel (landmark / historic district = design-review constraint).
+    const histRow = historic && historic[0] ? historic[0] : null;
+    const historicProperty = histRow ? {
+      status: clean(histRow.Status) || null, year_built: toNum(histRow.YearConstructed) || null,
+      survey: clean(histRow.THC_Survey) || null, notes: clean(histRow.Notes).slice(0, 160) || null,
+    } : null;
+
     return res.status(200).json({
       apn: ap || null, address: clean(address) || null, centroid,
       building, business_improvement_district: bid,
@@ -226,6 +256,10 @@ export default async function handler(req, res) {
       service_requests_311: { total: c311Rows.length, codes_related: codes311.length, recent_codes: codes311.slice(0, 8) },
       code_violations: { count: violList.length, open: openViol.length, recent: violList.slice(0, 8) },
       rezonings: { count: rezList.length, recent: rezList.slice(0, 6) },
+      tif: { count: tifList.length, projects: tifList.slice(0, 5) },
+      redevelopment_district: redevelopmentDistrict,
+      pedestrian_zone: pedestrianZone,
+      historic_property: historicProperty,
       zoning_overlays: { historic: historicOverlay, districts: overlayList },
       flood: floodInfo,
       policy: policyInfo,

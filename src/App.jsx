@@ -330,7 +330,7 @@ export default function App() {
         </div>
         <nav className="rail-nav" style={{ padding: "28px 18px", display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
           <div className="rail-label" style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2.4px", textTransform: "uppercase", color: "#555f76", padding: "4px 14px 12px" }}>Engines</div>
-          {[["agent", "Agent", "✦"], ["sourcing", "Sourcing", "◎"], ["comps", "Comp Sheet", "≣"]].map(([v, lab, ic]) => (
+          {[["agent", "Agent", "✦"], ["sourcing", "Sourcing", "◎"], ["comps", "Comp Sheet", "≣"], ["skiptrace", "Skip Trace", "🔎"]].map(([v, lab, ic]) => (
             <button key={v} onClick={() => setView(v)} className={view === v ? "rail-item active" : "rail-item"}>
               <span className="ic">{ic}</span> {lab}
             </button>

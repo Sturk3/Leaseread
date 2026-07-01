@@ -2793,7 +2793,7 @@ function NashvilleIntelPanel({ apn, address, pw }) {
   const pa = d.pending_applications || {}, zo = d.zoning_overlays || {}, fl = d.flood, po = d.policy, bld = d.building, bid = d.business_improvement_district;
   const cv = d.code_violations || {}, rz = d.rezonings || {};
   const tif = d.tif || {}, redev = d.redevelopment_district, ped = d.pedestrian_zone, hist = d.historic_property;
-  const crime = d.crime, walk = d.walkability, food = d.food_stores, hood = d.neighborhood;
+  const crime = d.crime, walk = d.walkability, food = d.food_stores, hood = d.neighborhood, traffic = d.traffic;
   const hasDev = (bp.count || 0) + (tp.count || 0) + (pa.count || 0) + (rz.count || 0) > 0;
   const overlays = (zo.districts || []).map((o) => o.type || o.name).filter(Boolean);
   return (
@@ -2844,9 +2844,10 @@ function NashvilleIntelPanel({ apn, address, pw }) {
         {ped && <div style={{ fontSize: 12.5 }}><span style={muted}>Pedestrian benefit zone: </span><span style={ivory}>{ped.zone}{ped.description ? ` · ${ped.description}` : ""}</span><span style={muted}> — walkable, reduced parking minimums</span></div>}
         {hist && <div style={{ fontSize: 12.5 }}><span style={{ color: C.amber }}>Historic: </span><span style={ivory}>{[hist.status, hist.year_built ? `built ${hist.year_built}` : "", hist.survey].filter(Boolean).join(" · ")}</span><span style={muted}> — landmark/district design-review constraint</span></div>}
       </>}
-      {(crime || walk || hood) && <>
+      {(crime || walk || hood || traffic) && <>
         <H>LOCATION / SAFETY</H>
         {hood && <div style={{ fontSize: 12.5 }}><span style={muted}>Neighborhood: </span><span style={ivory}>{hood}</span></div>}
+        {traffic && <div style={{ fontSize: 12.5 }}><span style={muted}>Traffic (TDOT): </span><span style={ivory}>~{Number(traffic.nearest.aadt).toLocaleString()} vehicles/day</span><span style={muted}>{traffic.nearest.location ? ` · ${traffic.nearest.location}` : ""}{traffic.nearest.dist_mi != null ? ` · ${traffic.nearest.dist_mi} mi` : ""} · AADT {traffic.nearest.year} (latest published count)</span></div>}
         {walk && <div style={{ fontSize: 12.5 }}><span style={muted}>Walkability: </span><span style={ivory}>BCycle “{walk.nearest_bcycle.name}”{walk.nearest_bcycle.dist_mi != null ? ` ${walk.nearest_bcycle.dist_mi} mi` : ""}</span><span style={muted}> · {walk.bcycle_within_075mi} station{walk.bcycle_within_075mi === 1 ? "" : "s"} within ¾ mi</span></div>}
         {crime && <div style={{ fontSize: 12.5 }}><span style={muted}>Crime (~¼ mi, 24 mo): </span><span style={crime.violent > 0 ? { color: C.amber } : ivory}>{crime.count}{crime.capped ? "+" : ""} incident{crime.count === 1 ? "" : "s"}{crime.violent ? ` · ${crime.violent} violent` : ""}</span>{crime.top_offenses && crime.top_offenses.length ? <span style={muted}> · {crime.top_offenses.slice(0, 3).map((o) => `${o.offense.toLowerCase()} (${o.count})`).join(", ")}</span> : ""}</div>}
         {crime && <div style={{ fontSize: 10.5, ...muted }}>MNPD incidents, masked to ~block — context, not a precise rate.</div>}

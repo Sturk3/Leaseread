@@ -20,6 +20,10 @@
 const MAPS = process.env.NASH_MAPS_URL || "https://maps.nashville.gov/arcgis/rest/services";
 // Metro's ArcGIS-Hub hosted feature services (permits, beer, 311, STR) live on this org.
 const HUB = process.env.NASH_HUB_URL || "https://services2.arcgis.com/HdTo6HJqh92wn4D8/arcgis/rest/services";
+// TDOT (STATE) traffic-count stations — AADT (vehicles/day) by year. This is the freely queryable
+// ArcGIS layer; its latest column is ~2015 (fresher counts are only in TDOT's non-API MS2 system),
+// so it's a directional corridor-traffic signal with an explicit year, not a current count.
+const TDOT_TRAFFIC = process.env.TDOT_TRAFFIC_URL || "https://services1.arcgis.com/HLC8bAygObK4fhPW/arcgis/rest/services/Traffic_History_TDOT/FeatureServer/0";
 
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
 const toNum = (v) => { if (v == null || v === "") return null; const n = Number(String(v).replace(/[$,]/g, "")); return Number.isFinite(n) ? n : null; };
@@ -90,6 +94,13 @@ const milesBetween = (lat1, lon1, lat2, lon2) => {
 };
 const distMi = (g, lat, lon) => (g && g.y != null && g.x != null && lat != null) ? Math.round(milesBetween(lat, lon, g.y, g.x) * 100) / 100 : null;
 
+// TDOT station rows carry AADT_<year> columns; return the most recent populated count.
+const AADT_YEARS = []; for (let y = 2015; y >= 1990; y--) AADT_YEARS.push(y);
+function latestAadt(a) {
+  for (const y of AADT_YEARS) { const v = toNum(a["AADT_" + y]); if (v && v > 0) return { aadt: v, year: y }; }
+  return null;
+}
+
 // "<houseNumber>" + primary street token out of a free-form address, for the 311 LIKE join.
 function addrParts(address) {
   const a = clean(address);
@@ -120,7 +131,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v5-crime-walk-food-hood", maps: MAPS, hub: HUB });
+    if (debug) return res.status(200).json({ ok: true, build: "nashvilleintel-v6-tdot-traffic", maps: MAPS, hub: HUB });
 
     const ap = clean(apn);
     if (!ap && !address) return res.status(400).json({ error: "Need an APN (preferred) or address." });
@@ -132,7 +143,7 @@ export default async function handler(req, res) {
     // Centroid first (overlays need it); then fan everything else out in parallel.
     const centroid = ap ? await parcelGeomCentroid(ap) : null;
 
-    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows, violations, rezonings, tif, redevelopment, pedestrian, historic, crime, bcycle, foodstores, hood] = await Promise.all([
+    const [permits, applications, trade, beer, str, c311, overlays, flood, policy, footprints, bidRows, violations, rezonings, tif, redevelopment, pedestrian, historic, crime, bcycle, foodstores, hood, traffic] = await Promise.all([
       parcelWhere ? agQuery(`${HUB}/Building_Permits_Issued_2/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Address,Purpose,Contact,Date_Issued,Date_Entered,Lat,Lon", orderByFields: "Date_Entered DESC", resultRecordCount: "30" }) : [],
       parcelWhere ? agQuery(`${HUB}/Building_Permit_Applications_Feature_Layer_view/FeatureServer/0`, { where: parcelWhere, outFields: "Permit__,Permit_Type_Description,Permit_Subtype_Description,Const_Cost,Purpose,Contact,Date_Entered,Date_Issued", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
       parcelWhere ? agQuery(`${HUB}/Trade_Permits_View/FeatureServer/0`, { where: parcelWhere, outFields: "PermitNumber,Trade,Permit_Subtype_Description,Contract_Value,Purpose,Case_Status,Date_Entered", orderByFields: "Date_Entered DESC", resultRecordCount: "20" }) : [],
@@ -173,6 +184,8 @@ export default async function handler(req, res) {
       centroid ? nearLayer(`${HUB}/FoodStores_Total_view/FeatureServer/0`, centroid.lon, centroid.lat, 500, "StoreName,BusinessType,USER_Currently_Operational__Yes", 25) : [],
       // SUBMARKET — the named neighborhood the parcel sits in (blank downtown, populated elsewhere).
       centroid ? pointInLayer(`${HUB}/Neighborhood_Boundaries/FeatureServer/0`, centroid.lon, centroid.lat, "Name") : [],
+      // TRAFFIC (STATE) — nearest TDOT AADT count station within ~0.4mi = retail visibility (cars/day).
+      centroid ? nearLayer(TDOT_TRAFFIC, centroid.lon, centroid.lat, 650, "*", 10) : [],
     ]);
 
     // Building permits — recent, with the repositioning signal tagged.
@@ -307,6 +320,14 @@ export default async function handler(req, res) {
     // SUBMARKET — the named neighborhood containing the parcel.
     const neighborhood = hood && hood[0] ? clean(hood[0].Name) || null : null;
 
+    // TRAFFIC — nearest TDOT AADT count station (retail visibility). Each station's latest populated
+    // AADT year (often ~2015 in this layer) + location + distance; sorted nearest.
+    const trafficStations = (traffic || []).map((t) => {
+      const la = latestAadt(t);
+      return la ? { aadt: la.aadt, year: la.year, location: clean(t.LOCATION) || null, route: clean(t.RTE_NUMBER) || null, dist_mi: distMi(t._geom, centroid && centroid.lat, centroid && centroid.lon) } : null;
+    }).filter(Boolean).sort((a, b) => (a.dist_mi ?? 9) - (b.dist_mi ?? 9));
+    const trafficInfo = trafficStations.length ? { nearest: trafficStations[0], stations: trafficStations.slice(0, 3) } : null;
+
     return res.status(200).json({
       apn: ap || null, address: clean(address) || null, centroid,
       building, business_improvement_district: bid,
@@ -326,6 +347,7 @@ export default async function handler(req, res) {
       walkability,
       food_stores: foodStores,
       neighborhood,
+      traffic: trafficInfo,
       zoning_overlays: { historic: historicOverlay, districts: overlayList },
       flood: floodInfo,
       policy: policyInfo,

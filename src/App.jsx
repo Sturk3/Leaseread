@@ -4540,12 +4540,13 @@ function ContactList({ phones = [], emails = [] }) {
 // Owner-contact lookup — one click runs the skip trace (Tracerfy), charged only on a
 // match, owner-deduped + cached so you never pay twice. (The free web-search lane is
 // parked; /api/findcontact still exists if a BRAVE_API_KEY is ever added back.)
-function ContactReveal({ r, pw, autoRun }) {
+function ContactReveal({ r, pw, autoRun, noAlt }) {
   const cachedSkip = _skipCache.get(skipKey(r)) || null;
   const [skip, setSkip] = useState(cachedSkip);
   const [skipState, setSkipState] = useState(cachedSkip ? "done" : "idle"); // idle|loading|done|error|nokey
   const [err, setErr] = useState("");
   const [spend, setSpend] = useState(readSkipSpend());
+  const [altOpen, setAltOpen] = useState(false); // "trace a different person" (unmasked LLC principal)
 
   const runSkip = async () => {
     setSkipState("loading"); setErr("");
@@ -4570,11 +4571,34 @@ function ContactReveal({ r, pw, autoRun }) {
   const box = { background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", marginTop: 10 };
   const pill = (color) => ({ ...ACTION_PILL, padding: "7px 13px", background: C.panel, border: `1px solid ${color}`, color });
 
+  // "Unmasked the LLC elsewhere? Trace the person" — an inline manual trace seeded with THIS
+  // property's address, so a principal you found on another site (OpenCorporates / SOS) can be
+  // traced without leaving the dossier or re-typing the address. Suppressed on nested/manual
+  // reveals (noAlt) so it doesn't recurse. The owner-of-record trace above still runs the LLC.
+  const altBlock = noAlt ? null : (
+    <div style={{ marginTop: 10, borderTop: `1px dashed ${C.line}`, paddingTop: 9 }}>
+      {!altOpen ? (
+        <button onClick={() => setAltOpen(true)} className="mono lift" style={{ ...ACTION_PILL, fontSize: 10.5, padding: "3px 9px" }}>
+          🔓 Unmasked the LLC elsewhere? Trace the person →
+        </button>
+      ) : (
+        <div>
+          <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.05em", marginBottom: 7 }}>
+            TRACE A PERSON — who you found behind the LLC + their address
+          </div>
+          <SkipTraceForm pw={pw} seed={{ name: "", street: r.contact_address || r.address || "", city: r.city || "", state: r.state || "", zip: r.zip || "" }} />
+          <button onClick={() => setAltOpen(false)} className="mono lift" style={{ ...ACTION_PILL, marginTop: 8, fontSize: 10, padding: "2px 8px" }}>▾ hide</button>
+        </div>
+      )}
+    </div>
+  );
+
   if (skipState === "idle") {
     return (
       <div style={box}>
         <button onClick={runSkip} className="mono lift" style={pill(C.gold)}>🔎 Find owner contact</button>
         <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>~$0.12 · charged only on a match · cached</span>
+        {altBlock}
       </div>
     );
   }
@@ -4660,52 +4684,74 @@ function ContactReveal({ r, pw, autoRun }) {
       {spend?.hits ? (
         <div style={{ fontSize: 10, color: C.muted, marginTop: 8 }}>skip-trace spend: ${Number(spend.est || 0).toFixed(2)} over {spend.hits} reveal{spend.hits === 1 ? "" : "s"}</div>
       ) : null}
+      {altBlock}
     </div>
   );
 }
 
-// Manual skip-trace tool — type any name + address and trace it directly (e.g. an
-// officer name you found in a property's HPD records, far better than tracing a building).
-function ManualSkipTrace({ pw }) {
-  const [name, setName] = useState("");
-  const [street, setStreet] = useState("");
-  const [city, setCity] = useState("");
-  const [stateV, setStateV] = useState("NY");
-  const [zip, setZip] = useState("");
+// Persist the last city/state/zip typed into a manual trace so they don't have to be
+// re-entered every lookup — especially the STATE, since you work one market at a time.
+const SKIP_FORM_KEY = "fr_skipform_v1";
+function loadSkipForm() { try { return JSON.parse(localStorage.getItem(SKIP_FORM_KEY) || "{}"); } catch { return {}; } }
+function saveSkipForm(v) { try { localStorage.setItem(SKIP_FORM_KEY, JSON.stringify(v)); } catch {} }
+
+// Shared name + address skip-trace form. Used standalone (the Skip Trace tab) and inline in a
+// property dossier (seeded with that property's address) so an LLC principal you unmasked on
+// another site can be traced without re-typing. NOTE: Tracerfy finds people by ADDRESS
+// (find_owner), so enter the PERSON's own address — the name only flags whether the returned
+// match is them. City/State/ZIP default from the seed (in-dossier) or the last values used.
+function SkipTraceForm({ pw, seed }) {
+  const last = loadSkipForm();
+  const [name, setName] = useState(seed?.name || "");
+  const [street, setStreet] = useState(seed?.street || "");
+  const [city, setCity] = useState(seed?.city || last.city || "");
+  const [stateV, setStateV] = useState(seed?.state || last.state || "");
+  const [zip, setZip] = useState(seed?.zip || last.zip || "");
   const [target, setTarget] = useState(null);
 
   const ready = name.trim() && street.trim();
   const run = () => {
     if (!ready) return;
+    saveSkipForm({ city: city.trim(), state: stateV.trim(), zip: zip.trim() });
     setTarget({
       name: name.trim(), entity_type: "",
-      contact_address: street.trim(), city: city.trim(), state: stateV.trim() || "NY", zip: zip.trim(),
+      contact_address: street.trim(), city: city.trim(), state: stateV.trim(), zip: zip.trim(),
       address: street.trim(), borough: "",
       deal_id: `manual-${name.trim()}-${zip.trim()}-${Date.now()}`,
     });
   };
+  const onKey = (e) => { if (e.key === "Enter" && ready) { e.preventDefault(); run(); } };
 
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+        <label style={{ gridColumn: "span 2" }}><div className="mono" style={labelStyle}>NAME</div><input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={onKey} placeholder="First Last (the person)" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+        <label style={{ gridColumn: "span 2" }}><div className="mono" style={labelStyle}>STREET ADDRESS</div><input value={street} onChange={(e) => setStreet(e.target.value)} onKeyDown={onKey} placeholder="123 Main St (the person's address)" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+        <label><div className="mono" style={labelStyle}>CITY</div><input value={city} onChange={(e) => setCity(e.target.value)} onKeyDown={onKey} placeholder="Nashville" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+        <label><div className="mono" style={labelStyle}>STATE</div><input value={stateV} onChange={(e) => setStateV(e.target.value)} onKeyDown={onKey} placeholder="TN" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+        <label><div className="mono" style={labelStyle}>ZIP</div><input value={zip} onChange={(e) => setZip(e.target.value)} onKeyDown={onKey} placeholder="37206" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
+      </div>
+      <button onClick={run} disabled={!ready}
+        style={{ marginTop: 14, width: "100%", cursor: ready ? "pointer" : "default", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: ready ? C.gold : C.panel2, color: ready ? "#ffffff" : C.muted }}>
+        Skip trace →
+      </button>
+      {target && <ContactReveal key={target.deal_id} r={target} pw={pw} autoRun noAlt />}
+    </>
+  );
+}
+
+// Manual skip-trace tool — type any name + address and trace it directly (e.g. an LLC
+// principal you unmasked on another site, far better than tracing a building).
+function ManualSkipTrace({ pw }) {
   return (
     <div style={{ marginTop: 22 }}>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
         <div className="mono" style={{ fontSize: 11, color: C.muted, letterSpacing: "0.05em", marginBottom: 12 }}>MANUAL SKIP TRACE — name + address</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
-          <label style={{ gridColumn: "span 2" }}><div className="mono" style={labelStyle}>NAME</div><input value={name} onChange={(e) => setName(e.target.value)} placeholder="First Last (or an LLC name)" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
-          <label style={{ gridColumn: "span 2" }}><div className="mono" style={labelStyle}>STREET ADDRESS</div><input value={street} onChange={(e) => setStreet(e.target.value)} placeholder="123 Main St" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
-          <label><div className="mono" style={labelStyle}>CITY</div><input value={city} onChange={(e) => setCity(e.target.value)} placeholder="New York" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
-          <label><div className="mono" style={labelStyle}>STATE</div><input value={stateV} onChange={(e) => setStateV(e.target.value)} placeholder="NY" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
-          <label><div className="mono" style={labelStyle}>ZIP</div><input value={zip} onChange={(e) => setZip(e.target.value)} placeholder="10012" style={{ ...fieldStyle, width: "100%", marginTop: 4 }} /></label>
-        </div>
-        <button onClick={run} disabled={!ready}
-          style={{ marginTop: 14, width: "100%", cursor: ready ? "pointer" : "default", border: "none", borderRadius: 9, padding: "13px", fontSize: 14, fontWeight: 600, letterSpacing: "0.02em", background: ready ? C.gold : C.panel2, color: ready ? "#ffffff" : C.muted }}>
-          Skip trace →
-        </button>
+        <SkipTraceForm pw={pw} />
       </div>
 
-      {target && <ContactReveal key={target.deal_id} r={target} pw={pw} autoRun />}
-
       <div style={{ marginTop: 14, fontSize: 12, color: C.muted, lineHeight: 1.55 }}>
-        Trace any name + address directly. <strong style={{ color: C.ivory }}>~$0.10 per match</strong> (Tracerfy), charged only on a hit, cached so you never pay twice for the same name. Best use: trace a <strong style={{ color: C.gold }}>specific person</strong> — e.g. a head officer / owner name from a property’s HPD records — instead of the building (which returns occupants). <span style={{ color: C.green }}>✓ OWNER MATCH</span> means a returned name matched what you typed.
+        Trace any name + address directly. <strong style={{ color: C.ivory }}>~$0.10 per match</strong> (Tracerfy), charged only on a hit, cached so you never pay twice for the same name. Best use: trace a <strong style={{ color: C.gold }}>specific person</strong> — e.g. an LLC principal you unmasked on another site, or an officer from a property’s records — instead of the building (which returns occupants). Enter the <strong style={{ color: C.ivory }}>person’s own address</strong>: Tracerfy finds people by address, and the name flags whether the <span style={{ color: C.green }}>✓ OWNER MATCH</span> is them. City / State / ZIP are remembered for next time.
       </div>
     </div>
   );

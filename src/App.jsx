@@ -1487,11 +1487,13 @@ function CompTool({ pw }) {
           <option value="nyc">New York City</option>
           <option value="ct">Greenwich · CT</option>
           <option value="ny">Hamptons · NY</option>
+          <option value="tn">Nashville · TN</option>
         </select>
       </div>
       {market === "nyc" && <CompSheet pw={pw} />}
       {market === "ct" && <CTCompSheet pw={pw} />}
       {market === "ny" && <NYCompSheet pw={pw} />}
+      {market === "tn" && <NashCompSheet pw={pw} />}
     </div>
   );
 }
@@ -1624,6 +1626,82 @@ function NYCompSheet({ pw }) {
           {sales.state === "error" && <div style={{ fontSize: 12.5, color: C.red }}>{sales.err}</div>}
           {sales.state === "done" && <ResearchBriefBody text={sales.text} />}
         </div>
+      </div>)}
+    </div>
+  );
+}
+
+const NASH_COMP_TYPES = [["retail", "Retail"], ["commercial", "Commercial (retail / office)"], ["office", "Office"], ["apartments", "Apartments"], ["industrial", "Industrial"], ["any", "Any type"]];
+function nashCompCSV(rows) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const cols = [["Address", (r) => r.address], ["Owner", (r) => r.owner], ["Use", (r) => r.use], ["Sale price", (r) => r._price], ["Sold", (r) => r.sale_year], ["Acres", (r) => r.acres], ["$/acre", (r) => (r._ppa ? Math.round(r._ppa) : "")], ["Frontage ft", (r) => r.frontage_ft || ""], ["Appraised", (r) => r.appraised_value || ""]];
+  return cols.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => cols.map((c) => esc(c[1](r))).join(",")).join("\n");
+}
+// Nashville / Davidson County sale comps. TN's parcel data DOES carry recorded sale price +
+// year (unlike the Hamptons roll), so these are real sales — but it has NO building SF (acreage
+// only), so the comp basis is sale price + $/acre, not $/SF. Filter by an optional street/corridor
+// (Metro PropAddr LIKE), type, and sold-since year.
+function NashCompSheet({ pw }) {
+  const [area, setArea] = useState("");
+  const [type, setType] = useState("retail");
+  const [sinceYear, setSinceYear] = useState("2019");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [data, setData] = useState(null);
+  const run = async () => {
+    setError(""); setData(null); setLoading(true);
+    try {
+      const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: type, address: area.trim() || undefined, sinceYear, limit: 500 });
+      const cutoff = Number(sinceYear || 0);
+      const comps = (d.properties || []).filter((p) => p.sale_price && p.sale_year)
+        .map((p) => ({ ...p, _price: p.sale_price, _year: Number(p.sale_year), _ppa: (p.acres && p.acres > 0) ? p.sale_price / p.acres : null }))
+        .filter((c) => c._price >= 50000 && (!cutoff || c._year >= cutoff))
+        .sort((a, b) => (b._year || 0) - (a._year || 0) || (b._price || 0) - (a._price || 0));
+      const prices = comps.map((c) => c._price);
+      const ppas = comps.map((c) => c._ppa).filter((x) => x != null);
+      setData({ comps, stats: { count: comps.length, medPrice: median(prices), avgPrice: prices.length ? prices.reduce((s, x) => s + x, 0) / prices.length : null, medPpa: median(ppas) } });
+    } catch (e) { setError(e.message || "Failed."); }
+    finally { setLoading(false); }
+  };
+  const st = data && data.stats;
+  return (
+    <div>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+          <label><div className="mono" style={labelStyle}>STREET / CORRIDOR <span style={{ color: C.muted }}>(optional)</span></div><input value={area} onChange={(e) => setArea(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="e.g. Broadway (blank = citywide)" /></label>
+          <label><div className="mono" style={labelStyle}>TYPE</div><select value={type} onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{NASH_COMP_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+          <label><div className="mono" style={labelStyle}>SOLD SINCE</div><input type="number" value={sinceYear} onChange={(e) => setSinceYear(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="2019" /></label>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
+          <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "BUILDING…" : "■ BUILD COMP SET"}</button>
+          {data && data.comps.length > 0 && <button onClick={() => downloadBlob(nashCompCSV(data.comps), `comps_nashville_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
+        </div>
+        {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red }}>{error}</div>}
+        <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>Nashville / Davidson County recorded sales (Metro parcel data) for {type === "any" ? "all traded" : type} properties. TN parcel data has <strong style={{ color: C.ivory }}>no building SF</strong>, so comps are <strong style={{ color: C.ivory }}>sale price + $/acre</strong>, not $/SF. Top 500 by value; recorded prices can include non-arm's-length transfers — verify outliers.</div>
+      </div>
+      {data && (<div style={{ marginTop: 18 }}>
+        {data.comps.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No recorded sales matched. Widen the year, clear the corridor, or change the type.</div> : (<>
+          <div style={{ display: "flex", border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden", marginBottom: 14 }}>
+            {[["COMPS", st.count], ["MEDIAN PRICE", st.medPrice != null ? fmtAmount(st.medPrice) : "—"], ["AVG PRICE", st.avgPrice != null ? fmtAmount(st.avgPrice) : "—"], ["MEDIAN $/ACRE", st.medPpa != null ? `$${Math.round(st.medPpa).toLocaleString()}` : "—"]].map(([k, v], i) => (
+              <div key={k} style={{ flex: 1, padding: "10px 12px", borderLeft: i ? `1px solid ${C.line}` : "none", background: C.ink }}><div className="mono" style={{ fontSize: 9, color: C.muted, letterSpacing: "0.12em" }}>{k}</div><div style={{ fontSize: 16, fontWeight: 700, marginTop: 3 }}>{v}</div></div>
+            ))}
+          </div>
+          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>{["Address", "Owner", "Use", "Sale", "Sold", "Acres", "$/acre", "Frontage"].map((h, i) => <th key={h} style={{ textAlign: i >= 3 && i <= 6 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}</tr></thead>
+              <tbody>{data.comps.map((c, i) => (<tr key={i} style={{ borderBottom: `1px solid ${C.line}` }}>
+                <td style={{ padding: "8px 12px", fontSize: 12.5 }}>{c.address}</td>
+                <td style={{ padding: "8px 12px", fontSize: 12, color: C.muted, maxWidth: 180 }}>{c.owner}</td>
+                <td style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>{c.use}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12.5, textAlign: "right" }}>{fmtAmount(c._price)}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12, textAlign: "right", color: C.muted }}>{c.sale_year || "—"}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12, textAlign: "right", color: C.muted }}>{c.acres != null ? c.acres : "—"}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12.5, textAlign: "right", fontWeight: 700, color: C.gold }}>{c._ppa ? `$${Math.round(c._ppa).toLocaleString()}` : "—"}</td>
+                <td className="mono" style={{ padding: "8px 12px", fontSize: 12, color: C.muted }}>{c.frontage_ft ? `${c.frontage_ft} ft` : "—"}</td>
+              </tr>))}</tbody>
+            </table>
+          </div>
+        </>)}
       </div>)}
     </div>
   );

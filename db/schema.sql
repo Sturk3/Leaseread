@@ -40,3 +40,21 @@ create table if not exists leads (
 create index if not exists leads_status_idx  on leads (status);
 create index if not exists leads_borough_idx on leads (borough);
 create index if not exists leads_created_idx on leads (created_at desc);
+
+-- ── Pipeline (the Saved List) ─────────────────────────────────────────────────
+-- The shared team pipeline behind /api/pipeline. The endpoint AUTO-CREATES this
+-- table on first use, so running this file is optional — it's here as reference.
+-- One row per saved property; `lead` is the full client-side lead object
+-- (denormalized display fields + status + notes + the raw sourcing row), keyed
+-- by the client's ADDRESS|OWNER id. Removes are tombstones (deleted=true) so a
+-- delete on one device wins over another device's stale local copy; updated_at
+-- is the client's Date.now() ms and drives last-write-wins merging.
+
+create table if not exists pipeline (
+  id         text primary key,
+  lead       jsonb not null,
+  status     text not null default 'watching',
+  deleted    boolean not null default false,
+  updated_at bigint not null default 0,
+  created_at timestamptz not null default now()
+);

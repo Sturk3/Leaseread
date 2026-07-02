@@ -4467,12 +4467,16 @@ function savedAgo(ts) {
   return new Date(ts).toLocaleDateString();
 }
 
-// ── Saved List / Pipeline (browser-local; shaped for a shared DB later) ───────
+// ── Saved List / Pipeline (local-first, synced to the shared Postgres) ────────
 // Same storage pattern as the AI answer cache: ONE localStorage object keyed by the
-// property id (aiCacheId = ADDRESS|OWNER), so a saved lead lines up with its cached AI
-// answers and migrating to a shared Supabase/Neon table later is a BACKEND SWAP, not a
-// rewrite of the call sites. Each lead stores the denormalized display fields + status +
-// notes + the full normalized row (`row`) so the dossier can be re-rendered from the pipeline.
+// property id (aiCacheId = ADDRESS|OWNER). localStorage stays the SYNCHRONOUS store
+// the UI reads (instant stars, no loading states); /api/pipeline is the shared team
+// copy. Every mutation also fires a background push, and opening the Pipeline tab
+// pull-merges (last-write-wins by updatedAt, with server tombstones for removes).
+// With no DATABASE_URL the endpoint answers dbConfigured:false and the list quietly
+// stays device-local — the original behavior. Each lead stores the denormalized
+// display fields + status + notes + the full normalized row (`row`) so the dossier
+// can be re-rendered from the pipeline.
 const PIPELINE_KEY = "fr_pipeline_v1";
 const PIPELINE_MAX = 400; // cap so localStorage (~5MB) can't overflow; evict oldest
 const PIPELINE_STATUSES = [["watching", "Watching"], ["contacted", "Contacted"], ["pursuing", "Pursuing"], ["passed", "Passed"]];
@@ -4495,9 +4499,47 @@ function saveLead(r, opp) {
   const ids = Object.keys(p);
   if (ids.length > PIPELINE_MAX) { ids.sort((a, b) => (p[a].savedAt || 0) - (p[b].savedAt || 0)); for (const old of ids.slice(0, ids.length - PIPELINE_MAX)) delete p[old]; }
   writePipeline(p);
+  pipelinePush([p[id]]);
 }
-function unsaveLead(id) { const p = loadPipeline(); if (p[id]) { delete p[id]; writePipeline(p); } }
-function updateLead(id, patch) { const p = loadPipeline(); if (p[id]) { p[id] = { ...p[id], ...patch, updatedAt: Date.now() }; writePipeline(p); } }
+function unsaveLead(id) { const p = loadPipeline(); if (p[id]) { delete p[id]; writePipeline(p); pipelineRemove(id); } }
+function updateLead(id, patch) { const p = loadPipeline(); if (p[id]) { p[id] = { ...p[id], ...patch, updatedAt: Date.now() }; writePipeline(p); pipelinePush([p[id]]); } }
+
+// ── Shared-pipeline sync (Postgres via /api/pipeline) ─────────────────────────
+// Pushes are fire-and-forget: the local copy is already right, and if the server
+// is unreachable (offline, no DB) the next successful sync reconciles.
+const pipelinePw = () => { try { return sessionStorage.getItem("lr_pw") || ""; } catch { return ""; } };
+async function pipelinePush(leads) {
+  try { await postJSON("/api/pipeline", { password: pipelinePw(), action: "upsert", leads }); } catch { /* stays local */ }
+}
+async function pipelineRemove(id) {
+  try { await postJSON("/api/pipeline", { password: pipelinePw(), action: "remove", id }); } catch { /* stays local */ }
+}
+// Pull the shared list and merge into localStorage. Newer updatedAt wins; server
+// tombstones delete local copies (unless the local one is newer — a re-save);
+// anything the server is missing or has stale gets pushed back. Returns true when
+// a shared DB is connected, false when the list is device-local.
+async function syncPipeline() {
+  const d = await postJSON("/api/pipeline", { password: pipelinePw(), action: "list" });
+  if (!d || d.dbConfigured === false) return false;
+  const merged = loadPipeline();
+  const serverAt = {}; // id -> the server's updatedAt (live row or tombstone)
+  for (const s of d.leads || []) {
+    if (!s || !s.id) continue;
+    serverAt[s.id] = s.updatedAt || 0;
+    const mine = merged[s.id];
+    if (!mine || (s.updatedAt || 0) >= (mine.updatedAt || 0)) merged[s.id] = s;
+  }
+  for (const t of d.deleted || []) {
+    if (!t || !t.id) continue;
+    serverAt[t.id] = Math.max(serverAt[t.id] || 0, t.updatedAt || 0);
+    const mine = merged[t.id];
+    if (mine && (t.updatedAt || 0) >= (mine.updatedAt || 0)) delete merged[t.id];
+  }
+  const toPush = Object.values(merged).filter((l) => (l.updatedAt || 0) > (serverAt[l.id] || 0) || !(l.id in serverAt));
+  writePipeline(merged);
+  if (toPush.length) pipelinePush(toPush); // background — the local list is already correct
+  return true;
+}
 
 // Star toggle shown on each sourcing result — save/unsave the lead to the Pipeline.
 function SaveLeadButton({ r, opp }) {
@@ -4527,7 +4569,15 @@ function Pipeline({ pw }) {
   const [leads, setLeads] = useState(() => Object.values(loadPipeline()));
   const [filter, setFilter] = useState("all");
   const [openId, setOpenId] = useState(null);
+  const [shared, setShared] = useState(null); // null = syncing, true = shared DB, false = device-local
   const refresh = () => setLeads(Object.values(loadPipeline()));
+  useEffect(() => {
+    let alive = true;
+    syncPipeline()
+      .then((ok) => { if (alive) { setShared(ok); refresh(); } })
+      .catch(() => { if (alive) setShared(false); });
+    return () => { alive = false; };
+  }, []);
 
   const counts = {}; for (const l of leads) counts[l.status] = (counts[l.status] || 0) + 1;
   const sorted = [...leads].sort((a, b) => (b.opp?.overall ?? -1) - (a.opp?.overall ?? -1) || (b.savedAt || 0) - (a.savedAt || 0));
@@ -4543,11 +4593,17 @@ function Pipeline({ pw }) {
           {tab("all", "All", leads.length)}
           {PIPELINE_STATUSES.map(([v, l]) => tab(v, l, counts[v] || 0))}
         </div>
-        {leads.length > 0 && <button onClick={() => downloadBlob(pipelineCSV(shown), `pipeline_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="mono" title={shared ? "Synced to the shared team database" : shared === false ? "No shared database connected — saved in this browser only" : "Checking the shared database…"}
+            style={{ fontSize: 10, letterSpacing: "0.05em", color: shared ? C.green : C.muted }}>
+            {shared ? "● SHARED LIST" : shared === false ? "○ THIS DEVICE ONLY" : "◌ SYNCING…"}
+          </span>
+          {leads.length > 0 && <button onClick={() => downloadBlob(pipelineCSV(shown), `pipeline_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
+        </div>
       </div>
       {leads.length === 0 ? (
         <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, marginTop: 8 }}>
-          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>Your pipeline is empty.</span> In <strong style={{ color: C.ivory }}>Sourcing</strong>, hit the <span style={{ color: C.gold }}>☆</span> on any result to save it here. Then set a status (Watching → Contacted → Pursuing → Passed), add notes, and work the dossier + owner contact — all in one place. <span style={{ color: C.muted }}>Saved on this device only; a shared team list comes later.</span>
+          <span className="serif" style={{ color: C.ivory, fontSize: 15 }}>Your pipeline is empty.</span> In <strong style={{ color: C.ivory }}>Sourcing</strong>, hit the <span style={{ color: C.gold }}>☆</span> on any result to save it here. Then set a status (Watching → Contacted → Pursuing → Passed), add notes, and work the dossier + owner contact — all in one place. <span style={{ color: C.muted }}>{shared ? "Saved to the shared team list — everyone on the password sees it." : "Saved on this device only; connect a Postgres (Vercel → Storage → Neon, set DATABASE_URL) to share it with the team."}</span>
         </div>
       ) : shown.length === 0 ? (
         <div style={{ color: C.muted, fontSize: 13 }}>No leads with this status.</div>

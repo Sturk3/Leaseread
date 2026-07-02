@@ -42,13 +42,19 @@ $0. NYC Open Data is free, the sourcing tab makes no Claude calls, and Vercel's
 free tier covers it. (Vercel's free tier is technically non-commercial — revisit
 Pro only once it's a real team workflow.)
 
-## Parked for later (optional)
+## Shared Pipeline (optional, one env var)
 
-If this becomes a team workflow and you want a shared, persisted lead list
-instead of per-run CSVs, the groundwork is already in the repo but **not wired
-into the UI**: `api/leads.js` (Postgres read/update) and `db/schema.sql` (the
-`leads` table). To turn it on you'd add a Neon `DATABASE_URL` and re-expose the
-"shared list" UI — ask and I'll light it up. Until then, ignore it.
+The **Pipeline** tab (the saved list) works browser-local out of the box. To
+make it a shared team list, connect a Postgres and set one env var:
+
+1. Vercel project → **Storage** → create a **Neon** (Postgres) database — this
+   sets `DATABASE_URL` on the project automatically (or set it by hand).
+2. Redeploy. That's it — `api/pipeline.js` creates its table on first use
+   (`db/schema.sql` documents the schema).
+
+The Pipeline header shows **● SHARED LIST** when connected. Saves, statuses,
+notes, and removes sync across every browser using the site password;
+last-write-wins if two people edit the same lead.
 
 ## Standalone Python agent
 

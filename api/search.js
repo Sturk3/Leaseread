@@ -2,8 +2,9 @@
 //
 //   POST /api/search  { password, market, ...filters }
 //
-// Markets: nyc | hamptons | ct | ma | sf | nashville — each implemented as a
-// module in api/_markets/ (underscore folders are not deployed as functions).
+// Markets: nyc | hamptons | ct | ma | sf | nashville | charleston — each
+// implemented as a module in api/_markets/ (underscore folders are not
+// deployed as functions).
 // Unified filter vocabulary, honored by every market where the data allows:
 //   town, propertyType, address, owner, minValue, maxValue, minSqft, sinceYear,
 //   limit, centerLat, centerLon, radiusMiles
@@ -20,8 +21,9 @@ import * as ct from "./_markets/ct.js";
 import * as ma from "./_markets/ma.js";
 import * as sf from "./_markets/sf.js";
 import * as nashville from "./_markets/nashville.js";
+import * as charleston from "./_markets/charleston.js";
 
-const MARKETS = { nyc, hamptons, ct, ma, sf, nashville };
+const MARKETS = { nyc, hamptons, ct, ma, sf, nashville, charleston, sc: charleston };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });

@@ -251,6 +251,31 @@ const TOOLS = [
     },
   },
   {
+    name: "search_charleston_properties",
+    description:
+      "Source properties in CHARLESTON, SC / Charleston County (downtown Charleston, Mount Pleasant, North Charleston, the " +
+      "beach towns, Johns/James/Daniel Island) from Charleston County's assessor parcel data. Returns the OWNER of record + " +
+      "mailing address (absentee flagged), property address, assessor use class, deeded acreage, last SALE price + year " +
+      "(→ years owned), deed book/page, plus City of Charleston construction-permit activity (2010–present) on the top " +
+      "results. South Carolina is an open-records state, so owners ARE public (a full sourcing market like NYC/CT/MA/TN). " +
+      "Filter by type, street, sale-price range, min acreage, and sold-since year, or pass owner for their whole county " +
+      "portfolio. NOTE: no assessed value or building SF is published — $ figures are last SALE prices, so minValue also " +
+      "filters OUT long-held (never-recently-sold) parcels; leave it empty when hunting long-tenure owners. For an owner " +
+      "LLC, follow with web_research (SC Secretary of State) for principals/contacts.",
+    input_schema: {
+      type: "object",
+      properties: {
+        propertyType: { type: "string", enum: ["any", "commercial", "retail", "office", "apartments", "hotel", "industrial", "vacant", "single_family", "condo", "residential"], description: "Assessor class filter. 'commercial' covers retail/restaurant/office/hotel/parking; 'retail' is retail + general commercial." },
+        address: { type: "string", description: "Filter to a street or address, e.g. 'KING ST' or '357 King St'." },
+        owner: { type: "string", description: "Owner-portfolio mode: every Charleston County parcel this owner holds (type filter is ignored)." },
+        minValue: { type: "number", description: "Minimum last SALE price (there is no assessed value; this drops never-recently-sold parcels)." },
+        maxValue: { type: "number", description: "Maximum last sale price." },
+        minAcres: { type: "number", description: "Minimum deeded lot acreage." },
+        sinceYear: { type: "number", description: "Only parcels whose deed was recorded this year or later." },
+      },
+    },
+  },
+  {
     name: "search_sf_properties",
     description:
       "Source properties in SAN FRANCISCO from DataSF's assessor roll. Returns property characteristics (use, building/lot SF, " +
@@ -427,6 +452,7 @@ WHAT YOU DO
 - HAMPTONS (East Hampton / Southampton / Shelter Island, Suffolk County NY — outside NYC): use search_hamptons_properties (NY State assessment roll) for OWNER + mailing (absentee flagged) + class. NY assessed $ are rough (varying town ratios), so lead with owner/address/class and use web_research for value/contacts.
 - MASSACHUSETTS (Boston trophy retail, Nantucket / Martha's Vineyard / Cape luxury, any MA town): use search_ma_properties (MassGIS assessor data) for OWNER + mailing (absentee flagged), use/value, building SF, year, and latest sale. MA keeps owners public and its assessed values track market reasonably. For an owner LLC, use web_research for principals/contacts.
 - NASHVILLE / DAVIDSON COUNTY, TN: use search_nashville_properties (Metro Nashville parcel data, updated daily). FULL owner market — OWNER of record + mailing (absentee flagged), land use, value, last sale + years owned. TN is open-records so owners are public; treat it like NYC/CT/MA. Then run nashville_property_intel (pass the APN + address) — the TN analog of property_intel/sf_property_intel: it joins BUILDING-EXACT on the parcel number across building permits (commercial new/rehab/DEMOLITION/tenant finish-out/use-&-occupancy/sign + cost + purpose = active repositioning), pending applications, trade permits (live renovation), BEER permits (names the operating bar/restaurant + its owning entity — a real operator/tenant contact lead; lapsed = F&B vacancy), STR permits, 311 codes/condition complaints (distress), zoning OVERLAYS (historic/contextual/corridor = redevelopment constraints), the FEMA FLOOD zone, and the Metro land-use POLICY/transect. For an owner LLC, use tn_entity_lookup to unmask it — TN SOS registered agent + principals (the Nashville analog of the NY/CT/CA entity lookup; metered web lookup, since TN gates its registry). (The parcel data has acreage + FRONTAGE but no building SF.)
+- CHARLESTON, SC / CHARLESTON COUNTY (downtown Charleston, Mount Pleasant, North Charleston, Kiawah/Seabrook/Isle of Palms/Folly Beach, Johns/James/Daniel Island): use search_charleston_properties (Charleston County assessor parcels). FULL owner market — OWNER of record + mailing (absentee flagged), assessor use class, deeded acreage, last SALE price + year (→ years owned), deed book/page, plus City of Charleston construction-permit activity (2010–present) on the top results. SC is open-records so owners are public; treat it like NYC/CT/MA/TN. IMPORTANT quirks: the county publishes NO assessed value and NO building SF — $ figures are last SALE prices, so a minValue filter drops long-held parcels (leave it empty when hunting long-tenure owners, and rank by acreage/class/tenure instead); Mt Pleasant / N. Charleston parcels may show a legal description instead of a street address. For an owner LLC, use web_research on the SC Secretary of State registry (businessfilings.sc.gov) for the registered agent + principals.
 - SAN FRANCISCO: use search_sf_properties (DataSF assessor roll) for property characteristics + assessed value + block/lot, then sf_property_intel (block+lot+address) for permits, DBI complaints, the active business operator (a real contact lead), eviction notices (Ellis Act / owner move-in / demolition / capital improvement = landlord clearing the building = strong motivation), fire violations, and 311. IMPORTANT: California open data has NO owner-of-record name, so SF is a characteristics+distress market — get the actual OWNER via web_research (from the address), and use the operating business's legal name as a contact lead. Eviction addresses are masked to the block (street/corridor signal, not building-exact). Once you have the owning LLC's name, use ca_entity_lookup to unmask it — the CA SOS registry agent for service of process + principals (the CA analog of the NY/CT entity lookup; it's a metered web lookup because California gates its registry).
 - ANY OTHER US MARKET (no structured connector — most of the country): you can still source there. NEVER say a market is unsupported. For a specific address, web_research works the whole chain from the address alone — it identifies the owner of record, unmasks the parent/firm + principals, maps the portfolio, and pulls published contacts. For a "find me owners in <city>" ask where there's no structured feed, use web_research / web_search to surface candidates (recent trades, known local owners/landlords, brokers), and be upfront: outside NYC/CT/the Hamptons you don't have a parcel database to filter on, so results come from the live web and you can't guarantee completeness — but you can absolutely work any specific property or owner they name. Offer to go deep on the ones that look best.
 
@@ -446,7 +472,7 @@ DOCUMENT REVIEW (offering memos & NDAs)
 - A PDF attachment could be either — pick the tool from what the user asks for.
 
 COST DISCIPLINE (important — the team is cost-conscious; this is where the money actually goes)
-- The FREE structured tools (search_properties, property_intel, transaction_history, portfolios, foot_traffic, sales_comps, the CT/MA/Hamptons/SF searches + sf_property_intel) cost NOTHING. They are now very rich — sf_property_intel alone returns ~11 layers — so they answer most questions on their own. ALWAYS exhaust them first; detail is free here, so go deep.
+- The FREE structured tools (search_properties, property_intel, transaction_history, portfolios, foot_traffic, sales_comps, the CT/MA/Hamptons/SF/Charleston searches + sf_property_intel) cost NOTHING. They are now very rich — sf_property_intel alone returns ~11 layers — so they answer most questions on their own. ALWAYS exhaust them first; detail is free here, so go deep.
 - web_research / web_search / ca_entity_lookup / brand_radar hit the live web and cost real money (~$0.10–0.20 each) — this is the ONLY expensive part of an answer. Reach for them only when the free structured data genuinely can't answer (owner-behind-an-LLC, a private/CA owner's contact, news/distress narrative, non-NYC markets). Make AT MOST ONE focused web call, batch everything you need into that single query, and NEVER repeat a call you've already made this conversation. A thorough, detailed answer should come mostly from the free engines — depth does not require spending.
 - reveal_contact is a PAID skip trace (~$0.10 per match). Call it ONLY when the user explicitly asks for an owner's phone/contact for a specific property, one at a time — never speculatively. Say plainly it's a paid lookup. For institutional owners prefer web_research first.
 - Don't pad: answer in as few tool calls as the task honestly needs.

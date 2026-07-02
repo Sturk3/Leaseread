@@ -2306,7 +2306,7 @@ function researchLinks(r) {
 
 // Google-Maps-style address lookup using NYC GeoSearch autocomplete (free, no key,
 // CORS-open so the browser calls it directly). Pick a suggestion -> exact coords.
-function AddressAutocomplete({ value, onChange, onPick, placeholder, style, onEnter }) {
+function AddressAutocomplete({ value, onChange, onPick, placeholder, style, onEnter, marketHint }) {
   const [sugs, setSugs] = useState([]);
   const [open, setOpen] = useState(false);
   const timer = useRef(null);
@@ -2324,9 +2324,17 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style, onEn
     if (!text || text.trim().length < 3) { setSugs([]); setOpen(false); return; }
     timer.current = setTimeout(async () => {
       let items = [];
-      // If the text names another market (Nashville, a CT/Hamptons town), skip the NYC geocoder so
-      // it doesn't surface NYC look-alikes — go straight to the national geocoder below.
-      const nonNyc = marketFromText(text);
+      // If the text names another market (Nashville, a CT/Hamptons town, Charleston), skip the
+      // NYC geocoder so it doesn't surface NYC look-alikes — go straight to that market's
+      // suggester / the national geocoder below. A LOCKED market (marketHint) forces this
+      // regardless of the text, so "123 king st" with Charleston·SC locked never offers the
+      // NYC geocoder's King St / Staten-Island-Charleston look-alikes.
+      const det = marketFromText(text);
+      const hint = marketHint && marketHint !== "auto" ? marketHint : null;
+      const firstSeg = String(text).split(",")[0].trim();
+      const nonNyc = hint
+        ? (hint === "nyc" ? null : { market: hint, address: (det && det.market === hint && det.address) || firstSeg })
+        : det;
       // 1) NYC GeoSearch — best for NYC and carries the lot's BBL.
       if (!nonNyc) {
         try {
@@ -2345,7 +2353,7 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style, onEn
       //     pops up even without typing "nashville" (wrong-number / other-city hits get dropped by the
       //     house-number filter below; the user disambiguates by the ", Nashville, TN" in the label).
       const isTn = nonNyc && nonNyc.market === "tn";
-      if (isTn || (!nonNyc && /^\s*\d/.test(text.trim()))) {
+      if (isTn || (!hint && !nonNyc && /^\s*\d/.test(text.trim()))) {
         try {
           const street = ((nonNyc && nonNyc.address) || text).trim();
           const m = street.match(/^(\d+)\s+(\S+)/); // house number + first street word
@@ -2400,7 +2408,10 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style, onEn
       //    was excluding every out-of-town address. Merged after the NYC/Nashville hits.
       if (items.length < 5) {
         try {
-          const r = await fetch(`https://photon.komoot.io/api?q=${encodeURIComponent(text)}&limit=8&lat=39.8&lon=-98.6`);
+          // A locked market steers the national geocoder too (unless the text already names it).
+          const HINT_SUFFIX = { sc: ", Charleston, SC", tn: ", Nashville, TN", ct: ", Connecticut", ny: ", Suffolk County, NY", nyc: ", New York, NY" };
+          const photonQ = hint && !(det && det.market === hint) && HINT_SUFFIX[hint] ? text + HINT_SUFFIX[hint] : text;
+          const r = await fetch(`https://photon.komoot.io/api?q=${encodeURIComponent(photonQ)}&limit=8&lat=39.8&lon=-98.6`);
           if (r.ok) {
             const d = await r.json();
             const extra = (d.features || [])
@@ -3220,7 +3231,9 @@ function useSourcingPoints(rows) {
       return { id: i, lat: lat != null ? Number(lat) : null, lon: lon != null ? Number(lon) : null, label: r.address || r.owner };
     });
     setPoints(base);
-    const missing = base.filter((p) => (p.lat == null || p.lon == null) && rows[p.id] && rows[p.id].address);
+    // Skip rows the engine flagged as un-geocodable (e.g. Charleston parcels with only a
+    // legal description — "TRACT B-1" geocodes to random places and drags the map away).
+    const missing = base.filter((p) => (p.lat == null || p.lon == null) && rows[p.id] && rows[p.id].address && !(rows[p.id].raw && rows[p.id].raw.geocode_skip));
     (async () => {
       for (let i = 0; i < missing.length && i < 60; i += 4) {
         const batch = missing.slice(i, i + 4);
@@ -3457,6 +3470,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
             <div style={{ marginTop: 4 }}>
               <AddressAutocomplete value={loc}
                 onChange={(t) => { setLoc(t); setCoords(null); }}
+                marketHint={market}
                 onPick={(label, lat, lon, bbl) => { setLoc(label); setCoords({ lat, lon, bbl }); }}
                 onEnter={run}
                 placeholder="Manhattan · Greenwich · Nashville · Charleston · or any US address (500 Main St, Austin TX)…" style={{ ...fieldStyle, width: "100%" }} />

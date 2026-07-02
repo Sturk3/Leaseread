@@ -56,7 +56,7 @@ async function arcgisQuery(base, params) {
   const r = await fetch(`${base}/query?${new URLSearchParams({ returnGeometry: "false", f: "json", ...params })}`);
   if (!r.ok) return [];
   const j = await r.json().catch(() => ({}));
-  return (j.features || []).map((f) => f.attributes || {});
+  return (j.features || []).map((f) => ({ ...(f.attributes || {}), __geom: f.geometry || null }));
 }
 
 const quoteIn = (vals) => vals.map((v) => `'${String(v).replace(/'/g, "''")}'`).join(",");
@@ -68,8 +68,8 @@ async function situsByPid(pids) {
   if (!ids.length) return {};
   const byPid = {};
   const waves = await Promise.all(chunk(ids, 80).flatMap((g) => [
-    arcgisQuery(CC_ADDRESS, { where: `PID IN (${quoteIn(g)})`, outFields: "PID,WHOLE_ADDRESS,POSTAL_TOWN,POSTAL_CODE", resultRecordCount: "2000" }),
-    arcgisQuery(CITY_ADDRESS, { where: `PARCELID IN (${quoteIn(g.map((p) => "C" + p))})`, outFields: "PARCELID,ADDRLABEL,CMTYNAME,ZIPCODE", resultRecordCount: "2000" }),
+    arcgisQuery(CC_ADDRESS, { where: `PID IN (${quoteIn(g)})`, outFields: "PID,WHOLE_ADDRESS,POSTAL_TOWN,POSTAL_CODE", returnGeometry: "true", outSR: "4326", resultRecordCount: "2000" }),
+    arcgisQuery(CITY_ADDRESS, { where: `PARCELID IN (${quoteIn(g.map((p) => "C" + p))})`, outFields: "PARCELID,ADDRLABEL,CMTYNAME,ZIPCODE", returnGeometry: "true", outSR: "4326", resultRecordCount: "2000" }),
   ]));
   for (const rows of waves) for (const a of rows) {
     const pid = clean(a.PID || String(a.PARCELID || "").replace(/^C/, ""));
@@ -78,8 +78,15 @@ async function situsByPid(pids) {
     if (!street) continue;
     const town = clean(a.POSTAL_TOWN || a.CMTYNAME) || "Charleston";
     // Prefer the shortest street label per parcel (multi-unit parcels list many points;
-    // the shortest is usually the base building address).
-    if (!byPid[pid] || street.length < byPid[pid].street.length) byPid[pid] = { street, town, zip: clean(a.POSTAL_CODE || a.ZIPCODE) };
+    // the shortest is usually the base building address). Carry the point's coordinates
+    // so leads land on the map exactly (no geocoding — which can wander out of state).
+    if (!byPid[pid] || street.length < byPid[pid].street.length) {
+      byPid[pid] = {
+        street, town, zip: clean(a.POSTAL_CODE || a.ZIPCODE),
+        lat: a.__geom && Number.isFinite(a.__geom.y) ? a.__geom.y : null,
+        lon: a.__geom && Number.isFinite(a.__geom.x) ? a.__geom.x : null,
+      };
+    }
   }
   return byPid;
 }
@@ -208,12 +215,16 @@ export async function search(q) {
     if (s) {
       p.address = s.street;
       p.town = s.town;
+      p.lat = s.lat; p.lon = s.lon;
       if (!p.absentee && p.mailing_city && s.town && p.mailing_city.toUpperCase() !== s.town.toUpperCase()) p.absentee = "out-of-area";
     } else {
       // Mt Pleasant / North Charleston publish no parcel-keyed address points —
-      // fall back to the legal description so the row isn't blank.
+      // fall back to the legal description so the row isn't blank. No coordinates and
+      // geocode_skip set: a legal description ("TRACT B-1") geocodes to random places
+      // (even other states), which used to drag the results map out of Charleston.
       p.address = p.legal_descr || `Parcel ${p.pid}`;
       p.town = "Charleston County";
+      p.geocode_skip = true;
     }
     p.maps_url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((s ? `${p.address}, ${p.town}` : p.pid + " Charleston County") + " SC")}`;
   }

@@ -51,6 +51,9 @@
     "api/nashvilleintel.js": {
       "maxDuration": 30
     },
+    "api/charlestonintel.js": {
+      "maxDuration": 30
+    },
     "api/leasecomps.js": {
       "maxDuration": 30
     }

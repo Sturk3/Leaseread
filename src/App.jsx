@@ -770,6 +770,7 @@ const TOOL_ROUTES = {
   search_nashville_properties: { url: "/api/search", label: "Searching Nashville", body: (a) => ({ market: "nashville", propertyType: a.propertyType, address: a.address, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
   search_charleston_properties: { url: "/api/search", label: "Searching Charleston", body: (a) => ({ market: "charleston", propertyType: a.propertyType, address: a.address, owner: a.owner, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
   nashville_property_intel: { url: "/api/nashvilleintel", label: "Pulling Nashville records", body: (a) => ({ apn: a.apn, address: a.address }) },
+  charleston_property_intel: { url: "/api/charlestonintel", label: "Pulling Charleston records", body: (a) => ({ pid: a.pid, address: a.address }) },
   search_sf_properties: { url: "/api/search", label: "Searching San Francisco", body: (a) => ({ market: "sf", neighborhood: a.neighborhood, address: a.address, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft }) },
   sf_property_intel: { url: "/api/sfintel", label: "Pulling SF records", body: (a) => ({ block: a.block, lot: a.lot, address: a.address }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
@@ -902,6 +903,10 @@ function shapeResult(name, data) {
     // Endpoint already caps each section; pass through (the TN analog of intel).
     const sig = (data.building_permits?.signals || []).length;
     return { forModel: data, uiSummary: sig ? `Nashville records (${sig} permit signal${sig === 1 ? "" : "s"})` : "Nashville records" };
+  }
+  if (name === "charleston_property_intel") {
+    // Endpoint already caps each section; pass through (the SC analog of intel).
+    return { forModel: data, uiSummary: "Charleston records" };
   }
   if (name === "property_intel") {
     // Already mostly scalars; just cap the two list fields the model doesn't need in full.
@@ -2914,6 +2919,59 @@ function NashvilleIntelPanel({ apn, address, pw }) {
   );
 }
 
+// Charleston consolidated intel, shown right in the dossier (the SC analog of NashvilleIntelPanel).
+// Auto-loads on expand from /api/charlestonintel — free public ArcGIS layers, no cost.
+function CharlestonIntelPanel({ pid, address, pw }) {
+  const [state, setState] = useState("idle"); // idle | loading | done | error
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    if (!pid && !address) { setState("idle"); return; }
+    let alive = true; setState("loading");
+    postJSON("/api/charlestonintel", { password: pw, pid, address })
+      .then((res) => { if (alive) { setD(res); setState(res && res.error ? "error" : "done"); } })
+      .catch(() => { if (alive) setState("error"); });
+    return () => { alive = false; };
+  }, [pid, address, pw]);
+  const H = ({ children }) => <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "14px 0 6px" }}>{children}</div>;
+  const muted = { color: C.muted }, ivory = { color: C.ivory };
+  if (state === "loading") return <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Loading Charleston city records…</div>;
+  if (state === "error") return <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Charleston city records unavailable right now.</div>;
+  if (state !== "done" || !d) return null;
+  const z = d.zoning || {}, fl = d.flood || {}, cr = d.crime_300m || {}, pm = d.permits || {}, hot = d.hotel_entitlement;
+  const zoneBits = [z.city_base_zone && `city ${z.city_base_zone}`, z.city_pud && `PUD ${z.city_pud}`, !z.city_base_zone && z.county_zone && z.county_zone !== "MUNI" && `county ${z.county_zone}${z.county_zone_desc ? ` (${z.county_zone_desc})` : ""}`].filter(Boolean);
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "12px 0 2px" }}>CHARLESTON CITY RECORDS</div>
+      {(zoneBits.length > 0 || z.old_and_historic_district || z.old_city_height_district || z.short_term_rental_overlay || z.accommodations_overlay) && <>
+        <H>ZONING / OVERLAYS</H>
+        {zoneBits.length > 0 && <div style={{ fontSize: 12.5 }}><span style={muted}>Zoning: </span><span style={ivory}>{zoneBits.join(" · ")}</span></div>}
+        {z.old_and_historic_district && <div style={{ fontSize: 12.5 }}><span style={{ color: C.amber }}>Historic: </span><span style={ivory}>{z.old_and_historic_district}</span><span style={muted}> — BAR design review on exterior work</span></div>}
+        {z.old_city_height_district && <div style={{ fontSize: 12.5 }}><span style={muted}>Height district: </span><span style={ivory}>{z.old_city_height_district}</span><span style={muted}> — Old City height cap</span></div>}
+        {z.short_term_rental_overlay && <div style={{ fontSize: 12.5 }}><span style={muted}>Short-term rentals: </span><span style={ivory}>{z.short_term_rental_overlay}</span><span style={muted}> overlay</span></div>}
+        {z.accommodations_overlay && <div style={{ fontSize: 12.5 }}><span style={muted}>Accommodations: </span><span style={ivory}>{z.accommodations_overlay}</span><span style={muted}> — hotel-use overlay (hospitality entitlement fight)</span></div>}
+      </>}
+      {hot && <>
+        <H>HOTEL ENTITLEMENT</H>
+        <div style={{ fontSize: 12.5 }}><span style={ivory}>{hot.name || "Hotel"}</span><span style={muted}>{hot.rooms ? ` · ${hot.rooms} rooms` : ""}{hot.status ? ` · ${hot.status}` : ""}{hot.open_date ? ` · opened ${String(hot.open_date).slice(0, 4)}` : ""}</span></div>
+      </>}
+      {(pm.count || 0) > 0 && <>
+        <H>DEVELOPMENT ACTIVITY · CITY PERMITS</H>
+        <div style={{ fontSize: 12.5, ...ivory }}>{pm.count} construction permit{pm.count === 1 ? "" : "s"} since 2010{pm.total_valuation ? <span style={muted}> · ~${Number(pm.total_valuation).toLocaleString()} total</span> : ""}</div>
+        {(pm.rows || []).slice(0, 4).map((p, i) => (<div key={i} style={{ fontSize: 11.5, ...muted, marginLeft: 8 }}>• {[p.work || p.type, p.year, p.valuation ? `$${Number(p.valuation).toLocaleString()}` : "", p.status].filter(Boolean).join(" · ")}</div>))}
+      </>}
+      <H>FLOOD (THE CHARLESTON QUESTION)</H>
+      <div style={{ fontSize: 12.5 }}><span style={muted}>FEMA: </span><span style={fl.special_flood_hazard_area ? { color: C.red } : ivory}>Zone {fl.fema_zone || "?"}{fl.special_flood_hazard_area ? " — SFHA (flood insurance / diligence cost)" : " — outside the special flood hazard area"}</span>{fl.static_bfe_ft ? <span style={muted}> · BFE {fl.static_bfe_ft} ft</span> : ""}</div>
+      <div style={{ fontSize: 12.5 }}><span style={muted}>Street flooding nearby: </span><span style={fl.street_flood_events_400m > 0 ? { color: C.amber } : ivory}>{fl.street_flood_events_400m || 0} flooded-vehicle event{fl.street_flood_events_400m === 1 ? "" : "s"} within ¼ mi</span>{(fl.recent_flood_dates || []).length ? <span style={muted}> · {fl.recent_flood_dates.slice(-3).join(", ")}</span> : ""}</div>
+      <div style={{ fontSize: 10.5, ...muted }}>City flooded-vehicle log — chronic street flooding FEMA maps can miss.</div>
+      {cr.count != null && <>
+        <H>SAFETY · CRIME (~300 M, LAST 3 YRS)</H>
+        <div style={{ fontSize: 12.5, ...ivory }}>{cr.count}{cr.count >= 1000 ? "+" : ""} reported incident{cr.count === 1 ? "" : "s"}{(cr.by_category || []).length ? <span style={muted}> · {(cr.by_category || []).slice(0, 3).map((c) => `${c.category.toLowerCase()} (${c.count})`).join(", ")}</span> : ""}</div>
+        <div style={{ fontSize: 10.5, ...muted }}>City of Charleston PD reported incidents — context, not a precise rate; downtown corridors run high.</div>
+      </>}
+    </div>
+  );
+}
+
 // Inline Nashville LLC "finder" — TN gates its business registry (no free Socrata dataset like
 // CT/NY), so this is the same metered web lookup Scout's tn_entity_lookup runs: TNBear + OpenCorporates
 // → the entity's registered agent + any principals. One click from the dossier.
@@ -3005,6 +3063,10 @@ function AssessorMarketDetail({ r, pw }) {
         <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (CT discloses LLC principals).</div>
       )}
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
+      {r.market === "sc" && <CharlestonIntelPanel pid={raw.pid} address={r.address} pw={pw} />}
+      {r.market === "sc" && r.owner && ENTITY_RE.test(r.owner) && (
+        <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (SC Secretary of State registry).</div>
+      )}
       {r.market === "tn" && r.owner && ENTITY_RE.test(r.owner) && <TnLlcFinder owner={r.owner} pw={pw} />}
       {r.market === "tn" && r.owner && <TnOwnerPortfolio owner={r.owner} pw={pw} />}
       <ResearchBrief r={contactR} pw={pw} />

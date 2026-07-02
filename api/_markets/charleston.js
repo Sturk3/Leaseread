@@ -86,7 +86,8 @@ async function situsByPid(pids) {
 
 // Address-first search: find PIDs whose situs matches the typed street, across both
 // address layers (the county layer only covers unincorporated Charleston County).
-async function pidsByAddress(text) {
+// Exported for api/charlestonintel.js (address → parcel resolution).
+export async function pidsByAddress(text) {
   const q = sqlStr(text);
   const [county, city] = await Promise.all([
     arcgisQuery(CC_ADDRESS, { where: `UPPER(WHOLE_ADDRESS) LIKE '%${q}%'`, outFields: "PID", resultRecordCount: "400" }),

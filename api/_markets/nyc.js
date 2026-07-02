@@ -1,8 +1,11 @@
-// Vercel serverless backend for FRONTAGE — live NYC sourcing.
-// Pulls real-estate deals + the parties/owners attached to them from NYC Open
-// Data (ACRIS deeds + DOB job filings) via the Socrata API, normalizes them, and
-// optionally saves them to the shared Postgres store. Password-gated like
-// api/screen.js. This is the JS port of the standalone Python agent's connectors.
+// FRONTAGE — live NYC search. Pulls real-estate deals + the parties/owners
+// attached to them from NYC Open Data (ACRIS deeds + DOB job filings + PLUTO)
+// via the Socrata API, normalizes them, and optionally saves them to the shared
+// Postgres store. This is the JS port of the standalone Python agent's connectors.
+// NOTE: unlike the other markets this returns { deals, leads } (deal-flow shape),
+// not { properties } — the NYC UI and agent tools are built around leads.
+
+export const BUILD = "nyc-v1";
 
 const SOCRATA_BASE = "https://data.cityofnewyork.us/resource";
 const ACRIS_MASTER = process.env.ACRIS_MASTER_DATASET || "bnx9-e6tj"; // Real Property Master
@@ -676,36 +679,27 @@ async function saveLeads(leads) {
   return { saved, dbConfigured: true };
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
-  try {
-    const { password, check, sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable } = req.body || {};
+export async function search(q) {
+  const { sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable } = q;
 
-    if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
-      return res.status(401).json({ error: "Incorrect password." });
+  const appToken = null; // NYC account/token disconnected — anonymous requests only
+  const wanted = Array.isArray(sources) && sources.length ? sources : ["acris", "dob"];
+  const lim = Math.max(1, Math.min(Number(limit) || 100, 250));
+
+  // Radius search needs a center (PLUTO only — it's the source with coords). Explicit
+  // coords from the browser's autocomplete pick always win (some callers — comps, lease
+  // scan — send only coords, no address text); otherwise geocode the typed text.
+  let center = null;
+  const clat = Number(centerLat);
+  const clon = Number(centerLon);
+  if (Number.isFinite(clat) && Number.isFinite(clon)) {
+    center = { lat: clat, lon: clon, label: nearAddress || "picked point" };
+  } else if (nearAddress) {
+    center = await geocodeNyc(nearAddress);
+    if (!center) {
+      return { error: `Couldn't find "${nearAddress}". Try picking an address from the dropdown.` };
     }
-    if (check) return res.status(200).json({ ok: true, dbConfigured: !!process.env.DATABASE_URL });
-
-    const appToken = null; // NYC account/token disconnected — anonymous requests only
-    const wanted = Array.isArray(sources) && sources.length ? sources : ["acris", "dob"];
-    const lim = Math.max(1, Math.min(Number(limit) || 100, 250));
-
-    // Radius search needs a center (PLUTO only — it's the source with coords). If the
-    // browser already picked an address from autocomplete it sends exact coords; else
-    // geocode the typed text.
-    let center = null;
-    if (nearAddress) {
-      const clat = Number(centerLat);
-      const clon = Number(centerLon);
-      if (Number.isFinite(clat) && Number.isFinite(clon)) {
-        center = { lat: clat, lon: clon, label: nearAddress };
-      } else {
-        center = await geocodeNyc(nearAddress);
-        if (!center) {
-          return res.status(200).json({ error: `Couldn't find "${nearAddress}". Try picking an address from the dropdown.` });
-        }
-      }
-    }
+  }
     // Address with radius "off" → return just that one property; with a radius → the area.
     const radiusNum = center && radiusMiles ? Number(radiusMiles) : null;
     const anchorOnly = !!center && !radiusNum;
@@ -772,12 +766,10 @@ export default async function handler(req, res) {
     let savedInfo = { saved: 0, dbConfigured: !!process.env.DATABASE_URL };
     if (save) savedInfo = await saveLeads(leads);
 
-    return res.status(200).json({
-      counts: { deals: deals.length, contacts: contacts.length },
-      deals, leads, saved: savedInfo.saved, dbConfigured: savedInfo.dbConfigured,
-      center: center ? { lat: center.lat, lon: center.lon, label: center.label, radiusMiles: radiusNum || 0, single: anchorOnly } : null,
-    });
-  } catch (e) {
-    return res.status(500).json({ error: e.message, where: "source" });
-  }
+  return {
+    market: "nyc",
+    counts: { deals: deals.length, contacts: contacts.length },
+    deals, leads, saved: savedInfo.saved, dbConfigured: savedInfo.dbConfigured,
+    center: center ? { lat: center.lat, lon: center.lon, label: center.label, radiusMiles: radiusNum || 0, single: anchorOnly } : null,
+  };
 }

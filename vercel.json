@@ -3,7 +3,7 @@
     "api/screen.js": {
       "maxDuration": 60
     },
-    "api/source.js": {
+    "api/search.js": {
       "maxDuration": 60
     },
     "api/agent.js": {
@@ -36,25 +36,10 @@
     "api/foottraffic.js": {
       "maxDuration": 30
     },
-    "api/ctsource.js": {
-      "maxDuration": 30
-    },
     "api/ctentity.js": {
       "maxDuration": 30
     },
     "api/ctcomps.js": {
-      "maxDuration": 30
-    },
-    "api/nysource.js": {
-      "maxDuration": 30
-    },
-    "api/masource.js": {
-      "maxDuration": 30
-    },
-    "api/nashvillesource.js": {
-      "maxDuration": 30
-    },
-    "api/sfsource.js": {
       "maxDuration": 30
     },
     "api/sfintel.js": {

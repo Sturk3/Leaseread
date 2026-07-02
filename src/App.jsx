@@ -750,7 +750,7 @@ async function postJSON(url, body) {
 // tool name -> how to run it. Each `body` returns the endpoint request body (the
 // password is injected by the caller). Field names mirror what each endpoint accepts.
 const TOOL_ROUTES = {
-  search_properties: { url: "/api/source", label: "Searching properties", body: (a) => ({ sources: ["pluto"], assetType: a.assetType || "retail", borough: a.borough, nearAddress: a.nearAddress, radiusMiles: a.radiusMiles || 0, limit: 50, minSqft: a.minSqft, minRetailSqft: a.minRetailSqft, minUnits: a.minUnits, builtAfter: a.builtAfter, builtBefore: a.builtBefore, devOnly: a.devOnly, minBuildable: a.minBuildable }) },
+  search_properties: { url: "/api/search", label: "Searching properties", body: (a) => ({ market: "nyc", sources: ["pluto"], assetType: a.assetType || "retail", borough: a.borough, nearAddress: a.nearAddress, radiusMiles: a.radiusMiles || 0, limit: 50, minSqft: a.minSqft, minRetailSqft: a.minRetailSqft, minUnits: a.minUnits, builtAfter: a.builtAfter, builtBefore: a.builtBefore, devOnly: a.devOnly, minBuildable: a.minBuildable }) },
   property_intel: { url: "/api/intel", label: "Pulling public records", body: (a) => ({ borough: a.borough, block: a.block, lot: a.lot, name: a.name }) },
   transaction_history: { url: "/api/history", label: "Reading ACRIS history", body: (a) => ({ borough: a.borough, block: a.block, lot: a.lot }) },
   owner_portfolio: { url: "/api/owner", label: "Mapping owner portfolio", body: (a) => ({ name: a.name }) },
@@ -760,16 +760,16 @@ const TOOL_ROUTES = {
   web_research: { url: "/api/research", label: "Researching owner", body: (a) => ({ mode: "web", name: a.name, address: a.address, borough: a.borough }) },
   web_search: { url: "/api/research", label: "Searching the web", body: (a) => ({ mode: "web", query: a.query }) },
   brand_radar: { url: "/api/research", label: "Scouting brands", body: (a) => ({ mode: "web", query: `Compile a list of NEW / trendy / emerging retail brands that are expanding into physical stores, opening flagships, or actively seeking retail space${a.market ? `, relevant to ${a.market}` : ""}${a.category ? `, in ${a.category}` : ""}. For each brand give: what they sell, their growth/expansion status, any reported new store locations or space requirements, and the source. Favor buzzy / DTC-going-physical / fast-growing brands over legacy chains. Cite sources.` }) },
-  search_ct_properties: { url: "/api/ctsource", label: "Searching Greenwich / CT", body: (a) => ({ town: a.town || "Greenwich", propertyType: a.propertyType, minPrice: a.minPrice, maxPrice: a.maxPrice, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
+  search_ct_properties: { url: "/api/search", label: "Searching Greenwich / CT", body: (a) => ({ market: "ct", town: a.town || "Greenwich", propertyType: a.propertyType, minValue: a.minPrice, maxValue: a.maxPrice, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
   ct_sales_comps: { url: "/api/ctcomps", label: "Pulling CT sale comps", body: (a) => ({ town: a.town, propertyType: a.propertyType, address: a.address, sinceYear: a.sinceYear, minAmount: a.minAmount, maxAmount: a.maxAmount }) },
   ct_entity_lookup: { url: "/api/ctentity", label: "CT entity lookup", body: (a) => ({ name: a.name }) },
   tn_entity_lookup: { url: "/api/research", label: "TN entity lookup", body: (a) => ({ mode: "web", query: `Look up the Tennessee business entity "${a.name}" in the Tennessee Secretary of State business registry (TNBear / tncab.tnsos.gov) and OpenCorporates (opencorporates.com/companies/us_tn). Report exactly what the records show: the precise entity name, SOS control number, type (LLC / corporation), status (active / inactive / dissolved), formation date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC), the principal office / mailing address, and any listed officers / members / managers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.` }) },
   ca_entity_lookup: { url: "/api/research", label: "CA entity lookup", body: (a) => ({ mode: "web", query: `Look up the California business entity "${a.name}" in the California Secretary of State business registry (bizfileOnline at bizfileonline.sos.ca.gov) and OpenCorporates (opencorporates.com/companies/us_ca). Report exactly what the records show: the precise entity name, entity number, type (LLC / corporation), status (active / suspended / FTB-suspended / dissolved), registration/formation date, jurisdiction, the AGENT FOR SERVICE OF PROCESS (name + full address — this is the key contact for an anonymous LLC), the principal office / mailing address, and any listed managers / members / officers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.` }) },
-  search_hamptons_properties: { url: "/api/nysource", label: "Searching the Hamptons", body: (a) => ({ town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
-  search_ma_properties: { url: "/api/masource", label: "Searching Massachusetts", body: (a) => ({ town: a.town, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
-  search_nashville_properties: { url: "/api/nashvillesource", label: "Searching Nashville", body: (a) => ({ propertyType: a.propertyType, address: a.address, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
+  search_hamptons_properties: { url: "/api/search", label: "Searching the Hamptons", body: (a) => ({ market: "hamptons", town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
+  search_ma_properties: { url: "/api/search", label: "Searching Massachusetts", body: (a) => ({ market: "ma", town: a.town, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
+  search_nashville_properties: { url: "/api/search", label: "Searching Nashville", body: (a) => ({ market: "nashville", propertyType: a.propertyType, address: a.address, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
   nashville_property_intel: { url: "/api/nashvilleintel", label: "Pulling Nashville records", body: (a) => ({ apn: a.apn, address: a.address }) },
-  search_sf_properties: { url: "/api/sfsource", label: "Searching San Francisco", body: (a) => ({ neighborhood: a.neighborhood, address: a.address, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft }) },
+  search_sf_properties: { url: "/api/search", label: "Searching San Francisco", body: (a) => ({ market: "sf", neighborhood: a.neighborhood, address: a.address, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft }) },
   sf_property_intel: { url: "/api/sfintel", label: "Pulling SF records", body: (a) => ({ block: a.block, lot: a.lot, address: a.address }) },
   grade_offering_memo: { label: "Grading offering memo" }, // executed specially in runTool (PDF/text + mandate)
   review_nda: { label: "Reviewing NDA" }, // executed specially in runTool (PDF/text + NDA playbook)
@@ -1303,7 +1303,7 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
 }
 
 // ── COMP SHEET — automatic retail comparable analysis ───────────────────────────
-// Given a subject address, pull nearby PLUTO properties (reusing /api/source), keep the
+// Given a subject address, pull nearby PLUTO properties (reusing /api/search nyc), keep the
 // ones that traded recently and have a building size, compute $/SF, and render a clean
 // tear sheet: subject summary + sales comps + stats + a rent section (auto-fills via web
 // research on Pro). Exports CSV and prints to a one-page PDF. No new backend function.
@@ -1544,7 +1544,7 @@ function CTCompSheet({ pw }) {
   const run = async () => {
     setError(""); setData(null); setLoading(true);
     try {
-      const d = await postJSON("/api/ctsource", { password: pw, town, propertyType: type, sinceYear });
+      const d = await postJSON("/api/search", { password: pw, market: "ct", town, propertyType: type, sinceYear });
       const cutoff = Number(sinceYear || 0);
       const comps = (d.properties || []).filter((p) => p.sale_price && p.building_sqft && p.sale_date)
         .map((p) => ({ ...p, _ppsf: p.sale_price / p.building_sqft, _price: p.sale_price, _year: Number((p.sale_date || "").split("/").pop()) }))
@@ -1607,7 +1607,7 @@ function NYCompSheet({ pw }) {
   const [sales, setSales] = useState({ state: "idle", text: "", err: "" });
   const run = async () => {
     setError(""); setProps(null); setSales({ state: "idle", text: "", err: "" }); setLoading(true);
-    try { const d = await postJSON("/api/nysource", { password: pw, town, propertyType: type }); setProps(d.properties || []); }
+    try { const d = await postJSON("/api/search", { password: pw, market: "hamptons", town, propertyType: type }); setProps(d.properties || []); }
     catch (e) { setError(e.message || "Failed."); }
     finally { setLoading(false); }
   };
@@ -1681,7 +1681,7 @@ function NashCompSheet({ pw }) {
   const run = async () => {
     setError(""); setData(null); setLoading(true);
     try {
-      const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: type, address: area.trim() || undefined, sinceYear, limit: 500 });
+      const d = await postJSON("/api/search", { password: pw, market: "nashville", propertyType: type, address: area.trim() || undefined, sinceYear, limit: 500 });
       const cutoff = Number(sinceYear || 0);
       const comps = (d.properties || []).filter((p) => p.sale_price && p.sale_year)
         .map((p) => ({ ...p, _price: p.sale_price, _year: Number(p.sale_year), _ppa: (p.acres && p.acres > 0) ? p.sale_price / p.acres : null, _ppsf: (p.building_sqft && p.building_sqft > 0) ? p.sale_price / p.building_sqft : null }))
@@ -1784,8 +1784,8 @@ function CompSheet({ pw }) {
     if (!picked) { setError("Pick an address from the dropdown so I have exact coordinates."); return; }
     setLoading(true); setError(""); setData(null); setRent({ state: "idle", text: "", err: "" }); setSales({ state: "idle", text: "", err: "" }); setLeases({ state: "idle", recorded: [], text: "", err: "" });
     try {
-      const res = await postJSON("/api/source", {
-        password: pw, sources: ["pluto"], assetType, radiusMiles: radius || "0.25",
+      const res = await postJSON("/api/search", {
+        password: pw, market: "nyc", sources: ["pluto"], assetType, radiusMiles: radius || "0.25",
         centerLat: picked.lat, centerLon: picked.lon, pickedBbl: picked.bbl,
       });
       const leads = res.leads || [];
@@ -2427,7 +2427,7 @@ const fieldStyle = { background: C.ink, color: C.ivory, border: `1px solid ${C.l
 const labelStyle = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
 
 // Greenwich / CT sourcing — same Sourcing tab as NYC, switched via the market toggle.
-// Built on CT's free public sale records (api/ctsource). CT publishes no owner/SF, so
+// Built on CT's free public sale records (/api/search, market: ct). CT publishes no owner/SF, so
 // each row has an "AI deep dive" that runs web research (owner + how to reach them) —
 // structured sourcing is the bread and butter; the deep dive is for the ones you like.
 const CT_TYPE_OPTIONS = [
@@ -2459,7 +2459,7 @@ function GreenwichSourcing({ pw }) {
   const run = async () => {
     setError(""); setProps(null); setOpenIdx(null); setLoading(true);
     try {
-      const d = await postJSON("/api/ctsource", { password: pw, town, propertyType, minPrice, maxPrice, sinceYear, address: streetq });
+      const d = await postJSON("/api/search", { password: pw, market: "ct", town, propertyType, minValue: minPrice, maxValue: maxPrice, sinceYear, address: streetq });
       setProps(d.properties || []);
     } catch (e) { setError(e.message || "Greenwich sourcing failed."); }
     finally { setLoading(false); }
@@ -2595,7 +2595,7 @@ function GreenwichSourcing({ pw }) {
   );
 }
 
-// Hamptons / NY-State (ex-NYC) sourcing — NY assessment roll via /api/nysource.
+// Hamptons / NY-State (ex-NYC) sourcing — NY assessment roll via /api/search (market: hamptons).
 const HAMPTONS_TOWN_OPTIONS = [["all", "All Hamptons"], ["East Hampton", "East Hampton"], ["Southampton", "Southampton"], ["Shelter Island", "Shelter Island"]];
 const NY_TYPE_OPTIONS = [["commercial", "Commercial (retail / office)"], ["any", "Any type"], ["residential", "Residential"], ["vacant", "Vacant land"], ["industrial", "Industrial"]];
 function nyCSV(rows) {
@@ -2614,7 +2614,7 @@ function HamptonsSourcing({ pw }) {
   const [openIdx, setOpenIdx] = useState(null);
   const run = async () => {
     setError(""); setProps(null); setOpenIdx(null); setLoading(true);
-    try { const d = await postJSON("/api/nysource", { password: pw, town, propertyType, minValue, address: streetq }); setProps(d.properties || []); }
+    try { const d = await postJSON("/api/search", { password: pw, market: "hamptons", town, propertyType, minValue, address: streetq }); setProps(d.properties || []); }
     catch (e) { setError(e.message || "Hamptons sourcing failed."); }
     finally { setLoading(false); }
   };
@@ -2937,7 +2937,7 @@ function TnOwnerPortfolio({ owner, pw }) {
   const run = async () => {
     setState("loading"); setErr("");
     try {
-      const d = await postJSON("/api/nashvillesource", { password: pw, owner, propertyType: "any" });
+      const d = await postJSON("/api/search", { password: pw, market: "nashville", owner, propertyType: "any" });
       setProps(d.properties || []); setState("done");
     } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
   };
@@ -3196,15 +3196,15 @@ function UnifiedSourcing({ pw, rows, setRows }) {
       let tnBroadened = false; // set when a missing Nashville house number is broadened to the whole street
       if (det.market === "nyc") {
         if (det.kind === "address" && coords) {
-          // nearAddress must be sent too — api/source only sets the property anchor when
+          // nearAddress must be sent too — the NYC search only sets the property anchor when
           // nearAddress is present (else it falls through to a citywide search).
-          const d = await postJSON("/api/source", { password: pw, sources: ["pluto"], assetType: mapType(type, "nyc"), nearAddress: loc, radiusMiles: radius || "", centerLat: coords.lat, centerLon: coords.lon, pickedBbl: coords.bbl });
+          const d = await postJSON("/api/search", { password: pw, market: "nyc", sources: ["pluto"], assetType: mapType(type, "nyc"), nearAddress: loc, radiusMiles: radius || "", centerLat: coords.lat, centerLon: coords.lon, pickedBbl: coords.bbl });
           out = (d.leads || []).map(nycRow);
         } else if (det.kind === "address-text") {
-          const d = await postJSON("/api/source", { password: pw, sources: ["pluto"], assetType: mapType(type, "nyc"), nearAddress: det.nearAddress, radiusMiles: radius || "" });
+          const d = await postJSON("/api/search", { password: pw, market: "nyc", sources: ["pluto"], assetType: mapType(type, "nyc"), nearAddress: det.nearAddress, radiusMiles: radius || "" });
           out = (d.leads || []).map(nycRow);
         } else {
-          const d = await postJSON("/api/source", { password: pw, sources: ["acris", "dob", "pluto"], borough: det.borough, assetType: mapType(type, "nyc"), limit: 80 });
+          const d = await postJSON("/api/search", { password: pw, market: "nyc", sources: ["acris", "dob", "pluto"], borough: det.borough, assetType: mapType(type, "nyc"), limit: 80 });
           out = (d.leads || []).map(nycRow);
         }
       } else if (det.market === "ct") {
@@ -3213,12 +3213,12 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           // "Just it": pin the one property. CT `location` is "STREET NAME <padded #>", so match
           // on the street core (suffix-agnostic) then keep the parcel whose trailing # is the house.
           const { num, core } = streetBits(addr);
-          const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: "any", address: core });
+          const d = await postJSON("/api/search", { password: pw, market: "ct", town: det.town, propertyType: "any", address: core });
           let rows = (d.properties || []).map(ctRow);
           if (num) { const exact = rows.filter((r) => houseInAddress(r.address, num, true)); if (exact.length) rows = exact; }
           out = rows.slice(0, 1);
         } else {
-          const d = await postJSON("/api/ctsource", { password: pw, town: det.town, propertyType: mapType(type, "ct"), minPrice: minValue });
+          const d = await postJSON("/api/search", { password: pw, market: "ct", town: det.town, propertyType: mapType(type, "ct"), minValue });
           out = (d.properties || []).map(ctRow);
         }
       } else if (det.market === "tn") {
@@ -3232,15 +3232,15 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           // filter OFF so the building isn't excluded by its land use. (A map-pin / point-in-polygon
           // search can land off-parcel, and a retail filter would drop a non-retail address — that's
           // why "2222 12th Ave S" wouldn't come up.)
-          d = await postJSON("/api/nashvillesource", { password: pw, propertyType: "any", address: street });
+          d = await postJSON("/api/search", { password: pw, market: "nashville", propertyType: "any", address: street });
         } else if (hasPoint && (street || radius)) {
           // A radius area search around a picked point (keep the type filter for "retail nearby").
-          d = await postJSON("/api/nashvillesource", { password: pw, centerLat: coords.lat, centerLon: coords.lon, radiusMiles: radius || "", propertyType: justIt ? "any" : mapType(type, "tn"), minValue });
+          d = await postJSON("/api/search", { password: pw, market: "nashville", centerLat: coords.lat, centerLon: coords.lon, radiusMiles: radius || "", propertyType: justIt ? "any" : mapType(type, "tn"), minValue });
         }
         // Bare street/city name (no house number), or an empty pinned search → attribute search.
         if (!d || !(d.properties || []).length) {
           const specific = /^\s*\d+\s/.test(street);
-          d = await postJSON("/api/nashvillesource", { password: pw, propertyType: street && specific ? "any" : mapType(type, "tn"), minValue, ...(street ? { address: street } : {}) });
+          d = await postJSON("/api/search", { password: pw, market: "nashville", propertyType: street && specific ? "any" : mapType(type, "tn"), minValue, ...(street ? { address: street } : {}) });
         }
         out = (d.properties || []).map(nashRow);
         // "Just it": pin to the single building matching the house number (TN addresses are number-first).
@@ -3254,7 +3254,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
             const streetOnly = street.replace(/^\s*\d+[A-Za-z]?\s+/, "").trim();
             if (streetOnly) {
               try {
-                const d2 = await postJSON("/api/nashvillesource", { password: pw, propertyType: "any", address: streetOnly });
+                const d2 = await postJSON("/api/search", { password: pw, market: "nashville", propertyType: "any", address: streetOnly });
                 const rows = (d2.properties || []).map(nashRow);
                 if (rows.length) { out = rows; tnBroadened = true; setNotice(`No "${street}" in Metro's records (the numbering skips it). Showing all of ${streetOnly} — pick the right parcel.`); }
                 else out = [];
@@ -3273,12 +3273,12 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           // "Just it": NY's roll street field has NO house number, so match the street core,
           // then keep only the parcel whose address carries the looked-up house number.
           const { num, core } = streetBits(addr);
-          const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: "any", address: core });
+          const d = await postJSON("/api/search", { password: pw, market: "hamptons", town: det.town, propertyType: "any", address: core });
           let rows = (d.properties || []).map(nyRow);
           if (num) { const exact = rows.filter((r) => houseInAddress(r.address, num, false)); if (exact.length) rows = exact; }
           out = rows.slice(0, 1);
         } else {
-          const d = await postJSON("/api/nysource", { password: pw, town: det.town, propertyType: mapType(type, "ny"), minValue });
+          const d = await postJSON("/api/search", { password: pw, market: "hamptons", town: det.town, propertyType: mapType(type, "ny"), minValue });
           out = (d.properties || []).map(nyRow);
         }
       }
@@ -3294,7 +3294,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
       if (market === "auto" && !tnBroadened && /\d/.test(addrText) && !hasHouseMatch) {
         if (det.market !== "tn") {
           try {
-            const d = await postJSON("/api/nashvillesource", { password: pw, propertyType: "any", address: addrText });
+            const d = await postJSON("/api/search", { password: pw, market: "nashville", propertyType: "any", address: addrText });
             let rows = (d.properties || []).map(nashRow);
             if (typedNum) rows = rows.filter((r) => houseInAddress(r.address, typedNum, false));
             if (rows.length) { out = typedNum ? rows.slice(0, 1) : rows; setResolved({ market: "tn", town: "Nashville" }); }
@@ -3303,7 +3303,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         const stillNoMatch = !out || (typedNum && !out.some((r) => houseInAddress(r.address, typedNum, false)));
         if (stillNoMatch && det.market !== "nyc") {
           try {
-            const d = await postJSON("/api/source", { password: pw, sources: ["pluto"], assetType: "any", nearAddress: addrText });
+            const d = await postJSON("/api/search", { password: pw, market: "nyc", sources: ["pluto"], assetType: "any", nearAddress: addrText });
             const rows = (d.leads || []).map(nycRow);
             if (rows.length) { out = rows; setResolved({ market: "nyc", borough: "" }); }
           } catch { /* give up gracefully */ }
@@ -3461,7 +3461,7 @@ function Sourcing({ pw }) {
     try {
       // Always query every NYC source. (For radius/address searches the backend uses PLUTO
       // automatically — only it has coordinates — and folds in ACRIS/DOB elsewhere.)
-      const data = await postJSON("/api/source", { password: pw, sources: ["acris", "dob", "pluto"], borough, assetType, street, nearAddress, radiusMiles, limit, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) });
+      const data = await postJSON("/api/search", { password: pw, market: "nyc", sources: ["acris", "dob", "pluto"], borough, assetType, street, nearAddress, radiusMiles, limit, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, ...(pickedCoords ? { centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl } : {}) });
       setLeads(data.leads || []);
       setCenter(data.center || null);
     } catch (e) { setError(e.message || "Sourcing failed."); }
@@ -3630,7 +3630,7 @@ function mteText(L) {
 // ── LEASE RADAR grading workflow ─────────────────────────────────────────────
 // Mirrors the Screener's mandate grader: editable signal WEIGHTS + Target/Watch/
 // Pass THRESHOLDS, saved as named mandates in localStorage. Every scanned property
-// is scored on public signals already attached to the lead by /api/source (no extra
+// is scored on public signals already attached to the lead by the NYC search (no extra
 // API calls) — lease timing, how long the owner has held, tax-lien distress,
 // absentee/out-of-state mailing, unused air rights — then blended into one 0–100
 // TARGET score with a recommendation. Tuning weights re-grades results instantly.
@@ -4007,8 +4007,8 @@ function LeaseRadar({ pw }) {
     setLoading(true);
     try {
       setProgress("Finding properties in the radius (PLUTO)…");
-      const src = await postJSON("/api/source", {
-        password: pw, sources: ["pluto"], assetType, radiusMiles,
+      const src = await postJSON("/api/search", {
+        password: pw, market: "nyc", sources: ["pluto"], assetType, radiusMiles,
         centerLat: pickedCoords.lat, centerLon: pickedCoords.lon, pickedBbl: pickedCoords.bbl,
       });
       const leads = src.leads || [];

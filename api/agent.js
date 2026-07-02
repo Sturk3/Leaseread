@@ -7,7 +7,7 @@
 // the existing endpoints the browser calls between turns, not this function.
 //
 // Why a proxy instead of a server-side loop: a server-side agent that called
-// /api/source -> /api/intel -> ... in one request would blow the 60s budget and
+// /api/search -> /api/intel -> ... in one request would blow the 60s budget and
 // duplicate every engine's logic. Instead Claude names a tool, the browser executes
 // it against the real endpoint (reusing all auth/shape/caching), and posts the result
 // back as a tool_result. Claude reasons across the accumulated results — the "research

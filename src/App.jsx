@@ -1018,7 +1018,7 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
   const [convo, setConvo] = useState([]);    // raw Anthropic-format messages
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [attachedPdf, setAttachedPdf] = useState(null); // { name, data } — an offering memo to grade
+  const [attachedDoc, setAttachedDoc] = useState(null); // { name, kind:"pdf"|"text", data|text } — an OM/NDA PDF to grade, or a CSV/text list of leads to rank
   const [mode, setModeState] = useState(() => { try { return localStorage.getItem(SCOUT_MODE_KEY) || "deep"; } catch { return "deep"; } });
   const [spend, setSpend] = useState(scoutSpend());
   const [cap, setCapState] = useState(scoutCap());
@@ -1034,12 +1034,30 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
   // name+args (web tools also key on mode, since deep vs quick yields a different answer).
   const toolCacheRef = useRef(new Map());
 
+  // Accept a PDF (offering memo / NDA to grade) OR a CSV/text list of leads to rank ("who do I
+  // call first"). Text files are read as text and injected into Scout's context so it can read and
+  // rank the rows; PDFs stay base64 and route to the OM/NDA grader tools.
   const onAttach = (f) => {
     if (!f) return;
-    if (f.type !== "application/pdf") { setLog((l) => [...l, { kind: "error", text: "Please attach a PDF (offering memorandum)." }]); return; }
-    const reader = new FileReader();
-    reader.onload = () => setAttachedPdf({ name: f.name, data: reader.result.split(",")[1] });
-    reader.readAsDataURL(f);
+    const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+    const isText = /csv|tab-separated|plain|text/.test(f.type || "") || /\.(csv|tsv|txt|md)$/i.test(f.name);
+    if (isPdf) {
+      const reader = new FileReader();
+      reader.onload = () => setAttachedDoc({ name: f.name, kind: "pdf", data: reader.result.split(",")[1] });
+      reader.readAsDataURL(f);
+    } else if (isText) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        let text = String(reader.result || "");
+        const MAX = 60000; // cap so the list doesn't blow the agent's re-sent context
+        const truncated = text.length > MAX;
+        if (truncated) text = text.slice(0, MAX);
+        setAttachedDoc({ name: f.name, kind: "text", text, truncated });
+      };
+      reader.readAsText(f);
+    } else {
+      setLog((l) => [...l, { kind: "error", text: "Attach a PDF (offering memo / NDA) or a CSV/TXT list of owners to rank. For Excel, use File → Save As → CSV first." }]);
+    }
   };
 
   useEffect(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, [log, busy]);
@@ -1056,21 +1074,21 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
     // mandate to the screener endpoint. Handled here because it isn't a simple body map.
     if (name === "grade_offering_memo") {
       let body;
-      if (attachedPdf) body = { password: pw, mode: "pdf", pdfData: attachedPdf.data, config };
+      if (attachedDoc && attachedDoc.kind === "pdf") body = { password: pw, mode: "pdf", pdfData: attachedDoc.data, config };
       else if (inputArgs.memo_text) body = { password: pw, mode: "text", memoText: inputArgs.memo_text, config };
       else return { forModel: { error: "No offering memo provided — ask the user to attach the OM PDF (📎) or paste its text." }, uiSummary: "no OM" };
       const data = await postJSON("/api/screen", body);
-      return { forModel: data, uiSummary: attachedPdf ? `graded ${attachedPdf.name}` : "graded OM" };
+      return { forModel: data, uiSummary: (attachedDoc && attachedDoc.kind === "pdf") ? `graded ${attachedDoc.name}` : "graded OM" };
     }
     // NDA redline against the firm's NDA playbook (loaded from localStorage), same
     // PDF/text mechanism as the OM grader.
     if (name === "review_nda") {
       let body;
-      if (attachedPdf) body = { password: pw, mode: "pdf", pdfData: attachedPdf.data, config: loadNdaActive() };
+      if (attachedDoc && attachedDoc.kind === "pdf") body = { password: pw, mode: "pdf", pdfData: attachedDoc.data, config: loadNdaActive() };
       else if (inputArgs.nda_text) body = { password: pw, mode: "text", ndaText: inputArgs.nda_text, config: loadNdaActive() };
       else return { forModel: { error: "No NDA provided — ask the user to attach the NDA PDF (📎) or paste its text." }, uiSummary: "no NDA" };
       const data = await postJSON("/api/nda", body);
-      return { forModel: data, uiSummary: attachedPdf ? `reviewed ${attachedPdf.name}` : "reviewed NDA" };
+      return { forModel: data, uiSummary: (attachedDoc && attachedDoc.kind === "pdf") ? `reviewed ${attachedDoc.name}` : "reviewed NDA" };
     }
     // Web research/search: honor Quick (knowledge, free-ish) vs Deep (live web, paid) and
     // the monthly spend cap. Over cap, deep auto-downgrades to knowledge so nothing breaks.
@@ -1150,17 +1168,26 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
 
   const send = async (preset) => {
     let text = (preset ?? input).trim();
-    if (!text && attachedPdf) text = "Here's a document — grade it if it's an offering memo, or redline it against our playbook if it's an NDA.";
+    const doc = attachedDoc;
+    if (!text && doc) text = doc.kind === "text"
+      ? "Here's a list — rank which owners I should call first, and tell me why for each."
+      : "Here's a document — grade it if it's an offering memo, or redline it against our playbook if it's an NDA.";
     if (!text || busy) return;
     setInput("");
-    const note = attachedPdf ? `\n\n[The user attached a PDF: ${attachedPdf.name}. Use grade_offering_memo if it's an offering memo, or review_nda if it's an NDA — pick from their request.]` : "";
+    let note = "";
+    if (doc && doc.kind === "pdf") {
+      note = `\n\n[The user attached a PDF: ${doc.name}. Use grade_offering_memo if it's an offering memo, or review_nda if it's an NDA — pick from their request.]`;
+    } else if (doc && doc.kind === "text") {
+      // Put the list in-context so Scout reads the actual rows, plus the call-priority rubric.
+      note = `\n\n--- ATTACHED LIST (${doc.name})${doc.truncated ? " — truncated to fit" : ""} ---\n${doc.text}\n--- END LIST ---\n\n[The user uploaded this list. If they're asking who to CALL / CONTACT FIRST, RANK the rows by how likely each owner is to be a motivated seller — weight signals like long ownership tenure, absentee / out-of-state owner, distress (violations, tax liens, vacancy), single-asset LLCs, and any notes already in the list. Use the columns present; for addresses in a supported market you MAY look up a few of the TOP candidates with the sourcing/intel tools to confirm, but do NOT run dozens of lookups. Return a clear ranked call order with a one-line reason for each.]`;
+    }
     const messages = [...convo, { role: "user", content: [{ type: "text", text: text + note }] }];
     setConvo(messages);
-    setLog((l) => [...l, { kind: "user", text: attachedPdf ? `${text}  📎 ${attachedPdf.name}` : text }]);
+    setLog((l) => [...l, { kind: "user", text: doc ? `${text}  📎 ${doc.name}` : text }]);
     setBusy(true);
     try { await runLoop(messages, deepResearch); }
     catch (e) { setLog((l) => [...l, { kind: "error", text: e.message }]); }
-    finally { setBusy(false); setAttachedPdf(null); }
+    finally { setBusy(false); setAttachedDoc(null); }
   };
 
   const reset = () => { setLog([]); setConvo([]); };
@@ -1225,10 +1252,10 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
         {busy && <div className="mono" style={{ fontSize: 11, color: C.gold, marginTop: 10 }}>▸ {deepResearch ? "Scout is researching deeply — planning, investigating, compiling…" : "Scout is working…"}</div>}
       </div>
 
-      {attachedPdf && (
+      {attachedDoc && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 12, color: C.ivory, background: C.goldSoft, border: `1px solid ${C.gold}40`, borderRadius: 8, padding: "7px 11px", width: "fit-content" }}>
-          📎 {attachedPdf.name} <span style={{ color: C.muted }}>· offering memo to grade</span>
-          <span onClick={() => setAttachedPdf(null)} style={{ cursor: "pointer", color: C.muted, marginLeft: 4 }}>✕</span>
+          📎 {attachedDoc.name} <span style={{ color: C.muted }}>· {attachedDoc.kind === "text" ? `list to rank${attachedDoc.truncated ? " (truncated)" : ""}` : "offering memo / NDA to grade"}</span>
+          <span onClick={() => setAttachedDoc(null)} style={{ cursor: "pointer", color: C.muted, marginLeft: 4 }}>✕</span>
         </div>
       )}
       {/* Cost controls: Deep Research depth · Quick (free-ish) vs Deep web · monthly web-spend cap */}
@@ -1256,16 +1283,16 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
         </span>
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <input ref={fileRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => { onAttach(e.target.files[0]); e.target.value = ""; }} />
-        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={busy} title="Attach an offering memorandum PDF to grade"
+        <input ref={fileRef} type="file" accept=".pdf,.csv,.tsv,.txt,.md,application/pdf,text/csv,text/plain,text/tab-separated-values" style={{ display: "none" }} onChange={(e) => { onAttach(e.target.files[0]); e.target.value = ""; }} />
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={busy} title="Attach a PDF (offering memo / NDA to grade) or a CSV/TXT list of owners to rank"
           className="mono lift" style={{ cursor: busy ? "default" : "pointer", fontSize: 14, padding: "0 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory }}>📎</button>
         <input
           value={input} onChange={(e) => setInput(e.target.value)} disabled={busy}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder="Ask Scout to source, research, grade an OM, or redline an NDA…"
+          placeholder="Ask Scout to source, research, grade an OM/NDA, or rank a list of owners to call…"
           style={{ flex: 1, fontSize: 14, padding: "12px 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory }} />
-        <button onClick={() => send()} disabled={busy || (!input.trim() && !attachedPdf)} className="mono lift"
-          style={{ cursor: busy || (!input.trim() && !attachedPdf) ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 9, border: `1px solid ${C.gold}`, background: busy || (!input.trim() && !attachedPdf) ? C.panel : C.goldSoft, color: C.gold, opacity: busy || (!input.trim() && !attachedPdf) ? 0.5 : 1 }}>{deepResearch ? "RESEARCH" : "SEND"}</button>
+        <button onClick={() => send()} disabled={busy || (!input.trim() && !attachedDoc)} className="mono lift"
+          style={{ cursor: busy || (!input.trim() && !attachedDoc) ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 9, border: `1px solid ${C.gold}`, background: busy || (!input.trim() && !attachedDoc) ? C.panel : C.goldSoft, color: C.gold, opacity: busy || (!input.trim() && !attachedDoc) ? 0.5 : 1 }}>{deepResearch ? "RESEARCH" : "SEND"}</button>
         {log.length > 0 && <button onClick={reset} disabled={busy} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "0 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: "transparent", color: C.muted }}>NEW</button>}
       </div>
       <div style={{ fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>

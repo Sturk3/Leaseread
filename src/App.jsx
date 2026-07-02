@@ -2369,6 +2369,31 @@ function AddressAutocomplete({ value, onChange, onPick, placeholder, style, onEn
           }
         } catch { /* fall through to Photon */ }
       }
+      // 1c) CHARLESTON SC — real addresses from the county + City of Charleston address point
+      //     layers, so an explicit Charleston search suggests actual parcel addresses and the
+      //     pick routes to the SC engine (never the NYC geocoder's Staten Island "Charleston").
+      const isSc = nonNyc && nonNyc.market === "sc";
+      if (isSc) {
+        try {
+          const street = ((nonNyc && nonNyc.address) || text).trim();
+          const m = street.match(/^(\d+)\s+(\S+)/); // house number + first street word
+          const prefix = (m ? `${m[1]} ${m[2]}` : street).toUpperCase().replace(/'/g, "''");
+          const mk = (feats, addrField, townField) => (feats || [])
+            .filter((f) => f.attributes && f.attributes[addrField])
+            .map((f) => ({
+              label: `${String(f.attributes[addrField]).replace(/\s+/g, " ").trim()}, ${String((f.attributes[townField] || "Charleston")).replace(/\s+/g, " ").trim()}, SC`,
+              lon: f.geometry ? f.geometry.x : null, lat: f.geometry ? f.geometry.y : null, bbl: null,
+            }));
+          const [city, cty] = await Promise.all([
+            fetch(`https://services2.arcgis.com/tQaXW7Zb1Vphzvgd/arcgis/rest/services/City_Addresses/FeatureServer/0/query?${new URLSearchParams({ where: `UPPER(ADDRLABEL) LIKE '${prefix}%'`, outFields: "ADDRLABEL,CMTYNAME", returnGeometry: "true", outSR: "4326", resultRecordCount: "8", f: "json" })}`).then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
+            fetch(`https://gisccapps.charlestoncounty.org/arcgis/rest/services/GIS_VIEWER/New_Public_Search/MapServer/1/query?${new URLSearchParams({ where: `UPPER(WHOLE_ADDRESS) LIKE '${prefix}%'`, outFields: "WHOLE_ADDRESS,POSTAL_TOWN", returnGeometry: "true", outSR: "4326", resultRecordCount: "8", f: "json" })}`).then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
+          ]);
+          const seen = new Set();
+          const sc = [...mk(city.features, "ADDRLABEL", "CMTYNAME"), ...mk(cty.features, "WHOLE_ADDRESS", "POSTAL_TOWN")]
+            .filter((s) => { if (seen.has(s.label)) return false; seen.add(s.label); return true; });
+          if (sc.length) items = sc; // county/city address points are authoritative for an explicit Charleston search
+        } catch { /* fall through to Photon */ }
+      }
       // 2) National Photon (free, no key, CORS-open): runs whenever results are sparse, so an
       //    address ANYWHERE in the US surfaces. US-centroid rank bias, but NO bbox — the old NYC bbox
       //    was excluding every out-of-town address. Merged after the NYC/Nashville hits.
@@ -2700,7 +2725,7 @@ const CT_TOWN_SET = new Set(["greenwich", "darien", "new canaan", "westport", "n
 const HAMPTON_SET = new Set(["east hampton", "southampton", "shelter island", "sag harbor", "bridgehampton", "montauk", "amagansett", "water mill", "sagaponack", "wainscott", "westhampton", "westhampton beach", "quogue", "north haven", "springs", "noyac"]);
 const NYC_BORO_SET = { manhattan: "Manhattan", brooklyn: "Brooklyn", queens: "Queens", bronx: "Bronx", "staten island": "Staten Island", "new york": "Manhattan", nyc: "Manhattan" };
 const NASHVILLE_SET = new Set(["nashville", "davidson", "davidson county", "nashville tn", "nashville, tn", "metro nashville"]);
-const CHARLESTON_SET = new Set(["charleston", "charleston sc", "charleston, sc", "charleston county", "mount pleasant", "mt pleasant", "north charleston", "daniel island", "james island", "johns island", "west ashley", "sullivans island", "sullivan's island", "isle of palms", "folly beach", "kiawah", "kiawah island", "seabrook island", "awendaw", "mcclellanville", "ravenel", "hollywood sc", "wadmalaw island"]);
+const CHARLESTON_SET = new Set(["charleston", "charelston", "charlston", "charleston sc", "charleston, sc", "charleston county", "mount pleasant", "mt pleasant", "north charleston", "daniel island", "james island", "johns island", "west ashley", "sullivans island", "sullivan's island", "isle of palms", "folly beach", "kiawah", "kiawah island", "seabrook island", "awendaw", "mcclellanville", "ravenel", "hollywood sc", "wadmalaw island"]);
 const HAMLET_TOWN = { montauk: "East Hampton", amagansett: "East Hampton", wainscott: "East Hampton", springs: "East Hampton", "sag harbor": "East Hampton", bridgehampton: "Southampton", "water mill": "Southampton", sagaponack: "Southampton", westhampton: "Southampton", "westhampton beach": "Southampton", quogue: "Southampton", noyac: "Southampton", "north haven": "Southampton" };
 const UNIFIED_TYPES = [["any", "Any type"], ["retail", "Retail"], ["commercial", "Commercial / office"], ["multifamily", "Multifamily"], ["residential", "Residential"], ["industrial", "Industrial"], ["vacant", "Vacant / dev site"]];
 const TYPE_MAP_BY_MARKET = {
@@ -2721,8 +2746,10 @@ function marketFromText(raw) {
     return { market: "tn", town: "Nashville", address: street.length >= 3 ? street : "" };
   }
   // Charleston SC metro (any Charleston County town, or a "…, SC" address naming one).
-  if (/\bcharleston\b|\bmt\.?\s*pleasant\b|\bmount pleasant\b|\bdaniel island\b|\bjames island\b|\bjohns island\b|\bwest ashley\b|\bsullivan'?s island\b|\bisle of palms\b|\bfolly beach\b|\bkiawah\b|\bseabrook island\b|\bwadmalaw\b|\bawendaw\b|\bmcclellanville\b/.test(k) && !/\bwest virginia\b|,\s*wv\b/.test(k)) {
-    const street = String(raw).replace(/,?\s*(north\s+charleston|charleston( county)?|mt\.?\s*pleasant|mount pleasant|daniel island|james island|johns island|west ashley|sullivan'?s island|isle of palms|folly beach|kiawah( island)?|seabrook island|wadmalaw( island)?|awendaw|mcclellanville|south carolina|sc|usa|united states).*$/i, "").replace(/[, ]+$/, "").trim();
+  // Spelled-tolerant (char(le|el)ston catches the common transposition), and guarded against
+  // the OTHER Charlestons: Staten Island NY has a Charleston neighborhood, WV has the city.
+  if (/\bchar(?:le|el)ston\b|\bmt\.?\s*pleasant\b|\bmount pleasant\b|\bdaniel island\b|\bjames island\b|\bjohns island\b|\bwest ashley\b|\bsullivan'?s island\b|\bisle of palms\b|\bfolly beach\b|\bkiawah\b|\bseabrook island\b|\bwadmalaw\b|\bawendaw\b|\bmcclellanville\b/.test(k) && !/\bwest virginia\b|,\s*wv\b|\bstaten\b|\bnew york\b|,\s*ny\b/.test(k)) {
+    const street = String(raw).replace(/,?\s*(north\s+char(?:le|el)ston|char(?:le|el)ston( county)?|mt\.?\s*pleasant|mount pleasant|daniel island|james island|johns island|west ashley|sullivan'?s island|isle of palms|folly beach|kiawah( island)?|seabrook island|wadmalaw( island)?|awendaw|mcclellanville|south carolina|sc|usa|united states).*$/i, "").replace(/[, ]+$/, "").trim();
     return { market: "sc", town: "Charleston", address: street.length >= 3 && /\d/.test(street) ? street : "" };
   }
   for (const t of CT_TOWN_SET) if (k.includes(t)) return { market: "ct", town: titleCase(t), address: firstAddrSeg(raw) };

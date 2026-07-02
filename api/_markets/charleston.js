@@ -77,25 +77,46 @@ async function situsByPid(pids) {
     const street = clean(a.WHOLE_ADDRESS || a.ADDRLABEL);
     if (!street) continue;
     const town = clean(a.POSTAL_TOWN || a.CMTYNAME) || "Charleston";
-    // Prefer the shortest street label per parcel (multi-unit parcels list many points;
-    // the shortest is usually the base building address). Carry the point's coordinates
-    // so leads land on the map exactly (no geocoding — which can wander out of state).
-    if (!byPid[pid] || street.length < byPid[pid].street.length) {
-      byPid[pid] = {
-        street, town, zip: clean(a.POSTAL_CODE || a.ZIPCODE),
-        lat: a.__geom && Number.isFinite(a.__geom.y) ? a.__geom.y : null,
-        lon: a.__geom && Number.isFinite(a.__geom.x) ? a.__geom.x : null,
-      };
-    }
+    // Keep ALL address points per parcel (corner lots carry several — 360 King St is
+    // also 27 Burns Ln), with coordinates so leads land on the map exactly.
+    (byPid[pid] = byPid[pid] || []).push({
+      street, town, zip: clean(a.POSTAL_CODE || a.ZIPCODE),
+      lat: a.__geom && Number.isFinite(a.__geom.y) ? a.__geom.y : null,
+      lon: a.__geom && Number.isFinite(a.__geom.x) ? a.__geom.x : null,
+    });
   }
   return byPid;
 }
+
+// Pick a parcel's display address from its address points: the one matching what the
+// user actually typed (so searching "360 King Street" shows 360 KING ST, not the same
+// corner parcel's 27 BURNS LN alias), else the shortest (the base building address).
+function pickSitus(cands, queryNorm) {
+  if (!cands || !cands.length) return null;
+  if (queryNorm) {
+    const lead = (queryNorm.match(/^\d+\s+\S+/) || [queryNorm])[0];
+    const hit = cands.find((c) => c.street.toUpperCase().startsWith(lead)) ||
+      cands.find((c) => c.street.toUpperCase().includes(queryNorm)) ||
+      cands.find((c) => c.street.toUpperCase().includes(lead));
+    if (hit) return hit;
+  }
+  return cands.reduce((best, c) => (!best || c.street.length < best.street.length ? c : best), null);
+}
+
+// County + city store street names ABBREVIATED ("360 KING ST"), but people (and
+// geocoder labels) type full words ("360 King Street"). Normalize before matching.
+const STREET_ABBR = {
+  STREET: "ST", AVENUE: "AVE", DRIVE: "DR", ROAD: "RD", BOULEVARD: "BLVD", LANE: "LN", COURT: "CT",
+  PLACE: "PL", PARKWAY: "PKWY", HIGHWAY: "HWY", CIRCLE: "CIR", TERRACE: "TER", TRAIL: "TRL",
+  SQUARE: "SQ", COVE: "CV", CROSSING: "XING", NORTH: "N", SOUTH: "S", EAST: "E", WEST: "W",
+};
+const normStreet = (s) => clean(s).toUpperCase().split(/\s+/).map((w) => STREET_ABBR[w] || w).join(" ");
 
 // Address-first search: find PIDs whose situs matches the typed street, across both
 // address layers (the county layer only covers unincorporated Charleston County).
 // Exported for api/charlestonintel.js (address → parcel resolution).
 export async function pidsByAddress(text) {
-  const q = sqlStr(text);
+  const q = sqlStr(normStreet(text));
   const [county, city] = await Promise.all([
     arcgisQuery(CC_ADDRESS, { where: `UPPER(WHOLE_ADDRESS) LIKE '%${q}%'`, outFields: "PID", resultRecordCount: "400" }),
     arcgisQuery(CITY_ADDRESS, { where: `UPPER(ADDRLABEL) LIKE '%${q}%'`, outFields: "PARCELID", resultRecordCount: "400" }),
@@ -210,12 +231,17 @@ export async function search(q) {
     situsByPid(out.map((p) => p.pid)).catch(() => ({})),
     enrichPermits(out).catch(() => {}),
   ]);
+  const queryNorm = address ? normStreet(address) : null;
   for (const p of out) {
-    const s = situs[p.pid];
+    const cands = situs[p.pid];
+    const s = pickSitus(cands, queryNorm);
     if (s) {
       p.address = s.street;
       p.town = s.town;
       p.lat = s.lat; p.lon = s.lon;
+      // Other addresses on the same parcel (corner lots) — context for the user/model.
+      const aliases = [...new Set((cands || []).map((c) => c.street).filter((st) => st !== s.street))].slice(0, 4);
+      if (aliases.length) p.address_aliases = aliases;
       if (!p.absentee && p.mailing_city && s.town && p.mailing_city.toUpperCase() !== s.town.toUpperCase()) p.absentee = "out-of-area";
     } else {
       // Mt Pleasant / North Charleston publish no parcel-keyed address points —

@@ -3432,8 +3432,14 @@ function UnifiedSourcing({ pw, rows, setRows }) {
       // returned a house-8 Brooklyn lot, not empty). Detect that: if no returned lot carries the
       // house number the user typed, the search mis-routed → retry Nashville (then NYC) by exact house.
       const addrText = (det.address || det.nearAddress || loc || "").trim();
-      const { num: typedNum } = streetBits(addrText);
-      const hasHouseMatch = typedNum ? (out && out.some((r) => houseInAddress(r.address, typedNum, false))) : (out && out.length > 0);
+      const { num: typedNum, core: typedCore } = streetBits(addrText);
+      // A match must carry the typed house number AND look like the typed STREET — the NYC
+      // geocoder happily fuzzy-matches "360 King Street" to "360 W 125 St" (right number,
+      // wrong street), which the number check alone can't catch.
+      const coreToks = String(typedCore || "").split(/\s+/).filter((t) => t.length >= 3 && !STREET_SUFFIX.has(t) && !["EAST", "WEST", "NORTH", "SOUTH"].includes(t));
+      const streetOk = (a) => !coreToks.length || coreToks.some((t) => String(a || "").toUpperCase().includes(t));
+      const addrOk = (r) => houseInAddress(r.address, typedNum, false) && streetOk(r.address);
+      const hasHouseMatch = typedNum ? (out && out.some(addrOk)) : (out && out.length > 0);
       // Only when AUTO-detecting — a locked market must not silently jump to another (that's the point).
       // Also skip when we intentionally broadened a Nashville street (that result is what we want to show).
       if (market === "auto" && !tnBroadened && /\d/.test(addrText) && !hasHouseMatch) {
@@ -3441,11 +3447,20 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           try {
             const d = await postJSON("/api/search", { password: pw, market: "nashville", propertyType: "any", address: addrText });
             let rows = (d.properties || []).map(nashRow);
-            if (typedNum) rows = rows.filter((r) => houseInAddress(r.address, typedNum, false));
+            if (typedNum) rows = rows.filter(addrOk);
             if (rows.length) { out = typedNum ? rows.slice(0, 1) : rows; setResolved({ market: "tn", town: "Nashville" }); }
           } catch { /* keep trying */ }
         }
-        const stillNoMatch = !out || (typedNum && !out.some((r) => houseInAddress(r.address, typedNum, false)));
+        let stillNoMatch = !out || (typedNum && !out.some(addrOk));
+        if (stillNoMatch && det.market !== "sc") {
+          try {
+            const d = await postJSON("/api/search", { password: pw, market: "charleston", propertyType: "any", address: addrText });
+            let rows = (d.properties || []).map(scRow);
+            if (typedNum) rows = rows.filter(addrOk);
+            if (rows.length) { out = typedNum ? rows.slice(0, 1) : rows; setResolved({ market: "sc", town: "Charleston" }); }
+          } catch { /* keep trying */ }
+        }
+        stillNoMatch = !out || (typedNum && !out.some(addrOk));
         if (stillNoMatch && det.market !== "nyc") {
           try {
             const d = await postJSON("/api/search", { password: pw, market: "nyc", sources: ["pluto"], assetType: "any", nearAddress: addrText });

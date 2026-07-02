@@ -327,6 +327,7 @@ export default function App() {
         <div className="rail-brand" style={{ padding: "0 30px 28px", borderBottom: "1px solid rgba(255,255,255,.07)" }}>
           <div style={{ fontFamily: "'Bricolage Grotesque', sans-serif", fontWeight: 600, fontSize: 31, letterSpacing: "-.5px", lineHeight: 1, color: "#F1F4FB" }}>FRONTAGE<span style={{ color: "#7BA0F8", textShadow: "0 0 16px rgba(96,148,250,.75)" }}>.</span></div>
           <div className="rail-eyebrow" style={{ fontSize: 9.5, letterSpacing: "2.8px", textTransform: "uppercase", color: "#838DA6", marginTop: 12 }}>Trophy Retail Acquisitions</div>
+          <div className="mono" title="Deployed build — if this doesn't match the latest commit, the browser is running a cached bundle" style={{ fontSize: 9, letterSpacing: "1.5px", color: "#555f76", marginTop: 8 }}>BUILD {typeof __BUILD_SHA__ !== "undefined" ? __BUILD_SHA__ : "dev"}</div>
         </div>
         <nav className="rail-nav" style={{ padding: "28px 18px", display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
           <div className="rail-label" style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2.4px", textTransform: "uppercase", color: "#555f76", padding: "4px 14px 12px" }}>Engines</div>

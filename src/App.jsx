@@ -2147,6 +2147,21 @@ function downloadBlob(content, name, type) {
   a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
 }
 
+// Real .xlsx export (SheetJS, loaded on demand so it never weighs down the main
+// bundle). `cols` is the same [label, getter] shape the CSV builders use, so any
+// list that exports CSV can export Excel from one column definition.
+async function downloadXlsx(filename, sheetName, cols, items) {
+  const mod = await import("xlsx");
+  const XLSX = mod.utils ? mod : mod.default;
+  const header = cols.map((c) => c[0]);
+  const rows = items.map((it) => cols.map((c) => c[1](it)));
+  const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+  ws["!cols"] = header.map((h, i) => ({ wch: Math.min(44, Math.max(h.length + 2, ...rows.slice(0, 200).map((r) => String(r[i] ?? "").length + 1))) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+  XLSX.writeFile(wb, filename);
+}
+
 const LEAD_COLS = [
   { key: "name", label: "Name" }, { key: "entity_type", label: "Type" }, { key: "role", label: "Role" },
   { key: "pinned", label: "This property", get: (r) => (r.pinned ? "YES" : "") },
@@ -2826,10 +2841,10 @@ function unifiedDetect(loc, coords) {
   if (/\d/.test(raw) || raw.includes(",")) return { market: "nyc", kind: "address-text", nearAddress: raw };
   return { market: null };
 }
+const UNIFIED_COLS = [["Opportunity", (r) => { const g = opportunityScore(r); return g ? g.overall : ""; }], ["Grade", (r) => { const g = opportunityScore(r); return g ? g.rec : ""; }], ["Market", (r) => r.marketLabel], ["Owner", (r) => r.owner], ["Mailing", (r) => r.mailing], ["Absentee", (r) => r.absentee || ""], ["Address", (r) => r.address], ["Use", (r) => r.use], ["Value", (r) => r.value]];
 function unifiedCSV(rows) {
   const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
-  const cols = [["Opportunity", (r) => { const g = opportunityScore(r); return g ? g.overall : ""; }], ["Grade", (r) => { const g = opportunityScore(r); return g ? g.rec : ""; }], ["Market", (r) => r.marketLabel], ["Owner", (r) => r.owner], ["Mailing", (r) => r.mailing], ["Absentee", (r) => r.absentee || ""], ["Address", (r) => r.address], ["Use", (r) => r.use], ["Value", (r) => r.value]];
-  return cols.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => cols.map((c) => esc(c[1](r))).join(",")).join("\n");
+  return UNIFIED_COLS.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => UNIFIED_COLS.map((c) => esc(c[1](r))).join(",")).join("\n");
 }
 const nycRow = (l) => ({ market: "nyc", marketLabel: "NYC", owner: l.name, address: l.address, use: l.doc_type ? `class ${l.doc_type}` : (l.retail_sqft ? "Retail" : ""), value: assessedValue(l) != null ? fmtAmount(assessedValue(l)) : "", absentee: l.absentee, mailing: mailing(l), mapsUrl: mapUrl(l), raw: l });
 const ctRow = (p) => ({ market: "ct", marketLabel: `${p.town}, CT`, owner: p.owner, address: p.address, use: p.use, value: p.assessed_value ? fmtAmount(p.assessed_value) : "", absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
@@ -3499,6 +3514,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 20px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "SEARCHING…" : "◎ SEARCH"}</button>
           {rows && rows.length > 0 && <button onClick={() => downloadBlob(unifiedCSV(rows), `frontage_${(resolved && resolved.market) || "search"}_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
+          {rows && rows.length > 0 && <button onClick={() => downloadXlsx(`frontage_${(resolved && resolved.market) || "search"}_${new Date().toISOString().slice(0, 10)}.xlsx`, "Leads", UNIFIED_COLS, rows)} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXCEL</button>}
           {resolved && <span style={{ fontSize: 11.5, color: C.muted }}>Market: <strong style={{ color: C.gold }}>{resolved.market === "nyc" ? (resolved.borough || "New York City") : resolved.market === "web" ? "Web research (any US)" : resolved.town + (resolved.market === "ct" ? ", CT" : resolved.market === "tn" ? ", TN" : resolved.market === "sc" ? ", SC" : ", NY")}</strong></span>}
         </div>
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
@@ -4643,6 +4659,13 @@ const PIPELINE_MAX = 400; // cap so localStorage (~5MB) can't overflow; evict ol
 const PIPELINE_STATUSES = [["watching", "Watching"], ["contacted", "Contacted"], ["pursuing", "Pursuing"], ["passed", "Passed"]];
 const statusLabel = (s) => (PIPELINE_STATUSES.find(([v]) => v === s) || [, "—"])[1];
 const statusColor = (s) => (s === "pursuing" ? C.green : s === "contacted" ? C.gold : s === "passed" ? C.muted : C.ivory);
+// Outreach = the CALL state, tracked separately from the deal status: a lead can be
+// "Pursuing" while the last three dials went to voicemail. DNC is sticky and loud
+// (red) so nobody on the shared list re-dials a do-not-call owner.
+const OUTREACH_STATES = [["none", "Not called"], ["called", "Called"], ["voicemail", "Voicemail"], ["callback", "Callback set"], ["dnc", "DNC"]];
+const outreachLabel = (s) => (OUTREACH_STATES.find(([v]) => v === s) || OUTREACH_STATES[0])[1];
+const outreachColor = (s) => (s === "dnc" ? C.red : s === "callback" ? C.amber : s === "called" || s === "voicemail" ? C.gold : C.muted);
+const callbackDue = (l) => l.outreach === "callback" && l.callbackAt && l.callbackAt <= new Date().toISOString().slice(0, 10);
 function loadPipeline() { try { return JSON.parse(localStorage.getItem(PIPELINE_KEY) || "{}") || {}; } catch { return {}; } }
 function writePipeline(p) { try { localStorage.setItem(PIPELINE_KEY, JSON.stringify(p)); } catch { /* quota — drop silently */ } }
 function isSavedLead(r) { const id = aiCacheId(r); return !!(id && loadPipeline()[id]); }
@@ -4655,7 +4678,8 @@ function saveLead(r, opp) {
     address: r.address || "", mailing: r.mailing || "", use: r.use || "", value: r.value || "",
     absentee: r.absentee || null, mapsUrl: r.mapsUrl || "",
     opp: opp ? { overall: opp.overall, rec: opp.rec } : null,
-    status: "watching", notes: "", savedAt: Date.now(), updatedAt: Date.now(), row: r,
+    status: "watching", outreach: "none", callbackAt: "", outreachAt: null,
+    notes: "", savedAt: Date.now(), updatedAt: Date.now(), row: r,
   };
   const ids = Object.keys(p);
   if (ids.length > PIPELINE_MAX) { ids.sort((a, b) => (p[a].savedAt || 0) - (p[b].savedAt || 0)); for (const old of ids.slice(0, ids.length - PIPELINE_MAX)) delete p[old]; }
@@ -4718,10 +4742,100 @@ function SaveLeadButton({ r, opp }) {
   );
 }
 
+const PIPELINE_COLS = [["Status", (l) => statusLabel(l.status)], ["Outreach", (l) => outreachLabel(l.outreach || "none")], ["Callback", (l) => l.callbackAt || ""], ["Last outreach", (l) => (l.outreachAt ? new Date(l.outreachAt).toLocaleDateString() : "")], ["Opportunity", (l) => (l.opp ? l.opp.overall : "")], ["Grade", (l) => (l.opp ? l.opp.rec : "")], ["Market", (l) => l.marketLabel], ["Owner", (l) => l.owner], ["Address", (l) => l.address], ["Mailing", (l) => l.mailing], ["Use", (l) => l.use], ["Value", (l) => l.value], ["Absentee", (l) => l.absentee || ""], ["Notes", (l) => l.notes], ["Saved", (l) => new Date(l.savedAt).toLocaleDateString()]];
 function pipelineCSV(leads) {
   const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
-  const cols = [["Status", (l) => statusLabel(l.status)], ["Opportunity", (l) => (l.opp ? l.opp.overall : "")], ["Grade", (l) => (l.opp ? l.opp.rec : "")], ["Market", (l) => l.marketLabel], ["Owner", (l) => l.owner], ["Address", (l) => l.address], ["Mailing", (l) => l.mailing], ["Use", (l) => l.use], ["Value", (l) => l.value], ["Absentee", (l) => l.absentee || ""], ["Notes", (l) => l.notes], ["Saved", (l) => new Date(l.savedAt).toLocaleDateString()]];
-  return cols.map((c) => esc(c[0])).join(",") + "\n" + leads.map((l) => cols.map((c) => esc(c[1](l))).join(",")).join("\n");
+  return PIPELINE_COLS.map((c) => esc(c[0])).join(",") + "\n" + leads.map((l) => PIPELINE_COLS.map((c) => esc(c[1](l))).join(",")).join("\n");
+}
+
+// ── Call prep sheets — one printable page per lead ────────────────────────────
+// Everything a caller needs on one page, built ONLY from data already saved on the
+// lead (no API calls, so a 30-sheet batch prints instantly): owner + mailing, the
+// deal basis (last sale, tenure, SF, zoning), why it scored, saved notes, and a
+// blank call log. Same plain no-logo document style as the comp one-pager.
+function callSheetHTML(leads) {
+  const esc = escHtml;
+  const num = (v) => (v == null || v === "" ? null : Number(v).toLocaleString());
+  const today = new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const kv = (rows) => rows.filter(([, v]) => v != null && v !== "").map(([k, v]) => `<div class="kv"><span>${esc(k)}</span><strong>${esc(String(v))}</strong></div>`).join("");
+  const sheets = leads.map((l) => {
+    const r = l.row || {}; const raw = r.raw || {};
+    const opp = (r.market && r.market !== "web") ? opportunityScore(r) : null;
+    const salePrice = raw.last_sale_price || raw.sale_price;
+    const saleYear = String(raw.last_sale_date || raw.sale_date || raw.sale_year || "").slice(0, 4);
+    const owner = kv([
+      ["Owner of record", l.owner || raw.deed_owner],
+      ["Deed owner (if newer)", raw.deed_owner && raw.deed_owner !== l.owner ? raw.deed_owner : null],
+      ["Mailing address", l.mailing],
+      ["Owner location", l.absentee ? (l.absentee === "out-of-state" ? "OUT-OF-STATE (absentee)" : "OUT-OF-AREA (absentee)") : "Local"],
+      ["Outreach status", `${outreachLabel(l.outreach || "none")}${l.callbackAt ? ` — callback ${l.callbackAt}` : ""}${l.outreachAt ? ` (last: ${new Date(l.outreachAt).toLocaleDateString()})` : ""}`],
+    ]);
+    const property = kv([
+      ["Use", l.use || raw.use],
+      ["Value", l.value],
+      ["Building SF", num(raw.bldg_sqft || raw.building_sqft)],
+      ["Retail SF", num(raw.retail_sqft)],
+      ["Frontage", raw.frontage_ft ? `${raw.frontage_ft} ft` : null],
+      ["Floors", raw.num_floors || raw.stories],
+      ["Year built", raw.year_built || raw.ayb],
+      ["Zoning", raw.zoning || raw.zone || raw.zone_description],
+      ["Lot", raw.lot_sqft ? `${num(raw.lot_sqft)} SF` : (raw.acres || raw.land_acres ? `${raw.acres || raw.land_acres} acres` : null)],
+    ]);
+    const basis = kv([
+      ["Last recorded sale", salePrice ? `${fmtAmount(salePrice)}${saleYear ? ` · ${saleYear}` : ""}` : (saleYear ? `recorded ${saleYear} (no separable price)` : null)],
+      ["Portfolio deed", raw.portfolio_sale ? `Yes — bulk transfer of ${raw.last_deed_lots || "multiple"} lots${raw.portfolio_total_price ? ` for ${fmtAmount(raw.portfolio_total_price)} total` : ""}` : null],
+      ["Years owned", raw.years_owned != null ? `~${raw.years_owned}` : null],
+      ["Tax lien", raw.tax_lien ? "ON THE LIEN SALE LIST" : null],
+      ["Open code violations", raw.open_violations || null],
+      ["Unused air rights", raw.buildable_sqft && Number(raw.buildable_sqft) >= 2500 ? `~${num(raw.buildable_sqft)} SF buildable` : null],
+    ]);
+    const why = opp ? `<div class="sec">WHY THIS LEAD — ${esc(opp.rec.toUpperCase())} · ${opp.overall}/100</div><ul>${opp.parts.map((p) => `<li>${esc(p.label)}: ${esc(p.note)} — ${p.sub}/100</li>`).join("")}</ul>` : "";
+    const notes = l.notes ? `<div class="sec">NOTES</div><p class="notes">${esc(l.notes)}</p>` : "";
+    return `<div class="sheet">
+  <div class="tag">CALL PREP SHEET · ${esc(l.marketLabel || "")} · ${esc(today)}</div>
+  <h1>${esc(l.address || "—")}</h1>
+  <div class="ownerline">${esc(l.owner || "Owner unknown")}</div>
+  <div class="cols">
+    <div><div class="sec">OWNER &amp; REACH</div>${owner}
+      <div class="kv"><span>Phone</span><strong class="blank"></strong></div>
+      <div class="kv"><span>Email</span><strong class="blank"></strong></div>
+    </div>
+    <div><div class="sec">PROPERTY</div>${property}<div class="sec">DEAL BASIS</div>${basis}</div>
+  </div>
+  ${why}${notes}
+  <div class="sec">CALL LOG</div>
+  ${[1, 2, 3, 4].map(() => `<div class="logline"><span>Date</span><span>Outcome</span><span>Next step</span></div>`).join("")}
+  <div class="foot">FRONTAGE · verify current ownership (recent deed) before dialing · prospecting signals, not proven seller intent</div>
+</div>`;
+  }).join("\n");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Call prep sheets</title>
+<style>
+  *{box-sizing:border-box;} body{margin:0;background:#f3f3f3;color:#1a1a1a;font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .bar{text-align:center;padding:10px 0;} .bar button{font-size:13px;cursor:pointer;padding:8px 18px;border:1px solid #888;background:#fff;color:#1a1a1a;border-radius:4px;}
+  .sheet{max-width:760px;margin:20px auto;background:#fff;border:1px solid #ddd;padding:34px 40px;page-break-after:always;}
+  .tag{font-size:10px;letter-spacing:0.12em;color:#888;}
+  h1{font-size:19px;margin:6px 0 2px;} .ownerline{font-size:13px;color:#444;margin-bottom:14px;}
+  .sec{font-size:10.5px;letter-spacing:0.1em;color:#666;border-bottom:1px solid #1a1a1a;padding-bottom:3px;margin:14px 0 7px;}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:0 28px;align-items:start;}
+  .kv{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;padding:2.5px 0;border-bottom:1px dotted #e2e2e2;}
+  .kv span{color:#777;white-space:nowrap;} .kv strong{font-weight:600;text-align:right;}
+  .kv .blank{min-width:150px;border-bottom:1px solid #999;}
+  ul{margin:4px 0;padding-left:18px;} li{font-size:12.5px;line-height:1.55;margin:2px 0;}
+  .notes{font-size:12.5px;line-height:1.6;white-space:pre-wrap;margin:4px 0;}
+  .logline{display:grid;grid-template-columns:90px 1fr 1fr;gap:14px;font-size:10px;color:#999;padding:15px 0 3px;border-bottom:1px solid #bbb;}
+  .foot{margin-top:20px;padding-top:8px;border-top:1px solid #ddd;font-size:9px;color:#999;}
+  @media print{body{background:#fff;}.bar{display:none;}.sheet{margin:0;border:none;padding:0 0 20px;}@page{margin:14mm;}}
+</style></head><body>
+<div class="bar"><button onclick="window.print()">Print / Save as PDF</button></div>
+${sheets}
+</body></html>`;
+}
+function openCallSheets(leads) {
+  const w = window.open("", "_blank");
+  if (!w) return false;
+  w.document.open(); w.document.write(callSheetHTML(leads)); w.document.close();
+  return true;
 }
 
 // The Pipeline tab — saved leads as a WORKING list: status, notes, and the full dossier
@@ -4729,6 +4843,7 @@ function pipelineCSV(leads) {
 function Pipeline({ pw }) {
   const [leads, setLeads] = useState(() => Object.values(loadPipeline()));
   const [filter, setFilter] = useState("all");
+  const [oFilter, setOFilter] = useState("all");
   const [openId, setOpenId] = useState(null);
   const [shared, setShared] = useState(null); // null = syncing, true = shared DB, false = device-local
   const refresh = () => setLeads(Object.values(loadPipeline()));
@@ -4741,26 +4856,39 @@ function Pipeline({ pw }) {
   }, []);
 
   const counts = {}; for (const l of leads) counts[l.status] = (counts[l.status] || 0) + 1;
+  const oCounts = {}; for (const l of leads) { const o = l.outreach || "none"; oCounts[o] = (oCounts[o] || 0) + 1; }
+  const dueCount = leads.filter(callbackDue).length;
   const sorted = [...leads].sort((a, b) => (b.opp?.overall ?? -1) - (a.opp?.overall ?? -1) || (b.savedAt || 0) - (a.savedAt || 0));
-  const shown = filter === "all" ? sorted : sorted.filter((l) => l.status === filter);
-  const tab = (v, label, n) => (
-    <button key={v} onClick={() => setFilter(v)} className="mono" style={{ cursor: "pointer", fontSize: 11, padding: "5px 11px", borderRadius: 7, border: `1px solid ${filter === v ? C.gold : C.line}`, background: filter === v ? C.goldSoft : "transparent", color: filter === v ? C.gold : C.muted }}>{label}{n != null ? ` ${n}` : ""}</button>
+  let shown = filter === "all" ? sorted : sorted.filter((l) => l.status === filter);
+  if (oFilter !== "all") shown = shown.filter((l) => (l.outreach || "none") === oFilter);
+  // Working the callback queue: soonest scheduled call first, not highest score.
+  if (oFilter === "callback") shown = [...shown].sort((a, b) => (a.callbackAt || "9999") < (b.callbackAt || "9999") ? -1 : 1);
+  const tab = (v, label, n, active, set, color) => (
+    <button key={v} onClick={() => set(v)} className="mono" style={{ cursor: "pointer", fontSize: 11, padding: "5px 11px", borderRadius: 7, border: `1px solid ${active ? (color || C.gold) : C.line}`, background: active ? C.goldSoft : "transparent", color: active ? (color || C.gold) : C.muted }}>{label}{n != null ? ` ${n}` : ""}</button>
   );
 
   return (
     <div style={{ marginTop: 22 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {tab("all", "All", leads.length)}
-          {PIPELINE_STATUSES.map(([v, l]) => tab(v, l, counts[v] || 0))}
+          {tab("all", "All", leads.length, filter === "all", setFilter)}
+          {PIPELINE_STATUSES.map(([v, l]) => tab(v, l, counts[v] || 0, filter === v, setFilter))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span className="mono" title={shared ? "Synced to the shared team database" : shared === false ? "No shared database connected — saved in this browser only" : "Checking the shared database…"}
             style={{ fontSize: 10, letterSpacing: "0.05em", color: shared ? C.green : C.muted }}>
             {shared ? "● SHARED LIST" : shared === false ? "○ THIS DEVICE ONLY" : "◌ SYNCING…"}
           </span>
+          {leads.length > 0 && <button onClick={() => { if (shown.length && !openCallSheets(shown)) alert("Allow pop-ups for this site to open the call sheets."); }} title="One printable prep page per lead shown below" className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>⎙ CALL SHEETS ({shown.length})</button>}
           {leads.length > 0 && <button onClick={() => downloadBlob(pipelineCSV(shown), `pipeline_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
+          {leads.length > 0 && <button onClick={() => downloadXlsx(`pipeline_${new Date().toISOString().slice(0, 10)}.xlsx`, "Pipeline", PIPELINE_COLS, shown)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXCEL</button>}
         </div>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+        <span className="mono" style={{ fontSize: 10, letterSpacing: "0.08em", color: C.muted }}>OUTREACH:</span>
+        {tab("all", "All", null, oFilter === "all", setOFilter)}
+        {OUTREACH_STATES.map(([v, l]) => tab(v, l, oCounts[v] || 0, oFilter === v, setOFilter, v === "dnc" ? C.red : undefined))}
+        {dueCount > 0 && <span className="mono" style={{ fontSize: 10.5, color: C.red, marginLeft: 4 }}>⏰ {dueCount} callback{dueCount === 1 ? "" : "s"} due</span>}
       </div>
       {leads.length === 0 ? (
         <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, marginTop: 8 }}>
@@ -4777,31 +4905,51 @@ function Pipeline({ pw }) {
 
 function PipelineRow({ lead, pw, open, onToggle, onChange, onRemove }) {
   const [status, setStatusLocal] = useState(lead.status);
+  const [outreach, setOutreachLocal] = useState(lead.outreach || "none");
+  const [callbackAt, setCallbackLocal] = useState(lead.callbackAt || "");
   const [notes, setNotesLocal] = useState(lead.notes || "");
   const r = lead.row || {};
   const opp = (r.market && r.market !== "web") ? opportunityScore(r) : null;
   const changeStatus = (s) => { setStatusLocal(s); updateLead(lead.id, { status: s }); onChange(); };
+  const changeOutreach = (s) => {
+    setOutreachLocal(s);
+    const patch = { outreach: s, outreachAt: s === "none" ? null : Date.now() };
+    if (s !== "callback") { patch.callbackAt = ""; setCallbackLocal(""); }
+    updateLead(lead.id, patch); onChange();
+  };
+  const changeCallback = (d) => { setCallbackLocal(d); updateLead(lead.id, { callbackAt: d }); onChange(); };
   const saveNotes = () => { if (notes !== (lead.notes || "")) { updateLead(lead.id, { notes }); onChange(); } };
+  const due = callbackDue({ ...lead, outreach, callbackAt });
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: "12px 14px", marginBottom: 10 }}>
+    <div style={{ background: C.panel, border: `1px solid ${outreach === "dnc" ? `${C.red}55` : C.line}`, borderRadius: 12, padding: "12px 14px", marginBottom: 10 }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         {opp && <div style={{ flexShrink: 0 }}><GradeCell g={opp} /></div>}
         <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-          <div style={{ fontWeight: 700, color: C.ivory, fontSize: 13 }}>{lead.owner || "—"}{lead.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber }}>{lead.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}</div>
+          <div style={{ fontWeight: 700, color: C.ivory, fontSize: 13 }}>{lead.owner || "—"}
+            {lead.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber }}>{lead.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}
+            {outreach === "dnc" && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: `${C.red}18`, color: C.red }}>✋ DO NOT CALL</span>}
+            {outreach === "callback" && callbackAt && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: due ? `${C.red}18` : C.goldSoft, color: due ? C.red : C.amber }}>⏰ CALLBACK {callbackAt}{due ? " — DUE" : ""}</span>}
+            {(outreach === "called" || outreach === "voicemail") && lead.outreachAt && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.gold }}>☎ {outreachLabel(outreach).toUpperCase()} {new Date(lead.outreachAt).toLocaleDateString()}</span>}
+          </div>
           <div style={{ fontSize: 12.5, marginTop: 1 }}>{lead.mapsUrl ? <a href={lead.mapsUrl} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{lead.address || "—"} ↗</a> : (lead.address || "—")}</div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{[lead.marketLabel, lead.use, lead.value].filter(Boolean).join(" · ")}{lead.mailing ? ` · ${lead.mailing}` : ""}</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
           <select value={status} onChange={(e) => changeStatus(e.target.value)} style={{ ...fieldStyle, fontSize: 12, padding: "6px 10px", color: statusColor(status) }}>
             {PIPELINE_STATUSES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
+          <select value={outreach} onChange={(e) => changeOutreach(e.target.value)} title="Call outcome" style={{ ...fieldStyle, fontSize: 12, padding: "6px 10px", color: outreachColor(outreach) }}>
+            {OUTREACH_STATES.map(([v, l]) => <option key={v} value={v}>☎ {l}</option>)}
+          </select>
+          {outreach === "callback" && <input type="date" value={callbackAt} onChange={(e) => changeCallback(e.target.value)} title="Callback date" style={{ ...fieldStyle, fontSize: 12, padding: "5px 8px" }} />}
           <button onClick={onRemove} title="Remove from pipeline" className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "5px 9px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.muted }}>✕</button>
         </div>
       </div>
       <textarea value={notes} onChange={(e) => setNotesLocal(e.target.value)} onBlur={saveNotes} placeholder="Notes — call outcomes, next step, terms…" rows={2}
         style={{ ...fieldStyle, width: "100%", marginTop: 10, resize: "vertical", fontFamily: "inherit", fontSize: 12.5 }} />
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={onToggle} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "5px 12px", borderRadius: 7, border: `1px solid ${open ? C.gold : C.line}`, background: open ? C.goldSoft : C.panel, color: open ? C.gold : C.ivory }}>{open ? "▾ hide" : "▸ work this lead"}</button>
+        <button onClick={() => { if (!openCallSheets([{ ...lead, status, outreach, callbackAt, notes }])) alert("Allow pop-ups for this site to open the call sheet."); }} title="Printable one-page prep sheet for this lead" className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "5px 12px", borderRadius: 7, border: `1px solid ${C.line}`, background: C.panel, color: C.ivory }}>⎙ CALL SHEET</button>
       </div>
       {open && (
         <div style={{ marginTop: 10, borderTop: `1px solid ${C.line}`, paddingTop: 4 }}>

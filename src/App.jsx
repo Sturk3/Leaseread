@@ -3027,58 +3027,12 @@ function CharlestonIntelPanel({ pid, address, pw }) {
   );
 }
 
-// Inline LLC "finder" for the states that GATE their business registry (no free Socrata
-// dataset like CT/NY): TN (TNBear) and SC (businessfilings.sc.gov, captcha-gated). Same
-// metered web lookup Scout's tn_entity_lookup / sc_entity_lookup run: state registry +
-// OpenCorporates → the entity's registered agent + any principals. One click from the dossier.
-// SC's registry pages aren't crawlable (JS-rendered + captcha), so a registry-only query
-// usually whiffs on small LLCs — the query works the wider web too (sale coverage / deed
-// aggregators / local CRE press / LinkedIn usually name the principal behind a Charleston LLC).
+// Scout's sc_entity_lookup tool query (TOOL_ROUTES). SC's registry pages aren't crawlable
+// (JS-rendered + captcha), so a registry-only query usually whiffs on small LLCs — this
+// works the wider web too (sale coverage / deed aggregators / local CRE press / LinkedIn
+// usually name the principal behind a Charleston LLC). The dossier's own unmask lives in
+// OwnerPeople (which merges the LLC-unmask with the relatives/associates lookup).
 const SC_ENTITY_QUERY = (name) => `Identify who is actually behind the South Carolina entity "${name}" (a South Carolina property owner). Work every angle of the public web: (1) the SC Secretary of State Business Entities Online registry (businessfilings.sc.gov) and OpenCorporates (opencorporates.com/companies/us_sc) for the exact entity name, type, status, filing date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC) and any listed officers/members — note these registry pages are often not reachable by web search; AND (2) search news and commercial real estate press (Charleston Post and Courier, Charleston Regional Business Journal, trade press), property/deed record aggregators, court filings, business directories, and LinkedIn for the entity name — sale and development coverage usually names the principal or firm behind a single-asset LLC. Report: the most likely PRINCIPAL(S) / manager and their firm, the registered agent + address if found, entity status/filing date if found, and the best way to reach the decision-maker. Cite each source, clearly separate CONFIRMED record facts from inference, and do NOT invent details. If the SOS record itself can't be reached, say so — it can be pulled manually at businessfilings.sc.gov.`;
-const LLC_LOOKUP = {
-  tn: {
-    title: "TN registered agent + principals",
-    blurb: "TN gates its business registry (no free dataset like NY/CT), so this is a web lookup of TNBear + OpenCorporates",
-    query: (owner) => `Look up the Tennessee business entity "${owner}" in the Tennessee Secretary of State business registry (TNBear / tncab.tnsos.gov) and OpenCorporates (opencorporates.com/companies/us_tn). Report exactly what the records show: the precise entity name, SOS control number, type (LLC / corporation), status (active / inactive / dissolved), formation date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC), the principal office / mailing address, and any listed officers / members / managers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.`,
-  },
-  sc: {
-    title: "SC registered agent + principals",
-    blurb: "South Carolina captcha-gates its registry (no free dataset like NY/CT), so this is a web lookup: SC SOS + OpenCorporates + sale coverage / deed records / press that name the people behind the LLC",
-    link: ["SC SOS manual search ↗", "https://businessfilings.sc.gov/BusinessFiling/Entity/Search"],
-    query: SC_ENTITY_QUERY,
-  },
-};
-function LlcFinder({ owner, pw, st }) {
-  const cfg = LLC_LOOKUP[st];
-  const [state, setState] = useState("idle"); // idle | loading | done | error
-  const [text, setText] = useState("");
-  const [err, setErr] = useState("");
-  const run = async () => {
-    setState("loading"); setErr("");
-    try {
-      // Always LIVE web — an LLC unmask is worthless from model knowledge alone, so it must
-      // not silently fall back to knowledge mode (the Quick toggle / monthly cap do that to
-      // ordinary web research). This is a deliberate single click, so we run the real search
-      // and count the spend.
-      const d = await postJSON("/api/research", { mode: "web", password: pw, query: cfg.query(owner) });
-      addScoutSpend(WEB_RUN_COST);
-      setText(d.brief || ""); setState("done");
-    } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
-  };
-  return (
-    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>🔎 UNMASK LLC — {cfg.title}</div>
-        {state !== "loading" && <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻ re-run" : "▸ unmask"}</button>}
-      </div>
-      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>{cfg.blurb} for <strong style={{ color: C.ivory }}>{owner}</strong> — the registered agent + any principals. <span style={{ color: C.muted }}>Runs a live web search (~$0.15).</span></div>}
-      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Looking up the entity…</div>}
-      {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
-      {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={text} /></div>}
-      {cfg.link && <div style={{ marginTop: 6, fontSize: 11 }}><a href={cfg.link[1]} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{cfg.link[0]}</a><span style={{ color: C.muted }}> — the official record (captcha-gated, so pull it by hand if the web lookup can’t reach it)</span></div>}
-    </div>
-  );
-}
 
 // LLC tracker — every county parcel held by the same owner name (Nashville / Davidson Co.
 // and Charleston Co. both support owner-name search). Maps an entity to its whole book
@@ -3147,11 +3101,10 @@ function AssessorMarketDetail({ r, pw }) {
       )}
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
       {r.market === "sc" && <CharlestonIntelPanel pid={raw.pid} address={r.address} pw={pw} />}
-      {(r.market === "tn" || r.market === "sc") && r.owner && ENTITY_RE.test(r.owner) && <LlcFinder owner={r.owner} pw={pw} st={r.market} />}
       {(r.market === "tn" || r.market === "sc") && r.owner && <OwnerPortfolio owner={r.owner} pw={pw} st={r.market} />}
       <ResearchBrief r={contactR} pw={pw} />
       <ContactReveal r={contactR} pw={pw} />
-      <RelativesFinder r={contactR} pw={pw} />
+      <OwnerPeople r={contactR} pw={pw} market={r.market} />
     </>
   );
 }
@@ -4585,23 +4538,33 @@ function ResearchBriefBody({ text }) {
   );
 }
 
-// Find relatives & associates via AI web research — the household/business side-channel
-// for reaching an owner when their own line is a dead end. Skip-trace providers gate
-// relatives behind enterprise tiers, but they're exactly what public sources expose
-// (deed co-ownership, SOS filings, news, obituaries, LinkedIn). Returns likely people +
-// how they connect; you then drop a name into the "trace a person" box below to get their
-// number via the skip tracer. Metered + cached like the other web-research answers.
-function relativesQuery(r, isCo) {
+// ONE combined "who's behind this + who's around them" lookup (the merge of the old
+// LLC-unmask and relatives finders). For an ENTITY owner it unmasks the LLC (registry:
+// registered agent + principals + status) AND maps their business circle; for a PERSON
+// owner it finds relatives + close associates. All via AI web research — the same public
+// sources (SOS filings, deeds, news, obituaries, LinkedIn) — always LIVE web (never the
+// silent knowledge downgrade). Metered + cached; a found name drops into the "trace a
+// person" box below to get a number.
+const REGISTRY_HINT = {
+  sc: "the SC Secretary of State Business Entities Online registry (businessfilings.sc.gov — captcha-gated, so it may not be reachable by search; it can be pulled by hand) and OpenCorporates",
+  tn: "the Tennessee Secretary of State registry (TNBear / tncab.tnsos.gov) and OpenCorporates",
+  ct: "the Connecticut Business Registry (data.ct.gov — CT publicly discloses LLC principals) and OpenCorporates",
+  nyc: "the New York State DOS business registry (note: NY hides LLC members, listing only the process-service contact) and OpenCorporates",
+  ny: "the New York State DOS business registry (note: NY hides LLC members) and OpenCorporates",
+};
+const SOS_LINK = { sc: ["SC SOS entity search ↗", "https://businessfilings.sc.gov/BusinessFiling/Entity/Search"] };
+function peopleQuery(r, market, isCo) {
   const owner = r.name || r.owner || "";
   const where = [r.address, r.city, r.borough, r.state].filter(Boolean).join(", ");
   const mail = r.contact_address ? `Owner mailing address: ${r.contact_address}${r.city ? ", " + r.city : ""}${r.state ? ", " + r.state : ""}.` : "";
+  const registry = REGISTRY_HINT[market] || "the state Secretary of State / business registry and OpenCorporates";
   if (isCo) {
-    return `Find the PEOPLE behind, and the business ASSOCIATES of, the real estate owner entity "${owner}" (owns property at ${where}). ${mail}
-Work public sources: state Secretary of State / business registries (registered agent, managers, members, organizers), property deeds and co-ownership records, court filings, business news and press, and LinkedIn. Report a short list of:
-- The PRINCIPALS / managers / members of the entity (names + where they're based).
-- Known business ASSOCIATES, partners, or co-investors — people who appear alongside them on other entities, deeds, or filings.
-- For each: their relationship to the entity/owner and the best place they'd be reachable (city/state), so the user can skip-trace the person.
-Cite each source. Clearly separate CONFIRMED record facts from likely-but-unconfirmed inferences. Do NOT invent names, numbers, or relationships — if the people behind the LLC aren't public, say so plainly.`;
+    return `For the real estate owner entity "${owner}" (owns property at ${where}), report BOTH who is behind it AND their business circle. ${mail}
+Work public sources: ${registry}; property deeds and co-ownership records; court filings; business news/press; and LinkedIn. Provide:
+1) UNMASK THE ENTITY — exact registered name, type, status (active/dissolved), filing date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC), and the principal/mailing address.
+2) THE PEOPLE — the principals / managers / members / organizers behind it (names + where they're based).
+3) THE CIRCLE — known business ASSOCIATES, partners, or co-investors who appear alongside them on other entities, deeds, or filings.
+For each person, give the best city/state to reach them so the user can skip-trace them. Cite each source. Clearly separate CONFIRMED record facts from likely-but-unconfirmed inferences. Do NOT invent names, numbers, or relationships — if the people behind the LLC aren't public, say so plainly and note the registry can be checked by hand.`;
   }
   return `Find the RELATIVES and close ASSOCIATES of "${owner}", the individual who owns property at ${where}. ${mail}
 Work public sources: property deeds and co-ownership records (co-owners / spouses often appear on title), obituaries and public family notices, news, voter and public directories, business filings where they're a partner, and LinkedIn. Report a short list of:
@@ -4610,44 +4573,46 @@ Work public sources: property deeds and co-ownership records (co-owners / spouse
 - For each: how they connect to the owner and the city/state they're likely reachable in, so the user can skip-trace that person to reach the owner.
 Cite each source. Clearly separate CONFIRMED facts from likely-but-unconfirmed inferences, and mark uncertainty (name matches can be false positives). Do NOT invent people, phone numbers, or relationships — if nothing reliable is public, say so plainly.`;
 }
-function RelativesFinder({ r, pw }) {
+function OwnerPeople({ r, pw, market }) {
   const owner = r.name || r.owner || "";
   const isCo = ENTITY_RE.test(owner);
-  const cached = getAiAnswer(r, "relatives");
+  const cached = getAiAnswer(r, "people");
   const [state, setState] = useState(cached ? "done" : "idle"); // idle | loading | done | error
   const [text, setText] = useState(cached ? cached.text : "");
   const [savedAt, setSavedAt] = useState(cached ? cached.savedAt : 0);
   const [err, setErr] = useState("");
+  const link = isCo ? SOS_LINK[market] : null;
   const run = async (refine = false) => {
     setState("loading"); setErr("");
     try {
-      // Always LIVE web — finding people from public records is pointless from model
-      // knowledge alone, so don't let the Quick toggle / cap silently downgrade it.
-      const d = await postJSON("/api/research", { mode: "web", password: pw, query: relativesQuery(r, isCo), ...(refine && text ? { prior: text } : {}) });
+      // Always LIVE web — unmasking an LLC / finding people from public records is pointless
+      // from model knowledge alone, so don't let the Quick toggle / cap silently downgrade it.
+      const d = await postJSON("/api/research", { mode: "web", password: pw, query: peopleQuery(r, market, isCo), ...(refine && text ? { prior: text } : {}) });
       addScoutSpend(WEB_RUN_COST);
       const t = d.brief || "";
-      setText(t); saveAiAnswer(r, "relatives", t, "web"); setSavedAt(Date.now()); setState("done");
+      setText(t); saveAiAnswer(r, "people", t, "web"); setSavedAt(Date.now()); setState("done");
     } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
   };
   if (!owner) return null;
   return (
     <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>👥 {isCo ? "PEOPLE & ASSOCIATES" : "RELATIVES & ASSOCIATES"} — reach the owner through their circle</div>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>👥 {isCo ? "WHO’S BEHIND THIS LLC + THEIR CIRCLE" : "RELATIVES & ASSOCIATES"}</div>
         {state !== "loading" && (
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             {state === "done" && savedAt > 0 && <span style={{ fontSize: 10, color: C.muted }}>saved · {savedAgo(savedAt)}</span>}
-            {state === "done" && <button onClick={() => run(true)} title="Re-run, building on the saved list" className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.line}` }}>↻ refine</button>}
-            <button onClick={() => run(false)} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻ fresh" : "▸ find"}</button>
+            {state === "done" && <button onClick={() => run(true)} title="Re-run, building on the saved answer" className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.line}` }}>↻ refine</button>}
+            <button onClick={() => run(false)} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻ re-run" : isCo ? "▸ unmask" : "▸ find"}</button>
           </div>
         )}
       </div>
       {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>{isCo
-        ? <>Finds the <strong style={{ color: C.ivory }}>people behind {owner}</strong> and their business associates from public records. Once you have a name, drop it into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to get their number.</>
-        : <>Finds likely <strong style={{ color: C.ivory }}>family and associates of {owner}</strong> from public records — a way in when the owner’s own line is a dead end. Take any name into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to skip-trace them.</>}</div>}
+        ? <>Unmasks <strong style={{ color: C.ivory }}>{owner}</strong> — the registered agent + principals behind it — and maps their business associates, from public records. Drop any name into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to get their number. <span>Live web search (~$0.15).</span></>
+        : <>Finds likely <strong style={{ color: C.ivory }}>family and associates of {owner}</strong> — a way in when the owner’s own line is a dead end. Take any name into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to skip-trace them. <span>Live web search (~$0.15).</span></>}</div>}
       {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Searching public records…</div>}
       {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
       {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={text} /><div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>Verify before relying on any name — public matches can be wrong. To reach one, use the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below with their name + a likely address.</div></div>}
+      {link && <div style={{ marginTop: 8, fontSize: 11 }}><a href={link[1]} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{link[0]}</a><span style={{ color: C.muted }}> — the official registry (captcha-gated; pull it by hand if the web lookup can’t reach it)</span></div>}
     </div>
   );
 }
@@ -5708,7 +5673,7 @@ function PropertyDetail({ r, pw }) {
           );
         })()}
         <ContactReveal r={r} pw={pw} />
-        <RelativesFinder r={r} pw={pw} />
+        <OwnerPeople r={r} pw={pw} market="nyc" />
 
         <div className="mono" style={title}>PROPERTY</div>
         <div style={{ fontSize: 13 }}>

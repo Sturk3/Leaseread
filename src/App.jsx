@@ -3031,7 +3031,10 @@ function CharlestonIntelPanel({ pid, address, pw }) {
 // dataset like CT/NY): TN (TNBear) and SC (businessfilings.sc.gov, captcha-gated). Same
 // metered web lookup Scout's tn_entity_lookup / sc_entity_lookup run: state registry +
 // OpenCorporates → the entity's registered agent + any principals. One click from the dossier.
-const SC_ENTITY_QUERY = (name) => `Look up the South Carolina business entity "${name}" in the South Carolina Secretary of State Business Entities Online registry (businessfilings.sc.gov) and OpenCorporates (opencorporates.com/companies/us_sc). Report exactly what the records show: the precise entity name, type (LLC / corporation), status (good standing / dissolved / forfeited), filing/effective date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC), the principal office / mailing address, and any listed officers / members / managers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.`;
+// SC's registry pages aren't crawlable (JS-rendered + captcha), so a registry-only query
+// usually whiffs on small LLCs — the query works the wider web too (sale coverage / deed
+// aggregators / local CRE press / LinkedIn usually name the principal behind a Charleston LLC).
+const SC_ENTITY_QUERY = (name) => `Identify who is actually behind the South Carolina entity "${name}" (a South Carolina property owner). Work every angle of the public web: (1) the SC Secretary of State Business Entities Online registry (businessfilings.sc.gov) and OpenCorporates (opencorporates.com/companies/us_sc) for the exact entity name, type, status, filing date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC) and any listed officers/members — note these registry pages are often not reachable by web search; AND (2) search news and commercial real estate press (Charleston Post and Courier, Charleston Regional Business Journal, trade press), property/deed record aggregators, court filings, business directories, and LinkedIn for the entity name — sale and development coverage usually names the principal or firm behind a single-asset LLC. Report: the most likely PRINCIPAL(S) / manager and their firm, the registered agent + address if found, entity status/filing date if found, and the best way to reach the decision-maker. Cite each source, clearly separate CONFIRMED record facts from inference, and do NOT invent details. If the SOS record itself can't be reached, say so — it can be pulled manually at businessfilings.sc.gov.`;
 const LLC_LOOKUP = {
   tn: {
     title: "TN registered agent + principals",
@@ -3040,7 +3043,8 @@ const LLC_LOOKUP = {
   },
   sc: {
     title: "SC registered agent + principals",
-    blurb: "South Carolina captcha-gates its registry search (no free dataset like NY/CT), so this is a web lookup of SC SOS Business Entities Online + OpenCorporates",
+    blurb: "South Carolina captcha-gates its registry (no free dataset like NY/CT), so this is a web lookup: SC SOS + OpenCorporates + sale coverage / deed records / press that name the people behind the LLC",
+    link: ["SC SOS manual search ↗", "https://businessfilings.sc.gov/BusinessFiling/Entity/Search"],
     query: SC_ENTITY_QUERY,
   },
 };
@@ -3068,6 +3072,7 @@ function LlcFinder({ owner, pw, st }) {
       {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Looking up the entity…</div>}
       {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
       {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={text} /></div>}
+      {cfg.link && <div style={{ marginTop: 6, fontSize: 11 }}><a href={cfg.link[1]} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{cfg.link[0]}</a><span style={{ color: C.muted }}> — the official record (captcha-gated, so pull it by hand if the web lookup can’t reach it)</span></div>}
     </div>
   );
 }

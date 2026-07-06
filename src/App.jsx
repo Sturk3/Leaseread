@@ -3148,6 +3148,7 @@ function AssessorMarketDetail({ r, pw }) {
       {(r.market === "tn" || r.market === "sc") && r.owner && <OwnerPortfolio owner={r.owner} pw={pw} st={r.market} />}
       <ResearchBrief r={contactR} pw={pw} />
       <ContactReveal r={contactR} pw={pw} />
+      <RelativesFinder r={contactR} pw={pw} />
     </>
   );
 }
@@ -4581,6 +4582,72 @@ function ResearchBriefBody({ text }) {
   );
 }
 
+// Find relatives & associates via AI web research — the household/business side-channel
+// for reaching an owner when their own line is a dead end. Skip-trace providers gate
+// relatives behind enterprise tiers, but they're exactly what public sources expose
+// (deed co-ownership, SOS filings, news, obituaries, LinkedIn). Returns likely people +
+// how they connect; you then drop a name into the "trace a person" box below to get their
+// number via the skip tracer. Metered + cached like the other web-research answers.
+function relativesQuery(r, isCo) {
+  const owner = r.name || r.owner || "";
+  const where = [r.address, r.city, r.borough, r.state].filter(Boolean).join(", ");
+  const mail = r.contact_address ? `Owner mailing address: ${r.contact_address}${r.city ? ", " + r.city : ""}${r.state ? ", " + r.state : ""}.` : "";
+  if (isCo) {
+    return `Find the PEOPLE behind, and the business ASSOCIATES of, the real estate owner entity "${owner}" (owns property at ${where}). ${mail}
+Work public sources: state Secretary of State / business registries (registered agent, managers, members, organizers), property deeds and co-ownership records, court filings, business news and press, and LinkedIn. Report a short list of:
+- The PRINCIPALS / managers / members of the entity (names + where they're based).
+- Known business ASSOCIATES, partners, or co-investors — people who appear alongside them on other entities, deeds, or filings.
+- For each: their relationship to the entity/owner and the best place they'd be reachable (city/state), so the user can skip-trace the person.
+Cite each source. Clearly separate CONFIRMED record facts from likely-but-unconfirmed inferences. Do NOT invent names, numbers, or relationships — if the people behind the LLC aren't public, say so plainly.`;
+  }
+  return `Find the RELATIVES and close ASSOCIATES of "${owner}", the individual who owns property at ${where}. ${mail}
+Work public sources: property deeds and co-ownership records (co-owners / spouses often appear on title), obituaries and public family notices, news, voter and public directories, business filings where they're a partner, and LinkedIn. Report a short list of:
+- Likely FAMILY — spouse, adult children, siblings, parents (name + relationship).
+- Close business ASSOCIATES or partners who appear alongside them on deeds, entities, or filings.
+- For each: how they connect to the owner and the city/state they're likely reachable in, so the user can skip-trace that person to reach the owner.
+Cite each source. Clearly separate CONFIRMED facts from likely-but-unconfirmed inferences, and mark uncertainty (name matches can be false positives). Do NOT invent people, phone numbers, or relationships — if nothing reliable is public, say so plainly.`;
+}
+function RelativesFinder({ r, pw }) {
+  const owner = r.name || r.owner || "";
+  const isCo = ENTITY_RE.test(owner);
+  const cached = getAiAnswer(r, "relatives");
+  const [state, setState] = useState(cached ? "done" : "idle"); // idle | loading | done | error
+  const [text, setText] = useState(cached ? cached.text : "");
+  const [savedAt, setSavedAt] = useState(cached ? cached.savedAt : 0);
+  const [err, setErr] = useState("");
+  const run = async (refine = false) => {
+    setState("loading"); setErr("");
+    try {
+      const m = webResearchMode();
+      const d = await postJSON("/api/research", { mode: m, password: pw, query: relativesQuery(r, isCo), ...(refine && text ? { prior: text } : {}) });
+      if (m === "web") addScoutSpend(WEB_RUN_COST);
+      const t = d.brief || "";
+      setText(t); saveAiAnswer(r, "relatives", t, m); setSavedAt(Date.now()); setState("done");
+    } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
+  };
+  if (!owner) return null;
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>👥 {isCo ? "PEOPLE & ASSOCIATES" : "RELATIVES & ASSOCIATES"} — reach the owner through their circle</div>
+        {state !== "loading" && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {state === "done" && savedAt > 0 && <span style={{ fontSize: 10, color: C.muted }}>saved · {savedAgo(savedAt)}</span>}
+            {state === "done" && <button onClick={() => run(true)} title="Re-run, building on the saved list" className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.line}` }}>↻ refine</button>}
+            <button onClick={() => run(false)} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻ fresh" : "▸ find"}</button>
+          </div>
+        )}
+      </div>
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>{isCo
+        ? <>Finds the <strong style={{ color: C.ivory }}>people behind {owner}</strong> and their business associates from public records. Once you have a name, drop it into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to get their number.</>
+        : <>Finds likely <strong style={{ color: C.ivory }}>family and associates of {owner}</strong> from public records — a way in when the owner’s own line is a dead end. Take any name into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to skip-trace them.</>}</div>}
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Searching public records…</div>}
+      {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+      {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={text} /><div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>Verify before relying on any name — public matches can be wrong. To reach one, use the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below with their name + a likely address.</div></div>}
+    </div>
+  );
+}
+
 // Engine 2: on-demand AI web research. Costs an Anthropic call (with web search) only
 // when the user clicks — never automatic.
 function ResearchBrief({ r, pw, forceMode }) {
@@ -5637,6 +5704,7 @@ function PropertyDetail({ r, pw }) {
           );
         })()}
         <ContactReveal r={r} pw={pw} />
+        <RelativesFinder r={r} pw={pw} />
 
         <div className="mono" style={title}>PROPERTY</div>
         <div style={{ fontSize: 13 }}>

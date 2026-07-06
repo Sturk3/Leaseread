@@ -766,6 +766,7 @@ const TOOL_ROUTES = {
   ct_entity_lookup: { url: "/api/ctentity", label: "CT entity lookup", body: (a) => ({ name: a.name }) },
   tn_entity_lookup: { url: "/api/research", label: "TN entity lookup", body: (a) => ({ mode: "web", query: `Look up the Tennessee business entity "${a.name}" in the Tennessee Secretary of State business registry (TNBear / tncab.tnsos.gov) and OpenCorporates (opencorporates.com/companies/us_tn). Report exactly what the records show: the precise entity name, SOS control number, type (LLC / corporation), status (active / inactive / dissolved), formation date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC), the principal office / mailing address, and any listed officers / members / managers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.` }) },
   ca_entity_lookup: { url: "/api/research", label: "CA entity lookup", body: (a) => ({ mode: "web", query: `Look up the California business entity "${a.name}" in the California Secretary of State business registry (bizfileOnline at bizfileonline.sos.ca.gov) and OpenCorporates (opencorporates.com/companies/us_ca). Report exactly what the records show: the precise entity name, entity number, type (LLC / corporation), status (active / suspended / FTB-suspended / dissolved), registration/formation date, jurisdiction, the AGENT FOR SERVICE OF PROCESS (name + full address — this is the key contact for an anonymous LLC), the principal office / mailing address, and any listed managers / members / officers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.` }) },
+  sc_entity_lookup: { url: "/api/research", label: "SC entity lookup", body: (a) => ({ mode: "web", query: SC_ENTITY_QUERY(a.name) }) },
   search_hamptons_properties: { url: "/api/search", label: "Searching the Hamptons", body: (a) => ({ market: "hamptons", town: a.town || "all", propertyType: a.propertyType, minValue: a.minValue, address: a.address }) },
   search_ma_properties: { url: "/api/search", label: "Searching Massachusetts", body: (a) => ({ market: "ma", town: a.town, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
   search_nashville_properties: { url: "/api/search", label: "Searching Nashville", body: (a) => ({ market: "nashville", propertyType: a.propertyType, address: a.address, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
@@ -1104,7 +1105,7 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
     }
     // Web research/search: honor Quick (knowledge, free-ish) vs Deep (live web, paid) and
     // the monthly spend cap. Over cap, deep auto-downgrades to knowledge so nothing breaks.
-    if (name === "web_research" || name === "web_search" || name === "brand_radar" || name === "ca_entity_lookup" || name === "tn_entity_lookup") {
+    if (name === "web_research" || name === "web_search" || name === "brand_radar" || name === "ca_entity_lookup" || name === "tn_entity_lookup" || name === "sc_entity_lookup") {
       const overCap = scoutSpend() >= cap;
       const deep = mode === "deep" && !overCap;
       const wKey = `${name}:${deep ? "web" : "knowledge"}:${JSON.stringify(inputArgs)}`;
@@ -3026,19 +3027,33 @@ function CharlestonIntelPanel({ pid, address, pw }) {
   );
 }
 
-// Inline Nashville LLC "finder" — TN gates its business registry (no free Socrata dataset like
-// CT/NY), so this is the same metered web lookup Scout's tn_entity_lookup runs: TNBear + OpenCorporates
-// → the entity's registered agent + any principals. One click from the dossier.
-function TnLlcFinder({ owner, pw }) {
+// Inline LLC "finder" for the states that GATE their business registry (no free Socrata
+// dataset like CT/NY): TN (TNBear) and SC (businessfilings.sc.gov, captcha-gated). Same
+// metered web lookup Scout's tn_entity_lookup / sc_entity_lookup run: state registry +
+// OpenCorporates → the entity's registered agent + any principals. One click from the dossier.
+const SC_ENTITY_QUERY = (name) => `Look up the South Carolina business entity "${name}" in the South Carolina Secretary of State Business Entities Online registry (businessfilings.sc.gov) and OpenCorporates (opencorporates.com/companies/us_sc). Report exactly what the records show: the precise entity name, type (LLC / corporation), status (good standing / dissolved / forfeited), filing/effective date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC), the principal office / mailing address, and any listed officers / members / managers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.`;
+const LLC_LOOKUP = {
+  tn: {
+    title: "TN registered agent + principals",
+    blurb: "TN gates its business registry (no free dataset like NY/CT), so this is a web lookup of TNBear + OpenCorporates",
+    query: (owner) => `Look up the Tennessee business entity "${owner}" in the Tennessee Secretary of State business registry (TNBear / tncab.tnsos.gov) and OpenCorporates (opencorporates.com/companies/us_tn). Report exactly what the records show: the precise entity name, SOS control number, type (LLC / corporation), status (active / inactive / dissolved), formation date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC), the principal office / mailing address, and any listed officers / members / managers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.`,
+  },
+  sc: {
+    title: "SC registered agent + principals",
+    blurb: "South Carolina captcha-gates its registry search (no free dataset like NY/CT), so this is a web lookup of SC SOS Business Entities Online + OpenCorporates",
+    query: SC_ENTITY_QUERY,
+  },
+};
+function LlcFinder({ owner, pw, st }) {
+  const cfg = LLC_LOOKUP[st];
   const [state, setState] = useState("idle"); // idle | loading | done | error
   const [text, setText] = useState("");
   const [err, setErr] = useState("");
   const run = async () => {
     setState("loading"); setErr("");
     try {
-      const query = `Look up the Tennessee business entity "${owner}" in the Tennessee Secretary of State business registry (TNBear / tncab.tnsos.gov) and OpenCorporates (opencorporates.com/companies/us_tn). Report exactly what the records show: the precise entity name, SOS control number, type (LLC / corporation), status (active / inactive / dissolved), formation date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC), the principal office / mailing address, and any listed officers / members / managers. If several entities match the name, list the most likely with its address. Cite each source. Do NOT invent any detail that isn't in the records; if a field isn't public, say so.`;
       const m = webResearchMode();
-      const d = await postJSON("/api/research", { mode: m, password: pw, query });
+      const d = await postJSON("/api/research", { mode: m, password: pw, query: cfg.query(owner) });
       if (m === "web") addScoutSpend(WEB_RUN_COST);
       setText(d.brief || ""); setState("done");
     } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
@@ -3046,10 +3061,10 @@ function TnLlcFinder({ owner, pw }) {
   return (
     <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>🔎 UNMASK LLC — TN registered agent + principals</div>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>🔎 UNMASK LLC — {cfg.title}</div>
         {state !== "loading" && <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻ re-run" : "▸ unmask"}</button>}
       </div>
-      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>TN gates its business registry (no free dataset like NY/CT), so this is a web lookup of TNBear + OpenCorporates for <strong style={{ color: C.ivory }}>{owner}</strong> — the registered agent + any principals. Metered like other web research.</div>}
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>{cfg.blurb} for <strong style={{ color: C.ivory }}>{owner}</strong> — the registered agent + any principals. Metered like other web research.</div>}
       {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Looking up the entity…</div>}
       {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
       {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={text} /></div>}
@@ -3057,27 +3072,33 @@ function TnLlcFinder({ owner, pw }) {
   );
 }
 
-// LLC tracker — every Davidson County parcel held by the same owner name. Maps an entity to
-// its whole book (find a motivated owner's other buildings). Single-asset LLCs return one;
-// a reused name (a developer / operating co) returns the portfolio.
-function TnOwnerPortfolio({ owner, pw }) {
+// LLC tracker — every county parcel held by the same owner name (Nashville / Davidson Co.
+// and Charleston Co. both support owner-name search). Maps an entity to its whole book
+// (find a motivated owner's other buildings). Single-asset LLCs return one; a reused name
+// (a developer / operating co) returns the portfolio.
+const PORTFOLIO_MARKETS = {
+  tn: { market: "nashville", place: "Nashville", county: "Davidson County", value: (p) => p.appraised_value || p.assessed_value },
+  sc: { market: "charleston", place: "Charleston", county: "Charleston County", value: (p) => p.sale_price },
+};
+function OwnerPortfolio({ owner, pw, st }) {
+  const cfg = PORTFOLIO_MARKETS[st];
   const [state, setState] = useState("idle"); // idle | loading | done | error
   const [props, setProps] = useState([]);
   const [err, setErr] = useState("");
   const run = async () => {
     setState("loading"); setErr("");
     try {
-      const d = await postJSON("/api/search", { password: pw, market: "nashville", owner, propertyType: "any" });
+      const d = await postJSON("/api/search", { password: pw, market: cfg.market, owner, propertyType: "any" });
       setProps(d.properties || []); setState("done");
     } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
   };
   return (
     <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>▦ OWNER PORTFOLIO — what this owner holds in Nashville</div>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>▦ OWNER PORTFOLIO — what this owner holds in {cfg.place}</div>
         {state !== "loading" && <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻" : "▸ show"}</button>}
       </div>
-      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Every Davidson County parcel held by <strong style={{ color: C.ivory }}>{owner}</strong>. A single-asset LLC returns one; a reused name (a developer / operating co) returns the whole book.</div>}
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Every {cfg.county} parcel held by <strong style={{ color: C.ivory }}>{owner}</strong>. A single-asset LLC returns one; a reused name (a developer / operating co) returns the whole book.</div>}
       {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Searching the county roll…</div>}
       {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
       {state === "done" && (props.length ? (
@@ -3086,7 +3107,7 @@ function TnOwnerPortfolio({ owner, pw }) {
           {props.slice(0, 40).map((p, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, padding: "3px 0", borderBottom: `1px solid ${C.line}` }}>
               <span style={{ color: C.ivory }}>{p.address}{p.use ? <span style={{ color: C.muted }}> · {p.use}</span> : ""}</span>
-              <span className="mono" style={{ color: C.muted, whiteSpace: "nowrap" }}>{p.appraised_value ? fmtAmount(p.appraised_value) : ""}</span>
+              <span className="mono" style={{ color: C.muted, whiteSpace: "nowrap" }}>{cfg.value(p) ? fmtAmount(cfg.value(p)) : ""}</span>
             </div>
           ))}
           {props.length > 40 && <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>+{props.length - 40} more</div>}
@@ -3118,11 +3139,8 @@ function AssessorMarketDetail({ r, pw }) {
       )}
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
       {r.market === "sc" && <CharlestonIntelPanel pid={raw.pid} address={r.address} pw={pw} />}
-      {r.market === "sc" && r.owner && ENTITY_RE.test(r.owner) && (
-        <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (SC Secretary of State registry).</div>
-      )}
-      {r.market === "tn" && r.owner && ENTITY_RE.test(r.owner) && <TnLlcFinder owner={r.owner} pw={pw} />}
-      {r.market === "tn" && r.owner && <TnOwnerPortfolio owner={r.owner} pw={pw} />}
+      {(r.market === "tn" || r.market === "sc") && r.owner && ENTITY_RE.test(r.owner) && <LlcFinder owner={r.owner} pw={pw} st={r.market} />}
+      {(r.market === "tn" || r.market === "sc") && r.owner && <OwnerPortfolio owner={r.owner} pw={pw} st={r.market} />}
       <ResearchBrief r={contactR} pw={pw} />
       <ContactReveal r={contactR} pw={pw} />
     </>

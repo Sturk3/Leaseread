@@ -56,6 +56,9 @@
     },
     "api/leasecomps.js": {
       "maxDuration": 30
+    },
+    "api/health.js": {
+      "maxDuration": 10
     }
   }
 }

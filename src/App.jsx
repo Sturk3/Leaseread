@@ -3056,9 +3056,12 @@ function LlcFinder({ owner, pw, st }) {
   const run = async () => {
     setState("loading"); setErr("");
     try {
-      const m = webResearchMode();
-      const d = await postJSON("/api/research", { mode: m, password: pw, query: cfg.query(owner) });
-      if (m === "web") addScoutSpend(WEB_RUN_COST);
+      // Always LIVE web — an LLC unmask is worthless from model knowledge alone, so it must
+      // not silently fall back to knowledge mode (the Quick toggle / monthly cap do that to
+      // ordinary web research). This is a deliberate single click, so we run the real search
+      // and count the spend.
+      const d = await postJSON("/api/research", { mode: "web", password: pw, query: cfg.query(owner) });
+      addScoutSpend(WEB_RUN_COST);
       setText(d.brief || ""); setState("done");
     } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
   };
@@ -3068,7 +3071,7 @@ function LlcFinder({ owner, pw, st }) {
         <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>🔎 UNMASK LLC — {cfg.title}</div>
         {state !== "loading" && <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻ re-run" : "▸ unmask"}</button>}
       </div>
-      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>{cfg.blurb} for <strong style={{ color: C.ivory }}>{owner}</strong> — the registered agent + any principals. Metered like other web research.</div>}
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>{cfg.blurb} for <strong style={{ color: C.ivory }}>{owner}</strong> — the registered agent + any principals. <span style={{ color: C.muted }}>Runs a live web search (~$0.15).</span></div>}
       {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Looking up the entity…</div>}
       {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
       {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={text} /></div>}
@@ -4618,11 +4621,12 @@ function RelativesFinder({ r, pw }) {
   const run = async (refine = false) => {
     setState("loading"); setErr("");
     try {
-      const m = webResearchMode();
-      const d = await postJSON("/api/research", { mode: m, password: pw, query: relativesQuery(r, isCo), ...(refine && text ? { prior: text } : {}) });
-      if (m === "web") addScoutSpend(WEB_RUN_COST);
+      // Always LIVE web — finding people from public records is pointless from model
+      // knowledge alone, so don't let the Quick toggle / cap silently downgrade it.
+      const d = await postJSON("/api/research", { mode: "web", password: pw, query: relativesQuery(r, isCo), ...(refine && text ? { prior: text } : {}) });
+      addScoutSpend(WEB_RUN_COST);
       const t = d.brief || "";
-      setText(t); saveAiAnswer(r, "relatives", t, m); setSavedAt(Date.now()); setState("done");
+      setText(t); saveAiAnswer(r, "relatives", t, "web"); setSavedAt(Date.now()); setState("done");
     } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
   };
   if (!owner) return null;

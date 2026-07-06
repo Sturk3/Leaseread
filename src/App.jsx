@@ -5269,6 +5269,7 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
   const [err, setErr] = useState("");
   const [spend, setSpend] = useState(readSkipSpend());
   const [altOpen, setAltOpen] = useState(false); // "trace a different person" (unmasked LLC principal)
+  const looksCompany = r.entity_type === "company" || ENTITY_RE.test(r.name || "");
 
   const runSkip = async () => {
     setSkipState("loading"); setErr("");
@@ -5279,7 +5280,7 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
         address: r.address, borough: r.borough,
       });
       if (d.noKey) { setSkip(d); setSkipState("nokey"); return; }
-      const result = { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched, tracedAddress: d.tracedAddress };
+      const result = { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched, tracedAddress: d.tracedAddress, entityLowConfidence: d.entityLowConfidence };
       _skipCache.set(skipKey(r), result);
       setSkip(result);
       if (result.matched) setSpend(bumpSkipSpend(d.cost));
@@ -5318,8 +5319,20 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
   if (skipState === "idle") {
     return (
       <div style={box}>
-        <button onClick={runSkip} className="mono lift" style={pill(C.gold)}>🔎 Find owner contact</button>
-        <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>~$0.12 · charged only on a match · cached</span>
+        {looksCompany ? (
+          <div>
+            <div style={{ fontSize: 11.5, color: C.amber, lineHeight: 1.55, marginBottom: 9 }}>
+              ⚠ <strong style={{ color: C.ivory }}>{r.name}</strong> is an LLC. An entity has no phone, and tracing its address returns the registered agent or building occupants — <strong>not</strong> the principal. That’s why the numbers come back wrong. Use <strong style={{ color: C.ivory }}>👥 Who’s behind this LLC</strong> above to get the principal’s name + address, then trace <em>that person</em> below.
+            </div>
+            <button onClick={runSkip} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 11px", background: C.panel, border: `1px solid ${C.line}`, color: C.muted }}>trace the LLC address anyway</button>
+            <span style={{ fontSize: 10.5, color: C.muted, marginLeft: 8 }}>~$0.12 · only worth it if the mailing is the owner’s home, not a suite / agent office</span>
+          </div>
+        ) : (
+          <>
+            <button onClick={runSkip} className="mono lift" style={pill(C.gold)}>🔎 Find owner contact</button>
+            <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>~$0.12 · charged only on a match · cached</span>
+          </>
+        )}
         {altBlock}
       </div>
     );
@@ -5340,6 +5353,11 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
           </div>
           {skip.matched ? (
             <>
+              {skip.entityLowConfidence && (
+                <div style={{ fontSize: 11.5, color: C.red, lineHeight: 1.5, marginBottom: 9, padding: "7px 10px", background: `${C.red}12`, border: `1px solid ${C.red}44`, borderRadius: 7 }}>
+                  ⚠ <strong>Likely the wrong party.</strong> This is an LLC and none of these names match the owner — they’re probably the registered agent, office staff, or a shared-suite neighbor at the entity’s mailing address, not the principal. Don’t dial these blind. Use <strong style={{ color: C.ivory }}>👥 Who’s behind this LLC</strong> above to get the actual principal, then trace that person.
+                </div>
+              )}
               {(() => {
                 const { bestPhone, firstEmail, firstEmailName } = bestContact(skip.persons);
                 if (!bestPhone && !firstEmail) return null;

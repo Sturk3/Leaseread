@@ -287,7 +287,7 @@ export default async function handler(req, res) {
     if (req.body && req.body.debug) {
       return res.status(200).json({
         ok: true, provider: provider.label, providerId,
-        keyConfigured: !!key, keyEnv: provider.keyEnv, build: "skiptrace-v2-relatives",
+        keyConfigured: !!key, keyEnv: provider.keyEnv, build: "skiptrace-v3-llc",
       });
     }
 
@@ -339,13 +339,24 @@ export default async function handler(req, res) {
 
     // Try the mailing address (the owner) first; only if it finds NOTHING fall back to the
     // property address. A Tracerfy miss is free, so the fallback costs at most one hit.
+    //
+    // CRITICAL: never fall back to the property for a COMPANY/LLC. An LLC has no phone, and
+    // tracing the building it OWNS returns that building's tenants/occupants — a confident
+    // WRONG-PARTY number (the classic "the numbers are so wrong" for LLCs). For an entity we
+    // only trust its own mailing/registered address; if that whiffs we return no match and
+    // signal the caller to unmask the LLC and trace the named principal instead. Individuals
+    // can still fall back to the property (owner-occupant is plausible there).
     let tracedAddress = null, result = null;
     if (mailingInput) { result = await attempt(mailingInput); tracedAddress = "owner mailing"; }
     const empty = !result || (!result.phones.length && !result.emails.length);
-    if (empty && propertyInput && (!mailingInput || propStreet.toLowerCase() !== mailStreet.toLowerCase())) {
+    if (empty && !business && propertyInput && (!mailingInput || propStreet.toLowerCase() !== mailStreet.toLowerCase())) {
       result = await attempt(propertyInput); tracedAddress = "property";
     }
     const { persons = [], phones = [], emails = [] } = result || {};
+    // An entity trace that returns only NON-owner-matched individuals is very likely the
+    // registered agent / office staff / a shared-suite neighbor, not the principal — flag it
+    // so the UI can warn instead of presenting a confident wrong number.
+    const entityLowConfidence = business && phones.length + emails.length > 0 && !persons.some((p) => p.matchesOwner);
 
     return res.status(200).json({
       provider: provider.label,
@@ -354,6 +365,7 @@ export default async function handler(req, res) {
       persons,
       phones,
       emails,
+      entityLowConfidence,
       matched: phones.length > 0 || emails.length > 0,
       // est. cost only when something matched (providers bill per hit)
       cost: phones.length || emails.length ? provider.estCost(business) : 0,

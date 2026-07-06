@@ -159,6 +159,31 @@ function nameTokens(s) {
   return clean(s).toUpperCase().replace(/[^A-Z\s]/g, " ").split(/\s+/)
     .filter((t) => t.length > 1 && !["LLC", "INC", "CORP", "THE", "AND", "CO", "LP"].includes(t));
 }
+
+// Relatives / associates. Providers that expose them use varying keys (relatives,
+// associates, related_persons, possible_relatives, associatedPeople, household…), each
+// typically { name/first/last, relationship?, age?, and sometimes their own phones/emails }.
+// Tolerant like the rest of this file: pull them wherever they appear, and it's a no-op
+// when the provider (e.g. Tracerfy's base /trace/lookup) doesn't return any.
+const RELATIVE_KEYS = ["relatives", "relative", "associates", "associate", "related_persons", "relatedPersons", "possible_relatives", "possibleRelatives", "associated_people", "associatedPeople", "associatedPersons", "household", "household_members", "familyMembers", "family_members"];
+function personRelatives(p) {
+  const out = [], seen = new Set();
+  for (const k of RELATIVE_KEYS) {
+    const arr = p[k];
+    if (!Array.isArray(arr)) continue;
+    for (const x of arr) {
+      const name = typeof x === "string" ? clean(x) : personName(x || {});
+      if (!name) continue;
+      const key = name.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const rel = typeof x === "object" ? clean(x.relationship || x.relation || x.type || "") : "";
+      const age = typeof x === "object" && x.age != null ? clean(x.age) : "";
+      out.push({ name, relationship: rel, age, phones: typeof x === "object" ? personPhones(x) : [], emails: typeof x === "object" ? personEmails(x) : [] });
+    }
+  }
+  return out.slice(0, 8);
+}
 function extractPersons(json, ownerName) {
   const arr = findPersonsArray(json, 0) || [];
   const ownerToks = nameTokens(ownerName);
@@ -167,7 +192,8 @@ function extractPersons(json, ownerName) {
     const name = personName(p);
     const phones = personPhones(p);
     const emails = personEmails(p);
-    if (!phones.length && !emails.length) continue;
+    const relatives = personRelatives(p);
+    if (!phones.length && !emails.length && !relatives.length) continue;
     const key = name.toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (key && seen.has(key)) continue; // drop duplicate rows (brokers echo the same entity)
     if (key) seen.add(key);
@@ -179,7 +205,7 @@ function extractPersons(json, ownerName) {
     const ptoks = nameTokens(name);
     const overlap = ownerToks.filter((t) => ptoks.includes(t)).length;
     const matchesOwner = !isEntity && ownerToks.length >= 2 && overlap >= 2;
-    out.push({ name, isEntity, matchesOwner, phones, emails });
+    out.push({ name, isEntity, matchesOwner, phones, emails, relatives });
   }
   // Owner-name matches first, then individuals, then entities.
   out.sort((a, b) => (b.matchesOwner ? 1 : 0) - (a.matchesOwner ? 1 : 0) || (a.isEntity ? 1 : 0) - (b.isEntity ? 1 : 0));
@@ -261,7 +287,7 @@ export default async function handler(req, res) {
     if (req.body && req.body.debug) {
       return res.status(200).json({
         ok: true, provider: provider.label, providerId,
-        keyConfigured: !!key, keyEnv: provider.keyEnv, build: "skiptrace-v1",
+        keyConfigured: !!key, keyEnv: provider.keyEnv, build: "skiptrace-v2-relatives",
       });
     }
 

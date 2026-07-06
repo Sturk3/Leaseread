@@ -5187,6 +5187,38 @@ function ContactList({ phones = [], emails = [] }) {
   );
 }
 
+// Relatives / associates the skip trace returned for a person — the household/family
+// side-channel for reaching an owner (a spouse or adult child often answers, or leads
+// you to them). Only renders when the provider actually returned relatives. Each may
+// carry its own phones/emails; where it doesn't, the name is a one-click trace lead.
+function RelativeList({ relatives = [] }) {
+  const [open, setOpen] = useState(false);
+  if (!relatives.length) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <button onClick={() => setOpen(!open)} className="mono lift" style={{ ...ACTION_PILL, fontSize: 9.5, padding: "2px 8px", color: C.muted, border: `1px solid ${C.line}` }}>
+        {open ? "▾" : "▸"} RELATIVES / ASSOCIATES ({relatives.length})
+      </button>
+      {open && (
+        <div style={{ marginTop: 6, paddingLeft: 10, borderLeft: `2px solid ${C.line}` }}>
+          {relatives.map((rel, i) => (
+            <div key={i} style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 12, color: C.ivory }}>
+                {rel.name}
+                {rel.relationship && <span className="mono" style={{ fontSize: 9, color: C.muted, marginLeft: 6, border: `1px solid ${C.line}`, borderRadius: 4, padding: "0 5px" }}>{String(rel.relationship).toUpperCase()}</span>}
+                {rel.age && <span style={{ fontSize: 10.5, color: C.muted, marginLeft: 6 }}>age {rel.age}</span>}
+              </div>
+              {(rel.phones?.length || rel.emails?.length)
+                ? <div style={{ marginTop: 2 }}><ContactList phones={rel.phones} emails={rel.emails} /></div>
+                : <div style={{ fontSize: 10.5, color: C.muted, marginTop: 1 }}>no direct number on record — trace by name + owner address to reach them</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Owner-contact WORKFLOW (the waterfall): one click runs the FREE web-search lane
 // first (/api/findcontact, $0). If that finds a usable contact, you're done for free.
 // If it whiffs, a "deep skip trace" button runs the PAID lane (/api/skiptrace), which
@@ -5305,6 +5337,7 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
                       {p.isEntity && <span className="mono" title="A company name, not an individual — likely the owner's corporate web. Verify." style={{ fontSize: 9, color: C.amber, marginLeft: 6, border: `1px solid ${C.amber}`, borderRadius: 4, padding: "0 5px" }}>ENTITY ⚠</span>}
                     </div>
                     <ContactList phones={p.phones} emails={p.emails} />
+                    <RelativeList relatives={p.relatives} />
                   </div>
                 ))
               ) : (

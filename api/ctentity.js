@@ -20,6 +20,23 @@ const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
 const addr = (parts) => parts.map(clean).filter(Boolean).join(", ");
 const sodaList = (vals) => [...new Set(vals)].map((v) => `'${String(v).replace(/'/g, "''")}'`).join(",");
 
+// The assessor's owner name and the SOS registry name rarely match character-for-character:
+// "COHEN M H REALTY LLC" (assessor) vs "M.H. COHEN REALTY, L.L.C" (registry) — different word
+// order, punctuation, and entity-suffix spelling. So match on the SIGNIFICANT WORD TOKENS
+// (drop punctuation, entity-type words, and bare initials) ANDed together, which survives all
+// of that. `LIKE '%COHEN%' AND LIKE '%REALTY%'` finds the entity regardless of order/dots.
+const STOPWORDS = new Set(["LLC", "L", "LC", "LLP", "LP", "INC", "CORP", "CORPORATION", "CO", "COMPANY", "LIMITED", "PARTNERSHIP", "PLLC", "LLLP", "THE", "AND", "OF", "A"]);
+function sigTokens(name) {
+  return clean(name).toUpperCase().replace(/[^A-Z0-9\s]/g, " ").split(/\s+/)
+    .filter((t) => t.length > 1 && !STOPWORDS.has(t)); // drop punctuation, suffixes, single-letter initials
+}
+// How well a registry name covers the query's tokens (0..1) — used to rank the best match first.
+function tokenOverlap(queryToks, name) {
+  if (!queryToks.length) return 0;
+  const nameToks = new Set(sigTokens(name));
+  return queryToks.filter((t) => nameToks.has(t)).length / queryToks.length;
+}
+
 async function fetchSocrata(dataset, params) {
   const token = process.env.SOCRATA_APP_TOKEN;
   const r = await fetch(`${CT_BASE}/${dataset}.json?${new URLSearchParams(params)}`, token ? { headers: { "X-App-Token": token } } : {});
@@ -35,15 +52,24 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (check) return res.status(200).json({ ok: true });
-    if (debug) return res.status(200).json({ ok: true, build: "ctentity-v1" });
+    if (debug) return res.status(200).json({ ok: true, build: "ctentity-v2-tokenmatch" });
 
     const q = clean(name);
     if (!q && !businessId) return res.status(400).json({ error: "Provide an entity name to look up." });
 
-    // 1. matching entities (or one by id)
-    const entities = businessId
+    // 1. matching entities (or one by id). Token-AND match survives word-order/punctuation
+    // differences; if the name has no usable tokens (or the token match whiffs), fall back to
+    // the plain full-string LIKE.
+    const toks = sigTokens(q);
+    const tokWhere = toks.length
+      ? toks.slice(0, 4).map((t) => `upper(name) like '%${t.replace(/'/g, "''")}%'`).join(" AND ")
+      : `upper(name) like '%${q.toUpperCase().replace(/'/g, "''")}%'`;
+    let entities = businessId
       ? await fetchSocrata(CT_BIZ, { $where: `id='${clean(businessId).replace(/'/g, "''")}'`, $limit: 1 })
-      : await fetchSocrata(CT_BIZ, { $where: `upper(name) like '%${q.toUpperCase().replace(/'/g, "''")}%'`, $order: "name", $limit: 12 });
+      : await fetchSocrata(CT_BIZ, { $where: tokWhere, $order: "name", $limit: 25 });
+    if (!entities.length && !businessId && toks.length) {
+      entities = await fetchSocrata(CT_BIZ, { $where: `upper(name) like '%${q.toUpperCase().replace(/'/g, "''")}%'`, $order: "name", $limit: 25 });
+    }
     if (!entities.length) return res.status(200).json({ count: 0, query: q, entities: [] });
 
     const ids = entities.map((e) => clean(e.id)).filter(Boolean);
@@ -85,10 +111,17 @@ export default async function handler(req, res) {
         principals: prinBy[id] || [],
       };
     });
-    // Active first, then richer records (more principals) to the top.
-    out.sort((a, b) => (a.status === "Active" ? 0 : 1) - (b.status === "Active" ? 0 : 1) || (b.principals.length - a.principals.length));
+    // Rank: closest name match first (token overlap), then Active, then richer records. So the
+    // one entity that actually IS this owner floats above same-token neighbors ("Cohen Realty
+    // Ventures" etc.) that the loose token match also pulls in.
+    for (const e of out) e._score = tokenOverlap(toks, e.name);
+    out.sort((a, b) =>
+      (b._score - a._score) ||
+      ((a.status === "Active" ? 0 : 1) - (b.status === "Active" ? 0 : 1)) ||
+      (b.principals.length - a.principals.length));
+    for (const e of out) delete e._score;
 
-    return res.status(200).json({ count: out.length, query: q, entities: out });
+    return res.status(200).json({ count: out.length, query: q, entities: out.slice(0, 12) });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "ctentity" });
   }

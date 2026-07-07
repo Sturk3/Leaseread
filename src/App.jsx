@@ -3100,6 +3100,51 @@ function OwnerPortfolio({ owner, pw, st }) {
 }
 
 const ENTITY_RE = /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|HOLDINGS|REALTY|PROPERTIES|GROUP|ENTERPRISES|VENTURES)\b/i;
+// CT publicly discloses LLC PRINCIPALS (unlike most states), free + structured via the state
+// Business Registry. For a Greenwich/CT entity owner this is the BEST "who's behind the LLC"
+// source — real member names, not a skip-trace guess or a web inference. Server-side token
+// matching resolves the assessor's owner spelling ("COHEN M H REALTY LLC") to the registry's
+// ("M.H. COHEN REALTY, L.L.C"). Free, no metering.
+function CtEntityFinder({ owner, pw }) {
+  const [state, setState] = useState("idle"); // idle | loading | done | error
+  const [ents, setEnts] = useState([]);
+  const [err, setErr] = useState("");
+  const run = async () => {
+    setState("loading"); setErr("");
+    try {
+      const d = await postJSON("/api/ctentity", { password: pw, name: owner });
+      setEnts(d.entities || []); setState("done");
+    } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
+  };
+  const shown = ents.slice(0, 4);
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>🔎 CT REGISTRY — real principals behind the LLC</div>
+        {state !== "loading" && <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻" : "▸ find principals"}</button>}
+      </div>
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Connecticut publicly lists LLC principals — a FREE, structured lookup of the real people behind <strong style={{ color: C.ivory }}>{owner}</strong> (name-matched, so punctuation / word-order differences still resolve). More reliable than skip-tracing the LLC.</div>}
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Searching the CT Business Registry…</div>}
+      {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+      {state === "done" && (shown.length ? (
+        <div style={{ marginTop: 10 }}>
+          {shown.map((e, i) => (
+            <div key={i} style={{ marginBottom: 9, paddingBottom: 9, borderBottom: i < shown.length - 1 ? `1px solid ${C.line}` : "none" }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: C.ivory }}>{e.name}<span className="mono" style={{ fontSize: 9, color: e.status === "Active" ? C.green : C.muted, marginLeft: 6, border: `1px solid ${e.status === "Active" ? C.green : C.line}`, borderRadius: 4, padding: "0 5px" }}>{(e.status || "—").toUpperCase()}</span></div>
+              {e.principals && e.principals.length ? e.principals.map((p, j) => (
+                <div key={j} style={{ fontSize: 12.5, marginTop: 3 }}>👤 <span style={{ color: C.ivory, fontWeight: 600 }}>{p.name}</span>{(p.residence_location || p.business_location) ? <span style={{ color: C.muted }}> · {p.residence_location || p.business_location}</span> : ""}</div>
+              )) : <div style={{ fontSize: 11.5, color: C.muted, marginTop: 3 }}>No individual principals listed (registered agent only{e.agent ? `: ${e.agent.name}` : ""}).</div>}
+              {e.agent && e.principals && e.principals.length > 0 && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>Agent: {e.agent.name}{e.agent.address ? ` · ${e.agent.address}` : ""}</div>}
+            </div>
+          ))}
+          {ents.length > shown.length && <div style={{ fontSize: 11, color: C.muted }}>+{ents.length - shown.length} more name matches</div>}
+          <div style={{ fontSize: 10.5, color: C.muted, marginTop: 5, lineHeight: 1.5 }}>Several matches = the loose name search; the top one is the closest. Confirm the address lines up with the property owner before relying on it.</div>
+        </div>
+      ) : <div style={{ color: C.muted, fontSize: 12, marginTop: 8 }}>No CT registry match for this name — try the 👥 unmask (web) below.</div>)}
+    </div>
+  );
+}
+
 // Detail panel for the assessor markets (CT · Hamptons · Nashville): the record, the AI quick take,
 // and the PAID skip trace — the SAME owner-contact workflow NYC has, so it works in every market.
 function AssessorMarketDetail({ r, pw }) {
@@ -3116,9 +3161,7 @@ function AssessorMarketDetail({ r, pw }) {
   return (
     <>
       <AssessorDetail p={raw} market={r.market} />
-      {r.market === "ct" && r.owner && ENTITY_RE.test(r.owner) && (
-        <div style={{ fontSize: 11.5, color: C.muted, padding: "8px 0 0" }}>Entity owner — ask Scout “principals behind {r.owner}” (CT discloses LLC principals).</div>
-      )}
+      {r.market === "ct" && r.owner && ENTITY_RE.test(r.owner) && <CtEntityFinder owner={r.owner} pw={pw} />}
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
       {r.market === "sc" && <CharlestonIntelPanel pid={raw.pid} address={r.address} pw={pw} />}
       {(r.market === "tn" || r.market === "sc" || r.market === "savannah") && r.owner && <OwnerPortfolio owner={r.owner} pw={pw} st={r.market} />}
@@ -3351,7 +3394,10 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           // "Just it": pin the one property. CT `location` is "STREET NAME <padded #>", so match
           // on the street core (suffix-agnostic) then keep the parcel whose trailing # is the house.
           const { num, core } = streetBits(addr);
-          const d = await postJSON("/api/search", { password: pw, market: "ct", town: det.town, propertyType: "any", address: core });
+          // limit 500 (not the default 100-by-value) so a lower-value target parcel on a busy
+          // street isn't dropped before the house-number filter — e.g. 145 Greenwich Ave sits
+          // outside the top 100 Greenwich Avenue parcels by assessed value.
+          const d = await postJSON("/api/search", { password: pw, market: "ct", town: det.town, propertyType: "any", address: core, limit: 500 });
           let rows = (d.properties || []).map(ctRow);
           if (num) { const exact = rows.filter((r) => houseInAddress(r.address, num, true)); if (exact.length) rows = exact; }
           out = rows.slice(0, 1);
@@ -3456,7 +3502,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           // "Just it": NY's roll street field has NO house number, so match the street core,
           // then keep only the parcel whose address carries the looked-up house number.
           const { num, core } = streetBits(addr);
-          const d = await postJSON("/api/search", { password: pw, market: "hamptons", town: det.town, propertyType: "any", address: core });
+          const d = await postJSON("/api/search", { password: pw, market: "hamptons", town: det.town, propertyType: "any", address: core, limit: 500 });
           let rows = (d.properties || []).map(nyRow);
           if (num) { const exact = rows.filter((r) => houseInAddress(r.address, num, false)); if (exact.length) rows = exact; }
           out = rows.slice(0, 1);

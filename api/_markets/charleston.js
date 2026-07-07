@@ -28,7 +28,7 @@ const CITY_ADDRESS = process.env.CHS_CITY_ADDRESS_URL ||
 const CITY_PERMITS = process.env.CHS_PERMITS_URL ||
   "https://services2.arcgis.com/tQaXW7Zb1Vphzvgd/arcgis/rest/services/New_Construction_Permits/FeatureServer/0";
 
-export const BUILD = "charleston-v1";
+export const BUILD = "charleston-v2-orphan-spatial";
 
 const msYear = (ms) => { const n = Number(ms); return Number.isFinite(n) && n > 0 ? new Date(n).getUTCFullYear() : null; };
 
@@ -119,11 +119,32 @@ export async function pidsByAddress(text) {
   const q = sqlStr(normStreet(text));
   const [county, city] = await Promise.all([
     arcgisQuery(CC_ADDRESS, { where: `UPPER(WHOLE_ADDRESS) LIKE '%${q}%'`, outFields: "PID", resultRecordCount: "400" }),
-    arcgisQuery(CITY_ADDRESS, { where: `UPPER(ADDRLABEL) LIKE '%${q}%'`, outFields: "PARCELID", resultRecordCount: "400" }),
+    // Pull city address-point geometry too, so a point whose parcel key is broken can still be
+    // resolved by location (below).
+    arcgisQuery(CITY_ADDRESS, { where: `UPPER(ADDRLABEL) LIKE '%${q}%'`, outFields: "PARCELID,ADDRLABEL", returnGeometry: "true", outSR: "4326", resultRecordCount: "400" }),
   ]);
   const pids = new Set();
+  const orphanPts = []; // city address points with NO usable parcel key → resolve spatially
   for (const r of county) if (clean(r.PID)) pids.add(clean(r.PID));
-  for (const r of city) { const p = clean(r.PARCELID).replace(/^C/, ""); if (p) pids.add(p); }
+  for (const r of city) {
+    const p = clean(r.PARCELID).replace(/^C/, "");
+    if (p) pids.add(p);
+    else if (r.__geom && Number.isFinite(r.__geom.x) && Number.isFinite(r.__geom.y)) orphanPts.push(r.__geom);
+  }
+  // Some City of Charleston address points carry a BROKEN parcel key (PARCELID = "C" with no
+  // number — e.g. 317 King St, a condo/mixed-use building), so the join above yields nothing.
+  // Resolve those by LOCATION: point-in-polygon on the parcel layer at the point's coordinates.
+  // A stacked condo building returns all its unit parcels (every owner at that address) — the
+  // right answer for sourcing. Capped so a loose match can't fan out to dozens of points.
+  if (orphanPts.length) {
+    const waves = await Promise.all(orphanPts.slice(0, 6).map((pt) =>
+      arcgisQuery(CC_PARCELS, {
+        geometry: JSON.stringify({ x: pt.x, y: pt.y, spatialReference: { wkid: 4326 } }),
+        geometryType: "esriGeometryPoint", inSR: "4326", spatialRel: "esriSpatialRelIntersects",
+        outFields: "PID", resultRecordCount: "100",
+      })));
+    for (const rows of waves) for (const r of rows) if (clean(r.PID)) pids.add(clean(r.PID));
+  }
   return [...pids];
 }
 

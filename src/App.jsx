@@ -2809,8 +2809,16 @@ function streetBits(addr) {
   const s = String(addr || "").trim();
   const m = s.match(/^(\d+[A-Za-z]?)\s+(.+)$/);
   const num = m ? m[1] : "";
-  const toks = (m ? m[2] : s).toUpperCase().trim().split(/\s+/);
-  if (toks.length > 1 && STREET_SUFFIX.has(toks[toks.length - 1])) toks.pop();
+  let toks = (m ? m[2] : s).toUpperCase().trim().split(/\s+/);
+  // The street name ENDS at its type suffix (St/Ave/Rd…). The name is everything before the
+  // first suffix token that isn't the very first word (a street needs a name before the
+  // suffix — "Court St" → COURT, not empty). Whatever follows the suffix is town/state/zip
+  // noise the user typed without commas ("145 Greenwich Ave Greenwich CT 06830") — drop it,
+  // so the LIKE matches the street, not the whole string. Falls back to trimming just a
+  // trailing suffix when there's no interior suffix.
+  const si = toks.findIndex((t, i) => i >= 1 && STREET_SUFFIX.has(t));
+  if (si >= 1) toks = toks.slice(0, si);
+  else if (toks.length > 1 && STREET_SUFFIX.has(toks[toks.length - 1])) toks.pop();
   return { num, core: toks.join(" ") };
 }
 // Does a property address carry/cover the target house number? Handles a single number OR a

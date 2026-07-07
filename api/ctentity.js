@@ -30,11 +30,16 @@ function sigTokens(name) {
   return clean(name).toUpperCase().replace(/[^A-Z0-9\s]/g, " ").split(/\s+/)
     .filter((t) => t.length > 1 && !STOPWORDS.has(t)); // drop punctuation, suffixes, single-letter initials
 }
-// How well a registry name covers the query's tokens (0..1) — used to rank the best match first.
+// Jaccard similarity of the query tokens vs a registry name's tokens (intersection / union),
+// used to rank the best match first. Jaccard (not plain coverage) so a name with EXTRA tokens
+// scores lower than an exact-length match: for query {COHEN,REALTY}, "M.H. COHEN REALTY"
+// (union 2, score 1.0) beats "Cohen Realty Ventures" (union 3, score 0.67).
 function tokenOverlap(queryToks, name) {
   if (!queryToks.length) return 0;
-  const nameToks = new Set(sigTokens(name));
-  return queryToks.filter((t) => nameToks.has(t)).length / queryToks.length;
+  const q = new Set(queryToks), n = new Set(sigTokens(name));
+  let inter = 0; for (const t of q) if (n.has(t)) inter++;
+  const union = q.size + n.size - inter;
+  return union ? inter / union : 0;
 }
 
 async function fetchSocrata(dataset, params) {

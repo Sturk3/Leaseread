@@ -3326,6 +3326,7 @@ function useSourcingPoints(rows) {
 function UnifiedSourcing({ pw, rows, setRows }) {
   const [loc, setLoc] = useState("");
   const [coords, setCoords] = useState(null);
+  const [typedText, setTypedText] = useState(""); // what the user actually TYPED, kept across an autocomplete pick
   const [market, setMarket] = useState("auto"); // auto-detect, or lock to a market so a bare address can't mis-route
   const [type, setType] = useState("any"); // default to ANY so a search isn't silently limited to retail
   const [radius, setRadius] = useState("");
@@ -3350,6 +3351,15 @@ function UnifiedSourcing({ pw, rows, setRows }) {
 
   const run = async () => {
     let det = unifiedDetect(loc, coords);
+    // If the user TYPED a city that names a specific market (e.g. "…Charleston SC") but then
+    // PICKED an autocomplete suggestion from a different market (usually a same-named NYC street —
+    // Charleston, Nashville & NYC all have a King St / Broad St / Church St), the pick's label +
+    // coords would force that wrong market. Honor what they typed. Only on auto-detect, only when
+    // the typed market differs from where the pick routed.
+    if (market === "auto" && coords) {
+      const typedMkt = marketFromText(typedText || "");
+      if (typedMkt && typedMkt.market !== det.market) det = { ...typedMkt, kind: "address-text" };
+    }
     // MARKET LOCK — if the user pinned a market, force the route there so a bare address can't
     // mis-route (e.g. a Nashville address fuzzy-matching a Brooklyn lot). Auto = detect from the text.
     if (market !== "auto") {
@@ -3576,7 +3586,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
             <div className="mono" style={labelStyle}>WHERE — borough · town · or address</div>
             <div style={{ marginTop: 4 }}>
               <AddressAutocomplete value={loc}
-                onChange={(t) => { setLoc(t); setCoords(null); }}
+                onChange={(t) => { setLoc(t); setCoords(null); setTypedText(t); }}
                 marketHint={market}
                 onPick={(label, lat, lon, bbl) => { setLoc(label); setCoords({ lat, lon, bbl }); }}
                 onEnter={run}

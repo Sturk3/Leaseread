@@ -22,8 +22,9 @@ import * as ma from "./_markets/ma.js";
 import * as sf from "./_markets/sf.js";
 import * as nashville from "./_markets/nashville.js";
 import * as charleston from "./_markets/charleston.js";
+import * as savannah from "./_markets/savannah.js";
 
-const MARKETS = { nyc, hamptons, ct, ma, sf, nashville, charleston, sc: charleston };
+const MARKETS = { nyc, hamptons, ct, ma, sf, nashville, charleston, sc: charleston, savannah, ga: savannah };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });

@@ -297,6 +297,30 @@ const TOOLS = [
     },
   },
   {
+    name: "search_savannah_properties",
+    description:
+      "Source properties in SAVANNAH, GA / Chatham County (Savannah, Pooler, Tybee Island, Garden City, Port Wentworth, " +
+      "Thunderbolt) from SAGIS / Chatham County Board of Assessors parcel data. Returns the OWNER of record (+ co-owner) + " +
+      "mailing address (absentee flagged), property address, GA use class, FAIR-MARKET VALUE (land/building split), acreage, " +
+      "YEAR BUILT, last SALE price + year (→ years owned), and street FRONTAGE. Georgia is an open-records state, so owners ARE " +
+      "public (a full sourcing market like NYC/CT/MA/TN/SC). Filter by type, street, value range, min acreage, and sold-since " +
+      "year, or pass owner for their whole county portfolio. NOTE: GA's use class doesn't separate retail from other commercial " +
+      "(both are class C), so a retail/commercial filter returns all commercial. For an owner LLC, follow with web_research " +
+      "(GA Secretary of State) for principals/contacts.",
+    input_schema: {
+      type: "object",
+      properties: {
+        propertyType: { type: "string", enum: ["any", "commercial", "retail", "office", "multifamily", "residential", "industrial", "vacant", "agricultural"], description: "GA use-class filter. 'commercial'/'retail'/'office' all map to class C (GA doesn't separate them)." },
+        address: { type: "string", description: "Filter to a street or address, e.g. 'BROUGHTON ST' or '100 Bull St'." },
+        owner: { type: "string", description: "Owner-portfolio mode: every Chatham County parcel this owner holds (type filter is ignored)." },
+        minValue: { type: "number", description: "Minimum fair-market value." },
+        maxValue: { type: "number", description: "Maximum fair-market value." },
+        minAcres: { type: "number", description: "Minimum lot acreage." },
+        sinceYear: { type: "number", description: "Only parcels whose last sale was this year or later." },
+      },
+    },
+  },
+  {
     name: "search_sf_properties",
     description:
       "Source properties in SAN FRANCISCO from DataSF's assessor roll. Returns property characteristics (use, building/lot SF, " +
@@ -489,6 +513,7 @@ WHAT YOU DO
 - MASSACHUSETTS (Boston trophy retail, Nantucket / Martha's Vineyard / Cape luxury, any MA town): use search_ma_properties (MassGIS assessor data) for OWNER + mailing (absentee flagged), use/value, building SF, year, and latest sale. MA keeps owners public and its assessed values track market reasonably. For an owner LLC, use web_research for principals/contacts.
 - NASHVILLE / DAVIDSON COUNTY, TN: use search_nashville_properties (Metro Nashville parcel data, updated daily). FULL owner market — OWNER of record + mailing (absentee flagged), land use, value, last sale + years owned. TN is open-records so owners are public; treat it like NYC/CT/MA. Then run nashville_property_intel (pass the APN + address) — the TN analog of property_intel/sf_property_intel: it joins BUILDING-EXACT on the parcel number across building permits (commercial new/rehab/DEMOLITION/tenant finish-out/use-&-occupancy/sign + cost + purpose = active repositioning), pending applications, trade permits (live renovation), BEER permits (names the operating bar/restaurant + its owning entity — a real operator/tenant contact lead; lapsed = F&B vacancy), STR permits, 311 codes/condition complaints (distress), zoning OVERLAYS (historic/contextual/corridor = redevelopment constraints), the FEMA FLOOD zone, and the Metro land-use POLICY/transect. For an owner LLC, use tn_entity_lookup to unmask it — TN SOS registered agent + principals (the Nashville analog of the NY/CT/CA entity lookup; metered web lookup, since TN gates its registry). (The parcel data has acreage + FRONTAGE but no building SF.)
 - CHARLESTON, SC / CHARLESTON COUNTY (downtown Charleston, Mount Pleasant, North Charleston, Kiawah/Seabrook/Isle of Palms/Folly Beach, Johns/James/Daniel Island): use search_charleston_properties (Charleston County assessor parcels). FULL owner market — OWNER of record + mailing (absentee flagged), assessor use class, deeded acreage, last SALE price + year (→ years owned), deed book/page, plus City of Charleston construction-permit activity (2010–present) on the top results. SC is open-records so owners are public; treat it like NYC/CT/MA/TN. IMPORTANT quirks: the county publishes NO assessed value and NO building SF — $ figures are last SALE prices, so a minValue filter drops long-held parcels (leave it empty when hunting long-tenure owners, and rank by acreage/class/tenure instead); Mt Pleasant / N. Charleston parcels may show a legal description instead of a street address. Then run charleston_property_intel (pass the PID + address) — the SC analog of nashville_property_intel: city construction-permit detail, hotel entitlement on the parcel, zoning + Old & Historic District + Old City height district (BAR review/height caps = THE peninsula constraint), short-term-rental + accommodations overlays, FEMA flood zone + street-flooding history (Charleston's chronic-flooding diligence question), and nearby crime. For an owner LLC, use sc_entity_lookup to unmask it — SC SOS registered agent + any listed principals (the SC analog of the NY/CT/CA/TN entity lookup; a metered web lookup, since South Carolina captcha-gates its registry).
+- SAVANNAH, GA / CHATHAM COUNTY (Savannah, Pooler, Tybee Island, Garden City, Port Wentworth, Thunderbolt): use search_savannah_properties (SAGIS / Chatham County Board of Assessors parcels). FULL owner market — OWNER of record (+ co-owner) + mailing (absentee flagged), GA use class, FAIR-MARKET VALUE (land/building split), acreage, YEAR BUILT, last SALE price + year (→ years owned), and street FRONTAGE. Georgia is open-records so owners are public; treat it like NYC/CT/MA/TN/SC. Filter by type, street, value range, min acreage, sold-since year, or pass owner for their whole county portfolio. QUIRK: GA's use class doesn't separate retail from other commercial (both class C), so a retail/commercial filter returns all commercial — refine by eye. For an owner LLC, unmask via web_research on the Georgia Secretary of State corporations registry (ecorp.sos.ga.gov) for the registered agent + officers. (No dedicated Savannah intel connector yet — use web_research for permits/liens/deeper diligence.)
 - SAN FRANCISCO: use search_sf_properties (DataSF assessor roll) for property characteristics + assessed value + block/lot, then sf_property_intel (block+lot+address) for permits, DBI complaints, the active business operator (a real contact lead), eviction notices (Ellis Act / owner move-in / demolition / capital improvement = landlord clearing the building = strong motivation), fire violations, and 311. IMPORTANT: California open data has NO owner-of-record name, so SF is a characteristics+distress market — get the actual OWNER via web_research (from the address), and use the operating business's legal name as a contact lead. Eviction addresses are masked to the block (street/corridor signal, not building-exact). Once you have the owning LLC's name, use ca_entity_lookup to unmask it — the CA SOS registry agent for service of process + principals (the CA analog of the NY/CT entity lookup; it's a metered web lookup because California gates its registry).
 - ANY OTHER US MARKET (no structured connector — most of the country): you can still source there. NEVER say a market is unsupported. For a specific address, web_research works the whole chain from the address alone — it identifies the owner of record, unmasks the parent/firm + principals, maps the portfolio, and pulls published contacts. For a "find me owners in <city>" ask where there's no structured feed, use web_research / web_search to surface candidates (recent trades, known local owners/landlords, brokers), and be upfront: outside NYC/CT/the Hamptons you don't have a parcel database to filter on, so results come from the live web and you can't guarantee completeness — but you can absolutely work any specific property or owner they name. Offer to go deep on the ones that look best.
 
@@ -555,7 +580,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, deepModel: AGENT_MODEL_DEEP, thinking: THINKING_ON, effort: { routine: EFFORT_ROUTINE, deep: EFFORT_DEEP }, maxTokens: MAX_TOKENS, tools: TOOLS.map((t) => t.name), build: "agent-v26-sc-entity" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, deepModel: AGENT_MODEL_DEEP, thinking: THINKING_ON, effort: { routine: EFFORT_ROUTINE, deep: EFFORT_DEEP }, maxTokens: MAX_TOKENS, tools: TOOLS.map((t) => t.name), build: "agent-v27-savannah" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

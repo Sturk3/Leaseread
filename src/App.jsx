@@ -363,7 +363,7 @@ export default function App() {
               ? "Your saved leads as a working list — status, notes, and the full dossier + owner contact in one place."
               : view === "skiptrace"
               ? "Trace a name + address straight to graded phones & emails — charged only on a match."
-              : "Source owners & deals from public records — NYC, Greenwich/CT, the Hamptons, Nashville, and Charleston SC — plus an AI web lookup for any other US address."}
+              : "Source owners & deals from public records — NYC, Greenwich/CT, the Hamptons, Nashville, Charleston SC, and Savannah GA — plus an AI web lookup for any other US address."}
           </p>
           {(view === "screener" || view === "agent") && (
             <button onClick={() => setShowSettings((s) => !s)} className="mono lift"
@@ -771,6 +771,7 @@ const TOOL_ROUTES = {
   search_ma_properties: { url: "/api/search", label: "Searching Massachusetts", body: (a) => ({ market: "ma", town: a.town, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft, sinceYear: a.sinceYear, address: a.address }) },
   search_nashville_properties: { url: "/api/search", label: "Searching Nashville", body: (a) => ({ market: "nashville", propertyType: a.propertyType, address: a.address, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
   search_charleston_properties: { url: "/api/search", label: "Searching Charleston", body: (a) => ({ market: "charleston", propertyType: a.propertyType, address: a.address, owner: a.owner, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
+  search_savannah_properties: { url: "/api/search", label: "Searching Savannah", body: (a) => ({ market: "savannah", propertyType: a.propertyType, address: a.address, owner: a.owner, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
   nashville_property_intel: { url: "/api/nashvilleintel", label: "Pulling Nashville records", body: (a) => ({ apn: a.apn, address: a.address }) },
   charleston_property_intel: { url: "/api/charlestonintel", label: "Pulling Charleston records", body: (a) => ({ pid: a.pid, address: a.address }) },
   search_sf_properties: { url: "/api/search", label: "Searching San Francisco", body: (a) => ({ market: "sf", neighborhood: a.neighborhood, address: a.address, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft }) },
@@ -892,6 +893,10 @@ function shapeResult(name, data) {
   if (name === "search_charleston_properties") {
     const props = (data.properties || []).slice(0, 30);
     return { forModel: { count: data.count, county: data.county, note: data.note, properties: props }, uiSummary: `${data.count || 0} in Charleston` };
+  }
+  if (name === "search_savannah_properties") {
+    const props = (data.properties || []).slice(0, 30);
+    return { forModel: { count: data.count, county: data.county, note: data.note, properties: props }, uiSummary: `${data.count || 0} in Savannah` };
   }
   if (name === "search_sf_properties") {
     const props = (data.properties || []).slice(0, 30);
@@ -1021,6 +1026,7 @@ function sourcingRowsFrom(name, data) {
   if (name === "search_properties") return { market: "nyc", center: data.center || null, rows: (data.leads || []).map(nycRow) };
   if (name === "search_nashville_properties") return { market: "tn", center: null, rows: (data.properties || []).map(nashRow) };
   if (name === "search_charleston_properties") return { market: "sc", center: null, rows: (data.properties || []).map(scRow) };
+  if (name === "search_savannah_properties") return { market: "savannah", center: null, rows: (data.properties || []).map(savRow) };
   if (name === "search_ct_properties") return { market: "ct", center: null, rows: (data.properties || []).map(ctRow) };
   if (name === "search_hamptons_properties") return { market: "ny", center: null, rows: (data.properties || []).map(nyRow) };
   return null;
@@ -2754,6 +2760,7 @@ const HAMPTON_SET = new Set(["east hampton", "southampton", "shelter island", "s
 const NYC_BORO_SET = { manhattan: "Manhattan", brooklyn: "Brooklyn", queens: "Queens", bronx: "Bronx", "staten island": "Staten Island", "new york": "Manhattan", nyc: "Manhattan" };
 const NASHVILLE_SET = new Set(["nashville", "davidson", "davidson county", "nashville tn", "nashville, tn", "metro nashville"]);
 const CHARLESTON_SET = new Set(["charleston", "charelston", "charlston", "charleston sc", "charleston, sc", "charleston county", "mount pleasant", "mt pleasant", "north charleston", "daniel island", "james island", "johns island", "west ashley", "sullivans island", "sullivan's island", "isle of palms", "folly beach", "kiawah", "kiawah island", "seabrook island", "awendaw", "mcclellanville", "ravenel", "hollywood sc", "wadmalaw island"]);
+const SAVANNAH_SET = new Set(["savannah", "savannah ga", "savannah, ga", "chatham", "chatham county", "pooler", "tybee", "tybee island", "port wentworth", "garden city", "thunderbolt", "bloomingdale", "georgetown ga"]);
 const HAMLET_TOWN = { montauk: "East Hampton", amagansett: "East Hampton", wainscott: "East Hampton", springs: "East Hampton", "sag harbor": "East Hampton", bridgehampton: "Southampton", "water mill": "Southampton", sagaponack: "Southampton", westhampton: "Southampton", "westhampton beach": "Southampton", quogue: "Southampton", noyac: "Southampton", "north haven": "Southampton" };
 const UNIFIED_TYPES = [["any", "Any type"], ["retail", "Retail"], ["commercial", "Commercial / office"], ["multifamily", "Multifamily"], ["residential", "Residential"], ["industrial", "Industrial"], ["vacant", "Vacant / dev site"]];
 const TYPE_MAP_BY_MARKET = {
@@ -2762,6 +2769,8 @@ const TYPE_MAP_BY_MARKET = {
   ny: { retail: "commercial", commercial: "commercial", multifamily: "commercial", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
   tn: { retail: "retail", commercial: "commercial", multifamily: "apartments", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
   sc: { retail: "retail", commercial: "commercial", multifamily: "apartments", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
+  // GA use class doesn't separate retail/office from commercial (all class C), so they all map to commercial.
+  savannah: { retail: "commercial", commercial: "commercial", multifamily: "multifamily", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
 };
 const mapType = (t, m) => (TYPE_MAP_BY_MARKET[m] || {})[t] || "any";
 const titleCase = (s) => String(s || "").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
@@ -2779,6 +2788,11 @@ function marketFromText(raw) {
   if (/\bchar(?:le|el)ston\b|\bmt\.?\s*pleasant\b|\bmount pleasant\b|\bdaniel island\b|\bjames island\b|\bjohns island\b|\bwest ashley\b|\bsullivan'?s island\b|\bisle of palms\b|\bfolly beach\b|\bkiawah\b|\bseabrook island\b|\bwadmalaw\b|\bawendaw\b|\bmcclellanville\b/.test(k) && !/\bwest virginia\b|,\s*wv\b|\bstaten\b|\bnew york\b|,\s*ny\b/.test(k)) {
     const street = String(raw).replace(/,?\s*(north\s+char(?:le|el)ston|char(?:le|el)ston( county)?|mt\.?\s*pleasant|mount pleasant|daniel island|james island|johns island|west ashley|sullivan'?s island|isle of palms|folly beach|kiawah( island)?|seabrook island|wadmalaw( island)?|awendaw|mcclellanville|south carolina|sc|usa|united states).*$/i, "").replace(/[, ]+$/, "").trim();
     return { market: "sc", town: "Charleston", address: street.length >= 3 && /\d/.test(street) ? street : "" };
+  }
+  // Savannah / Chatham County, GA (the famous one — guard against Savannah, TN in Hardin County).
+  if (/\bsavannah\b|\bchatham\b|\bpooler\b|\btybee\b|\bport wentworth\b|\bthunderbolt\b|\bgarden city ga\b/.test(k) && !/,\s*tn\b|\btennessee\b/.test(k)) {
+    const street = String(raw).replace(/,?\s*(savannah|chatham county|chatham|pooler|tybee island|tybee|port wentworth|garden city|thunderbolt|bloomingdale|georgetown|georgia|ga|usa|united states).*$/i, "").replace(/[, ]+$/, "").trim();
+    return { market: "savannah", town: "Savannah", address: street.length >= 3 && /\d/.test(street) ? street : "" };
   }
   for (const t of CT_TOWN_SET) if (k.includes(t)) return { market: "ct", town: titleCase(t), address: firstAddrSeg(raw) };
   for (const t of HAMPTON_SET) if (k.includes(t)) return { market: "ny", town: HAMLET_TOWN[t] || titleCase(t), address: firstAddrSeg(raw) };
@@ -2833,6 +2847,7 @@ function unifiedDetect(loc, coords) {
   if (HAMPTON_SET.has(k)) return { market: "ny", town: HAMLET_TOWN[k] || titleCase(raw) };
   if (NASHVILLE_SET.has(k)) return { market: "tn", town: "Nashville" };
   if (CHARLESTON_SET.has(k)) return { market: "sc", town: "Charleston" };
+  if (SAVANNAH_SET.has(k)) return { market: "savannah", town: "Savannah" };
   // Free text naming a non-NYC market (e.g. "123 Broadway, Nashville") routes there, not to NYC.
   if (mt) return { ...mt, kind: "address-text" };
   // A typed address naming a non-NY US state (e.g. "500 Main St, Austin, TX") -> nationwide web research.
@@ -2853,10 +2868,14 @@ const nyRow = (p) => ({ market: "ny", marketLabel: `${p.town}, NY`, owner: p.own
 const nashRow = (p) => ({ market: "tn", marketLabel: "Nashville, TN", owner: p.owner, address: p.address, use: p.use, value: p.appraised_value ? fmtAmount(p.appraised_value) : (p.assessed_value ? fmtAmount(p.assessed_value) : ""), absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
 // Charleston County publishes no assessed value — the value column is the LAST SALE price.
 const scRow = (p) => ({ market: "sc", marketLabel: `${p.town || "Charleston"}, SC`, owner: p.owner, address: p.address, use: p.use, value: p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` (${p.sale_year} sale)` : " (sale)"}` : "", absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
+// Savannah / Chatham County (GA) — fair-market value is published, so that's the value column.
+const savRow = (p) => ({ market: "savannah", marketLabel: `${p.city || "Savannah"}, GA`, owner: p.owner, address: p.address, use: p.use, value: p.market_value ? fmtAmount(p.market_value) : "", absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
 
 function AssessorDetail({ p, market }) {
-  const ny = market === "ny", tn = market === "tn", sc = market === "sc";
-  const grid = sc
+  const ny = market === "ny", tn = market === "tn", sc = market === "sc", sav = market === "savannah";
+  const grid = sav
+    ? [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["City", p.city], ["Use class", p.use], ["Fair-market value", p.market_value ? fmtAmount(p.market_value) : null], ["Land value", p.land_value ? fmtAmount(p.land_value) : null], ["Building value", p.improvement_value ? fmtAmount(p.improvement_value) : null], ["Acres", p.acres || null], ["Year built", p.year_built || null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : null], ["Years owned", p.years_owned != null ? `~${p.years_owned}` : null], ["PIN", p.pin || null]]
+    : sc
     ? [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Town", p.town], ["Use", p.use], ["Acres", p.acres || null], ["Subdivision", p.subdivision || null], ["Tax district", p.tax_district || null], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : null], ["Years owned", p.years_owned != null ? `~${p.years_owned}` : null], ["Deed book/page", p.deed_book_page || null], ["Permits (city, since 2010)", p.permit_count || null], ["Latest permit", p.latest_permit_year || null], ["Permit valuation", p.permit_valuation ? fmtAmount(p.permit_valuation) : null], ["Permit types", (p.permit_types || []).join(", ") || null], ["PID", p.pid || null]]
     : tn
     ? [["Owner", p.owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Appraised", p.appraised_value ? fmtAmount(p.appraised_value) : null], ["Land value", p.land_value ? fmtAmount(p.land_value) : null], ["Building value", p.improvement_value ? fmtAmount(p.improvement_value) : null], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Building SF", p.building_sqft ? Number(p.building_sqft).toLocaleString() : null], ["Retail SF", p.retail_sqft ? Number(p.retail_sqft).toLocaleString() : null], ["Year built", p.year_built || null], ["Structures", (p.structure_types || []).join(", ") || null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Depth", p.depth_ft ? `${p.depth_ft} ft` : null], ["Land acres", p.acres || null], ["Council dist.", p.council_district || null], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : null], ["Years owned", p.years_owned != null ? `~${p.years_owned}` : null], ["APN", p.apn || null]]
@@ -2865,7 +2884,7 @@ function AssessorDetail({ p, market }) {
     : [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Building SF", p.building_sqft ? Number(p.building_sqft).toLocaleString() : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Year built", p.year_built || null], ["Condition", p.condition], ["Grade", p.grade], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_date ? ` · ${p.sale_date}` : ""}` : null]];
   return (
     <div>
-      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "10px 0 8px" }}>{sc ? "SC · CHARLESTON COUNTY" : tn ? "TN · NASHVILLE" : ny ? "NY" : "CT"} ASSESSOR RECORD</div>
+      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "10px 0 8px" }}>{sav ? "GA · CHATHAM COUNTY (SAVANNAH)" : sc ? "SC · CHARLESTON COUNTY" : tn ? "TN · NASHVILLE" : ny ? "NY" : "CT"} ASSESSOR RECORD</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: "6px 18px", fontSize: 12.5 }}>
         {grid.filter(([, v]) => v != null && v !== "" && v !== 0).map(([k, v]) => (<div key={k}><span style={{ color: C.muted }}>{k}: </span><span style={{ color: C.ivory }}>{v}</span></div>))}
       </div>
@@ -3041,6 +3060,7 @@ const SC_ENTITY_QUERY = (name) => `Identify who is actually behind the South Car
 const PORTFOLIO_MARKETS = {
   tn: { market: "nashville", place: "Nashville", county: "Davidson County", value: (p) => p.appraised_value || p.assessed_value },
   sc: { market: "charleston", place: "Charleston", county: "Charleston County", value: (p) => p.sale_price },
+  savannah: { market: "savannah", place: "Savannah", county: "Chatham County", value: (p) => p.market_value },
 };
 function OwnerPortfolio({ owner, pw, st }) {
   const cfg = PORTFOLIO_MARKETS[st];
@@ -3085,11 +3105,11 @@ const ENTITY_RE = /\b(LLC|INC|CORP|LP|LLP|TRUST|COMPANY|CO|ASSOCIATES|PARTNERS|H
 function AssessorMarketDetail({ r, pw }) {
   const raw = r.raw || {};
   const isCo = ENTITY_RE.test(r.owner || "");
-  const mState = raw.mailing_state || (r.market === "ct" ? "CT" : r.market === "tn" ? "TN" : r.market === "sc" ? "SC" : "NY");
+  const mState = raw.mailing_state || (r.market === "ct" ? "CT" : r.market === "tn" ? "TN" : r.market === "sc" ? "SC" : r.market === "savannah" ? "GA" : "NY");
   // One owner object shared by the AI brief and the skip trace (street = mailing before the first comma).
   const contactR = {
     name: r.owner || "", entity_type: isCo ? "company" : "person",
-    contact_address: (r.mailing || "").split(",")[0].trim(), city: raw.mailing_city || raw.town || (r.market === "tn" ? "Nashville" : r.market === "sc" ? "Charleston" : ""),
+    contact_address: (r.mailing || "").split(",")[0].trim(), city: raw.mailing_city || raw.town || (r.market === "tn" ? "Nashville" : r.market === "sc" ? "Charleston" : r.market === "savannah" ? "Savannah" : ""),
     state: mState, zip: raw.mailing_zip || "", address: r.address, borough: r.marketLabel,
     last_sale_price: raw.sale_price || null, last_sale_date: raw.sale_date || (raw.sale_year ? String(raw.sale_year) : ""), years_owned: raw.years_owned ?? null,
   };
@@ -3101,7 +3121,7 @@ function AssessorMarketDetail({ r, pw }) {
       )}
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
       {r.market === "sc" && <CharlestonIntelPanel pid={raw.pid} address={r.address} pw={pw} />}
-      {(r.market === "tn" || r.market === "sc") && r.owner && <OwnerPortfolio owner={r.owner} pw={pw} st={r.market} />}
+      {(r.market === "tn" || r.market === "sc" || r.market === "savannah") && r.owner && <OwnerPortfolio owner={r.owner} pw={pw} st={r.market} />}
       <ResearchBrief r={contactR} pw={pw} />
       <ContactReveal r={contactR} pw={pw} />
       <OwnerPeople r={contactR} pw={pw} market={r.market} />
@@ -3288,19 +3308,20 @@ function UnifiedSourcing({ pw, rows, setRows }) {
       if (market === "nyc") det = hasNum ? { market: "nyc", kind: "address-text", nearAddress: addr } : (NYC_BORO_SET[raw.toLowerCase()] ? { market: "nyc", kind: "borough", borough: NYC_BORO_SET[raw.toLowerCase()] } : { market: "nyc", kind: "address-text", nearAddress: raw });
       else if (market === "tn") det = { market: "tn", town: "Nashville", address: hasNum ? addr : "", kind: "address-text" };
       else if (market === "sc") det = { market: "sc", town: "Charleston", address: hasNum ? addr : "", kind: "address-text" };
+      else if (market === "savannah") det = { market: "savannah", town: "Savannah", address: hasNum ? addr : "", kind: "address-text" };
       else if (market === "ct") det = { market: "ct", town: CT_TOWN_SET.has(raw.toLowerCase()) ? titleCase(raw) : "Greenwich", address: hasNum ? addr : "", kind: "address-text" };
       else if (market === "ny") det = { market: "ny", town: HAMPTON_SET.has(raw.toLowerCase()) ? (HAMLET_TOWN[raw.toLowerCase()] || titleCase(raw)) : "East Hampton", address: hasNum ? addr : "", kind: "address-text" };
     }
-    if (!det.market) { setError("Try a NYC borough or address (Manhattan · 120 5th Ave…), a CT town (Greenwich, Darien…), a Hamptons town (East Hampton, Southampton…), Nashville, or Charleston SC."); return; }
+    if (!det.market) { setError("Try a NYC borough or address (Manhattan · 120 5th Ave…), a CT town (Greenwich, Darien…), a Hamptons town (East Hampton, Southampton…), Nashville, Charleston SC, or Savannah GA."); return; }
     // Radius needs an ANCHOR point. Only an NYC address (picked or typed → geocoded) and a
     // picked Nashville address have one; a borough or a CT/Hamptons town does not, so radius
     // is silently ignored there — tell the user instead of looking broken.
     const radiusActive = !!radius && Number(radius) > 0;
     // A specific building was looked up (so "just it" returns one property, and radius is moot).
     const anchored = det.kind === "address" || det.kind === "address-text"
-      || !!(det.address && det.address.trim()) || ((det.market === "tn" || det.market === "sc") && !!coords);
-    // Radius only does a real area search in the coordinate markets (NYC + picked Nashville/Charleston).
-    const usesRadius = radiusActive && anchored && (det.market === "nyc" || ((det.market === "tn" || det.market === "sc") && !!coords));
+      || !!(det.address && det.address.trim()) || ((det.market === "tn" || det.market === "sc" || det.market === "savannah") && !!coords);
+    // Radius only does a real area search in the coordinate markets (NYC + picked Nashville/Charleston/Savannah).
+    const usesRadius = radiusActive && anchored && (det.market === "nyc" || ((det.market === "tn" || det.market === "sc" || det.market === "savannah") && !!coords));
     setNotice(radiusActive && !anchored
       ? "Radius needs a specific address — pick one from the dropdown. A borough or town has no center point, so these results cover the whole area."
       : "");
@@ -3402,6 +3423,28 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           const exact = out.filter((r) => houseInAddress(r.address, houseNum, false));
           if (exact.length) out = exact.slice(0, 1);
         }
+      } else if (det.market === "savannah") {
+        // Savannah / Chatham County, GA — same shape as the Charleston flow: address pin,
+        // spatial radius around a picked point, or an attribute browse (GA owner data is public).
+        const hasPoint = coords && coords.lat != null && coords.lon != null;
+        const street = (det.address || "").trim();
+        const justIt = !radius || Number(radius) === 0;
+        const houseNum = streetBits(street).num;
+        let d = null;
+        if (justIt && houseNum) {
+          d = await postJSON("/api/search", { password: pw, market: "savannah", propertyType: "any", address: street });
+        } else if (hasPoint && (street || radius)) {
+          d = await postJSON("/api/search", { password: pw, market: "savannah", centerLat: coords.lat, centerLon: coords.lon, radiusMiles: radius || "", propertyType: justIt ? "any" : mapType(type, "savannah"), minValue });
+        }
+        if (!d || !(d.properties || []).length) {
+          const specific = /^\s*\d+\s/.test(street);
+          d = await postJSON("/api/search", { password: pw, market: "savannah", propertyType: street && specific ? "any" : mapType(type, "savannah"), minValue, ...(street ? { address: street } : {}) });
+        }
+        out = (d.properties || []).map(savRow);
+        if (justIt && houseNum) {
+          const exact = out.filter((r) => houseInAddress(r.address, houseNum, false));
+          if (exact.length) out = exact.slice(0, 1);
+        }
       } else if (det.market === "web") {
         // Any US address outside the free-data markets: one row that offers AI web research
         // (gated behind a click in the dossier — never auto-spends).
@@ -3486,7 +3529,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
                 placeholder="Manhattan · Greenwich · Nashville · Charleston · or any US address (500 Main St, Austin TX)…" style={{ ...fieldStyle, width: "100%" }} />
             </div>
           </label>
-          <label><div className="mono" style={labelStyle}>MARKET</div><select value={market} onChange={(e) => setMarket(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["auto", "Auto-detect"], ["nyc", "New York City"], ["tn", "Nashville · TN"], ["sc", "Charleston · SC"], ["ct", "Greenwich · CT"], ["ny", "Hamptons · NY"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+          <label><div className="mono" style={labelStyle}>MARKET</div><select value={market} onChange={(e) => setMarket(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["auto", "Auto-detect"], ["nyc", "New York City"], ["tn", "Nashville · TN"], ["sc", "Charleston · SC"], ["savannah", "Savannah · GA"], ["ct", "Greenwich · CT"], ["ny", "Hamptons · NY"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>TYPE</div><select value={type} onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{UNIFIED_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>RADIUS (picked address)</div><select value={radius} onChange={(e) => setRadius(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["", "off · just it"], ["0.1", "0.1 mi"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>MIN VALUE</div><input type="number" value={minValue} onChange={(e) => setMinValue(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
@@ -3495,12 +3538,12 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 20px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "SEARCHING…" : "◎ SEARCH"}</button>
           {rows && rows.length > 0 && <button onClick={() => downloadBlob(unifiedCSV(rows), `frontage_${(resolved && resolved.market) || "search"}_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
           {rows && rows.length > 0 && <button onClick={() => downloadXlsx(`frontage_${(resolved && resolved.market) || "search"}_${new Date().toISOString().slice(0, 10)}.xlsx`, "Leads", UNIFIED_COLS, rows)} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXCEL</button>}
-          {resolved && <span style={{ fontSize: 11.5, color: C.muted }}>Market: <strong style={{ color: C.gold }}>{resolved.market === "nyc" ? (resolved.borough || "New York City") : resolved.market === "web" ? "Web research (any US)" : resolved.town + (resolved.market === "ct" ? ", CT" : resolved.market === "tn" ? ", TN" : resolved.market === "sc" ? ", SC" : ", NY")}</strong></span>}
+          {resolved && <span style={{ fontSize: 11.5, color: C.muted }}>Market: <strong style={{ color: C.gold }}>{resolved.market === "nyc" ? (resolved.borough || "New York City") : resolved.market === "web" ? "Web research (any US)" : resolved.town + (resolved.market === "ct" ? ", CT" : resolved.market === "tn" ? ", TN" : resolved.market === "sc" ? ", SC" : resolved.market === "savannah" ? ", GA" : ", NY")}</strong></span>}
         </div>
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
         {notice && <div style={{ marginTop: 12, fontSize: 12, color: C.amber, background: C.goldSoft, border: `1px solid ${C.amber}40`, borderRadius: 8, padding: "9px 12px" }}>{notice}</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
-          One bar, every US market. Free public-records dossiers in <strong style={{ color: C.ivory }}>NYC</strong> (21 datasets), <strong style={{ color: C.ivory }}>Greenwich/CT</strong>, <strong style={{ color: C.ivory }}>Hamptons/NY</strong>, and <strong style={{ color: C.ivory }}>Nashville/TN</strong> — and for <strong style={{ color: C.ivory }}>any other US address</strong>, an on-demand AI web lookup that finds the owner + contacts (~$0.15, only when you click). Type a place or address; we route automatically; click <strong style={{ color: C.ivory }}>▸ details</strong> for the record + AI deep dive.
+          One bar, every US market. Free public-records dossiers in <strong style={{ color: C.ivory }}>NYC</strong> (21 datasets), <strong style={{ color: C.ivory }}>Greenwich/CT</strong>, <strong style={{ color: C.ivory }}>Hamptons/NY</strong>, <strong style={{ color: C.ivory }}>Nashville/TN</strong>, <strong style={{ color: C.ivory }}>Charleston/SC</strong>, and <strong style={{ color: C.ivory }}>Savannah/GA</strong> — and for <strong style={{ color: C.ivory }}>any other US address</strong>, an on-demand AI web lookup that finds the owner + contacts (~$0.15, only when you click). Type a place or address; we route automatically; click <strong style={{ color: C.ivory }}>▸ details</strong> for the record + AI deep dive.
         </div>
       </div>
 
@@ -4549,6 +4592,7 @@ const REGISTRY_HINT = {
   sc: "the SC Secretary of State Business Entities Online registry (businessfilings.sc.gov — captcha-gated, so it may not be reachable by search; it can be pulled by hand) and OpenCorporates",
   tn: "the Tennessee Secretary of State registry (TNBear / tncab.tnsos.gov) and OpenCorporates",
   ct: "the Connecticut Business Registry (data.ct.gov — CT publicly discloses LLC principals) and OpenCorporates",
+  savannah: "the Georgia Secretary of State corporations registry (ecorp.sos.ga.gov — lists the registered agent + officers) and OpenCorporates",
   nyc: "the New York State DOS business registry (note: NY hides LLC members, listing only the process-service contact) and OpenCorporates",
   ny: "the New York State DOS business registry (note: NY hides LLC members) and OpenCorporates",
 };

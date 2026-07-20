@@ -3099,6 +3099,16 @@ function CharlestonIntelPanel({ pid, address, pw }) {
   );
 }
 
+// Machine-readable footer appended to every unmask/people query so the UI can turn the
+// found people into one-click skip-trace chips (parseTraceList strips it from the shown
+// brief). The whole chain — LLC → principal → phone — then needs no retyping.
+const TRACE_FOOTER = `
+
+FINALLY — after the brief — append a machine-readable footer EXACTLY like this (plain text on its own lines, no markdown table):
+TRACE LIST
+Full Name | street address if found | city | 2-letter state | zip
+One line per REAL PERSON you actually found and named above (skip corporate registered-agent services like CT Corporation / Registered Agents Inc / Northwest). Leave unknown fields empty but keep all four pipes. Omit the footer entirely if you found no real people. Never invent a name or address.`;
+
 // Scout's sc_entity_lookup tool query (TOOL_ROUTES). SC's registry pages aren't crawlable
 // (JS-rendered + captcha), so a registry-only query usually whiffs on small LLCs — this
 // works the wider web too (sale coverage / deed aggregators / local CRE press / LinkedIn
@@ -3115,7 +3125,7 @@ Report, leading with what matters most:
 2. PRINCIPALS / manager / organizer — named people + their firm and where they're based (so they can be skip-traced).
 3. Entity status, type, and filing date, if found.
 4. The best way to reach the decision-maker.
-Cite each source inline and clearly separate CONFIRMED record facts from inference. NEVER invent an agent, name, address, or contact. Report whatever you DID find rather than giving up — a partial answer (just the agent, or just an aggregator listing) is still valuable. Only if genuinely nothing is on the crawlable web, say so plainly and note the record can be pulled by hand at businessfilings.sc.gov.`;
+Cite each source inline and clearly separate CONFIRMED record facts from inference. NEVER invent an agent, name, address, or contact. Report whatever you DID find rather than giving up — a partial answer (just the agent, or just an aggregator listing) is still valuable. Only if genuinely nothing is on the crawlable web, say so plainly and note the record can be pulled by hand at businessfilings.sc.gov.${TRACE_FOOTER}`;
 
 // LLC tracker — every county parcel held by the same owner name (Nashville / Davidson Co.
 // and Charleston Co. both support owner-name search). Maps an entity to its whole book
@@ -3851,7 +3861,7 @@ function CharlestonSourcing({ pw }) {
         </div>
         {entError && <div style={{ marginTop: 10, fontSize: 12.5, color: C.red }}>{entError}</div>}
         {entLoading && <div style={{ marginTop: 12, fontSize: 12.5, color: C.muted }}>Searching public records…</div>}
-        {entRes && <div style={{ marginTop: 12 }}><ResearchBriefBody text={entRes} /><div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>Verify before relying on any name — public matches can be wrong. Confirm the registered agent / principal address lines up with the property owner.</div></div>}
+        {entRes && (() => { const { display, people } = parseTraceList(entRes); return <div style={{ marginTop: 12 }}><ResearchBriefBody text={display} /><TracePeople people={people} pw={pw} fallback={{ city: "Charleston", state: "SC" }} /><div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>Verify before relying on any name — public matches can be wrong. Confirm the registered agent / principal address lines up with the property owner.{people.length ? <> Click a <strong style={{ color: C.ivory }}>person chip above</strong> to skip-trace them directly.</> : ""}</div></div>; })()}
       </div>
 
       {props && (
@@ -4866,15 +4876,57 @@ Work public sources: ${registry}; property deeds and co-ownership records; court
 1) UNMASK THE ENTITY — exact registered name, type, status (active/dissolved), filing date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC), and the principal/mailing address.
 2) THE PEOPLE — the principals / managers / members / organizers behind it (names + where they're based).
 3) THE CIRCLE — known business ASSOCIATES, partners, or co-investors who appear alongside them on other entities, deeds, or filings.
-For each person, give the best city/state to reach them so the user can skip-trace them. Cite each source. Clearly separate CONFIRMED record facts from likely-but-unconfirmed inferences. Do NOT invent names, numbers, or relationships — if the people behind the LLC aren't public, say so plainly and note the registry can be checked by hand.`;
+For each person, give the best city/state to reach them so the user can skip-trace them. Cite each source. Clearly separate CONFIRMED record facts from likely-but-unconfirmed inferences. Do NOT invent names, numbers, or relationships — if the people behind the LLC aren't public, say so plainly and note the registry can be checked by hand.${TRACE_FOOTER}`;
   }
   return `Find the RELATIVES and close ASSOCIATES of "${owner}", the individual who owns property at ${where}. ${mail}
 Work public sources: property deeds and co-ownership records (co-owners / spouses often appear on title), obituaries and public family notices, news, voter and public directories, business filings where they're a partner, and LinkedIn. Report a short list of:
 - Likely FAMILY — spouse, adult children, siblings, parents (name + relationship).
 - Close business ASSOCIATES or partners who appear alongside them on deeds, entities, or filings.
 - For each: how they connect to the owner and the city/state they're likely reachable in, so the user can skip-trace that person to reach the owner.
-Cite each source. Clearly separate CONFIRMED facts from likely-but-unconfirmed inferences, and mark uncertainty (name matches can be false positives). Do NOT invent people, phone numbers, or relationships — if nothing reliable is public, say so plainly.`;
+Cite each source. Clearly separate CONFIRMED facts from likely-but-unconfirmed inferences, and mark uncertainty (name matches can be false positives). Do NOT invent people, phone numbers, or relationships — if nothing reliable is public, say so plainly.${TRACE_FOOTER}`;
 }
+// Split the TRACE LIST footer (see TRACE_FOOTER) off an unmask brief. Returns
+// { display, people } — display is the brief without the footer; people are
+// { name, street, city, state, zip }. Defensive: no footer (older cached answers,
+// or a run that found nobody) → no chips, brief shown unchanged.
+function parseTraceList(text) {
+  const s = String(text || "");
+  const m = s.match(/^\s*(?:#+\s*|\*\*)?TRACE LIST(?:\*\*)?\s*$/mi);
+  if (!m) return { display: s, people: [] };
+  const people = [];
+  for (const line of s.slice(m.index + m[0].length).split("\n")) {
+    const t = line.trim().replace(/^[-*•]\s*/, "");
+    if (!t || !t.includes("|")) continue;
+    const [name = "", street = "", city = "", st = "", zip = ""] = t.split("|").map((x) => x.trim().replace(/^`|`$/g, ""));
+    if (name && !/^(full name|-+)$/i.test(name)) people.push({ name, street, city, state: st, zip });
+  }
+  return { display: s.slice(0, m.index).trim(), people };
+}
+
+// The bridge from an unmask result to the skip trace: every person the research
+// actually named becomes a chip that seeds the trace form — LLC → principal → phone
+// with no retyping. fallback city/state fill blanks (e.g. the property's market).
+function TracePeople({ people, pw, fallback = {} }) {
+  const [sel, setSel] = useState(-1);
+  if (!people || !people.length) return null;
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em", marginBottom: 6 }}>PEOPLE FOUND — ONE CLICK TO TRACE</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {people.map((p, i) => (
+          <button key={`${p.name}-${i}`} onClick={() => setSel(sel === i ? -1 : i)} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: sel === i ? C.goldSoft : C.panel, border: `1px solid ${sel === i ? C.gold : C.line}`, color: sel === i ? C.gold : C.ivory }}>▸ {p.name}{p.city ? ` · ${p.city}${p.state ? ", " + p.state : ""}` : ""}</button>
+        ))}
+      </div>
+      {sel >= 0 && people[sel] && (
+        <div style={{ marginTop: 10, background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>Confirm or complete the address — the trace matches on the <strong style={{ color: C.ivory }}>person's own address</strong> (~$0.10, charged only on a hit).</div>
+          <SkipTraceForm key={`${people[sel].name}-${sel}`} pw={pw} seed={{ name: people[sel].name, street: people[sel].street, city: people[sel].city || fallback.city || "", state: people[sel].state || fallback.state || "", zip: people[sel].zip }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OwnerPeople({ r, pw, market }) {
   const owner = r.name || r.owner || "";
   const isCo = ENTITY_RE.test(owner);
@@ -4913,7 +4965,7 @@ function OwnerPeople({ r, pw, market }) {
         : <>Finds likely <strong style={{ color: C.ivory }}>family and associates of {owner}</strong> — a way in when the owner’s own line is a dead end. Take any name into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to skip-trace them. <span>Live web search (~$0.30).</span></>}</div>}
       {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Searching public records…</div>}
       {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
-      {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={text} /><div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>Verify before relying on any name — public matches can be wrong. To reach one, use the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below with their name + a likely address.</div></div>}
+      {state === "done" && (() => { const { display, people } = parseTraceList(text); return <div style={{ marginTop: 10 }}><ResearchBriefBody text={display} /><TracePeople people={people} pw={pw} fallback={{ city: r.city, state: r.state }} /><div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>Verify before relying on any name — public matches can be wrong. {people.length ? <>Click a <strong style={{ color: C.ivory }}>person chip above</strong> to trace them directly.</> : <>To reach one, use the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below with their name + a likely address.</>}</div></div>; })()}
       {link && <div style={{ marginTop: 8, fontSize: 11 }}><a href={link[1]} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{link[0]}</a><span style={{ color: C.muted }}> — the official registry (captcha-gated; pull it by hand if the web lookup can’t reach it)</span></div>}
     </div>
   );

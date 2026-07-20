@@ -120,8 +120,14 @@ export const normStreet = (s) => clean(s).toUpperCase().split(/\s+/).map((w) => 
 // number and "STE" with no suite. MAIL_COUNTRY is appended only when foreign.
 export const MAIL_FIELDS = "MAIL_ST_NO,MAIL_ST_NAME,MAIL_ST_TYPE,MAIL_2ND_ADDR,MAIL_2ND_ADDT,MAIL_CITY,MAIL_STATE,MAIL_ZIP,MAIL_COUNTRY";
 export function mailingAddress(r) {
-  const line1 = [clean(r.MAIL_ST_NO), clean(r.MAIL_ST_NAME), clean(r.MAIL_ST_TYPE)].filter(Boolean).join(" ");
-  const line2 = [clean(r.MAIL_2ND_ADDR), clean(r.MAIL_2ND_ADDT)].filter(Boolean).join(" ");
+  const no = clean(r.MAIL_ST_NO), name = clean(r.MAIL_ST_NAME), type = clean(r.MAIL_ST_TYPE);
+  const a2 = clean(r.MAIL_2ND_ADDR), a2t = clean(r.MAIL_2ND_ADDT);
+  // A number sitting in the street-NUMBER field with no street NAME is a PO box the
+  // county misfiled (these rows carry PO-box zips) — same when it's the only 2nd-line
+  // value. Label it "PO BOX <n>" so the mailing isn't a naked, unusable number.
+  const nakedBox = (n, hasName) => n && !hasName && /^\d+$/.test(n);
+  const line1 = nakedBox(no, name) ? `PO BOX ${no}` : [no, name, type].filter(Boolean).join(" ");
+  const line2 = nakedBox(a2t, a2) && !line1 ? `PO BOX ${a2t}` : [a2, a2t].filter(Boolean).join(" ");
   const country = clean(r.MAIL_COUNTRY);
   return addr([line1, line2, r.MAIL_CITY, r.MAIL_STATE, r.MAIL_ZIP, /^(USA?|UNITED STATES|US)$/i.test(country) ? "" : country]);
 }

@@ -27,8 +27,12 @@ export default async function handler(req, res) {
     if (process.env.SITE_PASSWORD && b.password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
     }
-    const key = process.env.GOOGLE_MAPS_API_KEY;
-    if (b.debug) return res.status(200).json({ ok: true, keyConfigured: !!key, keyEnv: "GOOGLE_MAPS_API_KEY", build: "streetview-v1" });
+    // Accept any of the common names so it works whatever you called it (and picks up an
+    // older Maps-embed key if one's already set). GOOGLE_MAPS_API_KEY is the documented one.
+    const KEY_NAMES = ["GOOGLE_MAPS_API_KEY", "GOOGLE_API_KEY", "GMAPS_API_KEY", "VITE_GMAPS_EMBED_KEY", "GMAPS_EMBED_KEY"];
+    const keyName = KEY_NAMES.find((n) => clean(process.env[n]));
+    const key = keyName ? clean(process.env[keyName]) : "";
+    if (b.debug) return res.status(200).json({ ok: true, keyConfigured: !!key, keyEnv: keyName || "GOOGLE_MAPS_API_KEY", checked: KEY_NAMES, build: "streetview-v2" });
     if (!key) return res.status(200).json({ noKey: true, keyEnv: "GOOGLE_MAPS_API_KEY" });
 
     // Location: prefer the ADDRESS (Google auto-orients the camera toward that building's

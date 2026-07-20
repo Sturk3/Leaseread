@@ -3022,6 +3022,70 @@ function ScEntityFinder({ owner, pw }) {
   );
 }
 
+// FREE SC unmask #0 — the county's own data, auto-loaded on expand: every parcel whose
+// ASSESSOR MAILING address matches this owner's tax-bill address. A single-asset LLC's
+// tax bill usually goes to the principal's home or office, so the INDIVIDUALS sharing
+// the address are the likely people behind it (each becomes a trace chip), and the
+// entities sharing it are the owner's hidden portfolio — no registry, no key, no cost.
+function MailingXref({ r, pw }) {
+  const raw = r.raw || {};
+  const line = (r.mailing || raw.mailing || "").split(",")[0].trim();
+  const zip = raw.mailing_zip || "";
+  const owner = (r.owner || "").toUpperCase();
+  const [state, setState] = useState(line ? "loading" : "none");
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    if (!line) return;
+    let alive = true;
+    postJSON("/api/search", { password: pw, market: "charleston", mailingAddress: line, mailingZip: zip })
+      .then((d) => { if (alive) { setRows(d.properties || []); setState("done"); } })
+      .catch(() => { if (alive) setState("error"); });
+    return () => { alive = false; };
+  }, []);
+  if (state === "none" || state === "error") return null;
+  const groups = new Map();
+  for (const p of rows) {
+    const k = (p.owner || "").toUpperCase();
+    if (!k || k === owner) continue;
+    if (!groups.has(k)) groups.set(k, { owner: p.owner, n: 0, sample: [] });
+    const g = groups.get(k);
+    g.n++;
+    if (g.sample.length < 2 && p.address && !p.geocode_skip) g.sample.push(p.address);
+  }
+  const others = [...groups.values()].sort((a, b) => b.n - a.n);
+  const people = others.filter((g) => !ENTITY_RE.test(g.owner));
+  const ents = others.filter((g) => ENTITY_RE.test(g.owner)).slice(0, 10);
+  if (state === "done" && !others.length) return null; // nothing shared — say nothing
+  const massBox = others.length > 14; // a registered-agent / manager box, not a household
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
+      <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>🏠 SAME TAX-BILL ADDRESS — free county unmask</div>
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12, marginTop: 6 }}>Cross-referencing {line}…</div>}
+      {state === "done" && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>{others.length} other owner{others.length === 1 ? "" : "s"} get{others.length === 1 ? "s" : ""} county tax mail at <strong style={{ color: C.ivory }}>{line}</strong>{massBox ? " — a shared corporate / manager box, so read these as an office cluster rather than one household" : ""}:</div>
+          {people.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              {people.slice(0, 6).map((g, i) => (
+                <div key={i} style={{ fontSize: 12.5, marginTop: 3 }}>👤 <span style={{ color: C.ivory, fontWeight: 600 }}>{g.owner}</span><span style={{ color: C.muted }}> · {g.n} parcel{g.n === 1 ? "" : "s"}{g.sample.length ? ` · ${g.sample[0]}` : ""} — likely a person behind this address</span></div>
+              ))}
+              <TracePeople people={people.slice(0, 6).map((g) => ({ name: g.owner, street: line, city: raw.mailing_city || "", state: raw.mailing_state || "SC", zip }))} pw={pw} fallback={{ city: raw.mailing_city || "Charleston", state: raw.mailing_state || "SC" }} />
+            </div>
+          )}
+          {ents.length > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
+              {ents.map((g, i) => (
+                <div key={i}>🏢 <span style={{ color: C.ivory }}>{g.owner}</span> · {g.n} parcel{g.n === 1 ? "" : "s"}{g.sample.length ? ` · ${g.sample[0]}` : ""}</div>
+              ))}
+              <div style={{ fontSize: 10.5, marginTop: 4 }}>Related entities at the same address = the owner's likely wider book. Search any of them in Sourcing to pull their parcels.</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Detail panel for the assessor markets (CT · Hamptons · Nashville): the record, the AI quick take,
 // and the PAID skip trace — the SAME owner-contact workflow NYC has, so it works in every market.
 function AssessorMarketDetail({ r, pw }) {
@@ -3039,6 +3103,7 @@ function AssessorMarketDetail({ r, pw }) {
     <>
       <AssessorDetail p={raw} market={r.market} />
       {r.market === "ct" && r.owner && ENTITY_RE.test(r.owner) && <CtEntityFinder owner={r.owner} pw={pw} />}
+      {r.market === "sc" && <MailingXref r={r} pw={pw} />}
       {r.market === "sc" && r.owner && ENTITY_RE.test(r.owner) && <ScEntityFinder owner={r.owner} pw={pw} />}
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
       {r.market === "sc" && <CharlestonIntelPanel pid={raw.pid} address={r.address} pw={pw} />}

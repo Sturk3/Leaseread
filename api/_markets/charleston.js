@@ -188,13 +188,43 @@ async function enrichPermits(props, cap = 60) {
 }
 
 export async function search(q) {
-  const { propertyType, address, owner, minValue, maxValue, minAcres, sinceYear, limit, centerLat, centerLon, radiusMiles } = q;
+  // (mailingAddress the PARAM is renamed mailQRaw — the module-level mailingAddress()
+  // helper assembles rows' mailing strings and must stay reachable in this scope.)
+  const { propertyType, address, owner, mailingAddress: mailQRaw, mailingZip, minValue, maxValue, minAcres, sinceYear, limit, centerLat, centerLon, radiusMiles } = q;
 
   const where = [];
   // OWNER-PORTFOLIO mode: every Charleston County parcel held by this owner; type filter off.
   const ownerQ = clean(owner);
+  const mailQ = clean(mailQRaw).toUpperCase();
   if (ownerQ) {
     where.push(`(UPPER(OWNER1) LIKE '%${sqlStr(ownerQ)}%' OR UPPER(OWNER2) LIKE '%${sqlStr(ownerQ)}%')`);
+  } else if (mailQ) {
+    // MAILING-XREF mode: every parcel whose ASSESSOR MAILING address matches this line
+    // (+ zip). The tax-bill address of a single-asset LLC is usually the principal's
+    // home or office, so the INDIVIDUALS sharing it are the likely people behind the
+    // entity — a FREE unmask from county data alone (no registry, no key). Pass
+    // mailingAddress as the street/box line ("PO BOX 242", "275 MADISON AVE").
+    const box = mailQ.match(/^P\.?O\.?\s*BOX\s+(\w+)/);
+    if (box) {
+      const bn = sqlStr(box[1]);
+      // County splits "PO BOX 242" as MAIL_2ND_ADDR='PO BOX' + MAIL_2ND_ADDT='242',
+      // but be tolerant of the number living in the ADDR field on some rows.
+      where.push(`((UPPER(MAIL_2ND_ADDR) LIKE 'P%BOX%' AND MAIL_2ND_ADDT = '${bn}') OR UPPER(MAIL_2ND_ADDR) LIKE 'P%BOX ${bn}')`);
+    } else {
+      const m = mailQ.match(/^(\d[\w-]*)\s+(.+)$/);
+      if (m) {
+        const rest = clean(m[2]);
+        const parts = rest.split(/\s+/);
+        const woType = parts.length > 1 ? parts.slice(0, -1).join(" ") : rest;
+        // MAIL_ST_NAME sometimes holds the bare name ('MADISON' + TYPE='AVE'), sometimes
+        // the whole thing ('MEETING STREET', TYPE empty) — match either split.
+        where.push(`(MAIL_ST_NO = '${sqlStr(m[1])}' AND (UPPER(MAIL_ST_NAME) = '${sqlStr(rest)}' OR UPPER(MAIL_ST_NAME) = '${sqlStr(woType)}'))`);
+      } else {
+        where.push(`(UPPER(MAIL_ST_NAME) LIKE '%${sqlStr(mailQ)}%' OR UPPER(MAIL_2ND_ADDR) LIKE '%${sqlStr(mailQ)}%')`);
+      }
+    }
+    const zip5 = clean(mailingZip).slice(0, 5);
+    if (zip5) where.push(`MAIL_ZIP LIKE '${sqlStr(zip5)}%'`);
   } else {
     const typeKey = clean(propertyType).toLowerCase().replace(/[\s/-]+/g, "_");
     const prefixes = typeKey in CLASS_PREFIX ? CLASS_PREFIX[typeKey] : null;

@@ -63,6 +63,9 @@
     "api/outreach.js": {
       "maxDuration": 30
     },
+    "api/streetview.js": {
+      "maxDuration": 15
+    },
     "api/leasecomps.js": {
       "maxDuration": 30
     },

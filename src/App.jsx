@@ -3120,6 +3120,7 @@ function CorridorRowDetail({ row, pw }) {
       {r.market === "sc"
         ? <AssessorMarketDetail r={r} pw={pw} outreachExtra={oExtra} />
         : <>
+            <StorefrontPhoto r={r} pw={pw} />
             <AssessorDetail p={{ owner: r.owner, mailing: r.mailing, use: row.tier, frontage_ft: row.frontage_ft, sale_price: row.last_sale_price, sale_date: row.last_sale_date }} market="nyc-corridor" />
             <OutreachStudio ctx={outreachCtx(r, oExtra)} pw={pw} />
             <ResearchBrief r={contactR} pw={pw} />
@@ -3392,6 +3393,7 @@ function AssessorMarketDetail({ r, pw, outreachExtra = {} }) {
   };
   return (
     <>
+      <StorefrontPhoto r={r} pw={pw} />
       <AssessorDetail p={raw} market={r.market} />
       {r.market === "ct" && r.owner && ENTITY_RE.test(r.owner) && <CtEntityFinder owner={r.owner} pw={pw} />}
       {r.market === "sc" && <MailingXref r={r} pw={pw} />}
@@ -4633,55 +4635,94 @@ function LeadRow({ r, last, statusEditor, pw, colSpan, saved, onToggleSave }) {
 }
 
 // A street-level photo of the property, keyed off the PLUTO lat/lon.
-// Google blocked the old keyless Street View embed in 2026 (it now 301s and sends
-// X-Frame-Options: SAMEORIGIN, so browsers refuse to render it in our iframe). The
-// supported replacement is the Maps Embed API, which IS free (no usage charge, no
-// billing) but needs an API key. If `VITE_GMAPS_EMBED_KEY` is set we render the real
-// inline photo; otherwise we show a clickable card that opens Street View in a new tab.
-const GMAPS_EMBED_KEY = import.meta.env.VITE_GMAPS_EMBED_KEY || "";
-function PropertyPhoto({ r }) {
-  if (r.lat == null || r.lon == null) return null;
-  const pano = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${r.lat},${r.lon}`;
-  const sat = `https://www.google.com/maps/search/?api=1&query=${r.lat},${r.lon}`;
-  if (GMAPS_EMBED_KEY) {
-    const src = `https://www.google.com/maps/embed/v1/streetview?key=${GMAPS_EMBED_KEY}&location=${r.lat},${r.lon}&fov=80`;
-    return (
-      <div style={{ marginBottom: 14 }}>
-        <iframe title="Street View" src={src} loading="lazy"
-          style={{ width: "100%", height: 190, border: `1px solid ${C.line}`, borderRadius: 10, display: "block" }} />
-        <a href={pano} target="_blank" rel="noreferrer" className="mono" style={{ display: "inline-block", marginTop: 5, fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ open full Street View</a>
-      </div>
-    );
-  }
-  // Keyless default: a street MAP of the block from Esri (free, no key). For the actual
-  // building FRONT, Google's Street View now needs a key — set VITE_GMAPS_EMBED_KEY (free)
-  // and the inline photo above replaces this map. Links below open Street View + satellite.
-  const d = 0.0009; // ~100m half-span around the lot
-  const bbox = `${r.lon - d},${r.lat - d},${r.lon + d},${r.lat + d}`;
-  const streetmap = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=620,300&format=png&f=image`;
+// STOREFRONT PHOTO — an actual Google Street View photo of the building front, auto-
+// loaded for every candidate (the thing a list of owners can't show you). Fetches the
+// server proxy (/api/streetview) as a blob so the Google key stays server-side. Rotate
+// buttons re-frame the shot; a free keyless "open in Street View" link always works.
+// Falls back to a street MAP (Esri, free, no key) when GOOGLE_MAPS_API_KEY isn't set or
+// no pano exists at the location.
+const STORE_PW = () => { try { return sessionStorage.getItem("lr_pw") || ""; } catch { return ""; } };
+function StorefrontPhoto({ r, pw }) {
+  const lat = r.lat ?? r.raw?.lat ?? null, lon = r.lon ?? r.raw?.lon ?? null;
+  const address = r.address || "";
+  const loc = address || (lat != null && lon != null ? `${lat},${lon}` : "");
+  const [state, setState] = useState(loc ? "loading" : "none"); // loading | photo | nophoto | nokey | none
+  const [imgUrl, setImgUrl] = useState("");
+  const [date, setDate] = useState("");
+  const [heading, setHeading] = useState(null); // null = Google auto-frames toward the address
+  const password = pw || STORE_PW();
+
+  useEffect(() => {
+    if (!loc) return;
+    let alive = true, objUrl = "";
+    setState("loading");
+    (async () => {
+      try {
+        const res = await fetch("/api/streetview", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password, address, lat, lon, heading, size: "640x360" }),
+        });
+        const ct = res.headers.get("content-type") || "";
+        if (ct.startsWith("image/")) {
+          const blob = await res.blob();
+          objUrl = URL.createObjectURL(blob);
+          if (!alive) { URL.revokeObjectURL(objUrl); return; }
+          setDate(res.headers.get("X-Pano-Date") || "");
+          setImgUrl(objUrl); setState("photo");
+        } else {
+          const j = await res.json().catch(() => ({}));
+          if (!alive) return;
+          setState(j.noKey ? "nokey" : "nophoto");
+        }
+      } catch { if (alive) setState("nophoto"); }
+    })();
+    return () => { alive = false; if (objUrl) URL.revokeObjectURL(objUrl); };
+  }, [loc, heading]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (state === "none") return null;
+  const pano = lat != null && lon != null ? `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lon}` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`;
+  const sat = lat != null && lon != null ? `https://www.google.com/maps/search/?api=1&query=${lat},${lon}` : pano;
+  const frame = { width: "100%", height: 200, objectFit: "cover", border: `1px solid ${C.line}`, borderRadius: 10, display: "block" };
+  const rotate = (deg) => setHeading((h) => (((h == null ? 0 : h) + deg) % 360 + 360) % 360);
+
   return (
     <div style={{ marginBottom: 14 }}>
-      <a href={sat} target="_blank" rel="noreferrer" style={{ display: "block", position: "relative" }}>
-        <img src={streetmap} alt="Street map of the property location" loading="lazy"
-          style={{ width: "100%", height: 190, objectFit: "cover", border: `1px solid ${C.line}`, borderRadius: 10, display: "block" }} />
-        {/* The map bbox is centered on the lot's lat/lon, so the subject is dead-center.
-            Drop a pin (tip at center) + an address label so it's unmistakable which one it is. */}
-        <svg width="28" height="36" viewBox="0 0 28 36" aria-hidden="true"
-          style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-100%)", pointerEvents: "none", filter: "drop-shadow(0 1px 2px rgba(0,0,0,.5))" }}>
-          <path d="M14 0C6.8 0 1 5.8 1 13c0 9.5 13 23 13 23s13-13.5 13-23C27 5.8 21.2 0 14 0z" fill={C.gold} stroke="#fff" strokeWidth="2" />
-          <circle cx="14" cy="13" r="4.5" fill="#fff" />
-        </svg>
-        <div className="mono" style={{ position: "absolute", left: 8, top: 8, background: "rgba(27,25,48,0.82)", color: "#fff", fontSize: 9.5, letterSpacing: "0.04em", padding: "3px 7px", borderRadius: 5, pointerEvents: "none", maxWidth: "85%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          ★ SUBJECT{r.address ? ` · ${r.address}` : ""}
-        </div>
-      </a>
-      <div style={{ display: "flex", gap: 12, marginTop: 5 }}>
-        <a href={pano} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ Street View</a>
-        <a href={sat} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ Map / Satellite</a>
+      <div style={{ position: "relative" }}>
+        {state === "loading" && <div style={{ ...frame, background: C.panel2, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12 }}>Loading storefront photo…</div>}
+        {state === "photo" && <img src={imgUrl} alt={`Storefront at ${address || "the property"}`} style={frame} />}
+        {(state === "nophoto" || state === "nokey") && (() => {
+          // Free keyless fallback: an Esri street MAP centered on the lot, pinned + labeled.
+          if (lat == null || lon == null) return <div style={{ ...frame, background: C.panel2, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 12 }}>No storefront photo available</div>;
+          const d = 0.0009, bbox = `${lon - d},${lat - d},${lon + d},${lat + d}`;
+          const streetmap = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=640,300&format=png&f=image`;
+          return (
+            <a href={pano} target="_blank" rel="noreferrer" style={{ display: "block", position: "relative" }}>
+              <img src={streetmap} alt="Street map of the property location" loading="lazy" style={frame} />
+              <svg width="28" height="36" viewBox="0 0 28 36" aria-hidden="true" style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-100%)", pointerEvents: "none", filter: "drop-shadow(0 1px 2px rgba(0,0,0,.5))" }}>
+                <path d="M14 0C6.8 0 1 5.8 1 13c0 9.5 13 23 13 23s13-13.5 13-23C27 5.8 21.2 0 14 0z" fill={C.gold} stroke="#fff" strokeWidth="2" />
+                <circle cx="14" cy="13" r="4.5" fill="#fff" />
+              </svg>
+            </a>
+          );
+        })()}
+        {state === "photo" && <div className="mono" style={{ position: "absolute", left: 8, top: 8, background: "rgba(27,25,48,0.82)", color: "#fff", fontSize: 9.5, letterSpacing: "0.04em", padding: "3px 7px", borderRadius: 5, maxWidth: "85%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📷 STOREFRONT{r.address ? ` · ${r.address}` : ""}{date ? ` · ${date}` : ""}</div>}
+        {state === "photo" && (
+          <div style={{ position: "absolute", right: 8, bottom: 8, display: "flex", gap: 5 }}>
+            <button onClick={() => rotate(-45)} title="Look left" className="mono lift" style={{ ...ACTION_PILL, padding: "3px 9px", background: "rgba(27,25,48,0.85)", border: `1px solid ${C.line}`, color: "#fff" }}>‹</button>
+            <button onClick={() => rotate(45)} title="Look right" className="mono lift" style={{ ...ACTION_PILL, padding: "3px 9px", background: "rgba(27,25,48,0.85)", border: `1px solid ${C.line}`, color: "#fff" }}>›</button>
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 12, marginTop: 5, alignItems: "center", flexWrap: "wrap" }}>
+        <a href={pano} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ open in Street View</a>
+        <a href={sat} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ map / satellite</a>
+        {state === "nokey" && <span style={{ fontSize: 10, color: C.muted }}>· set <span className="mono">GOOGLE_MAPS_API_KEY</span> in Vercel to show the actual storefront photo here</span>}
       </div>
     </div>
   );
 }
+// Back-compat alias — existing NYC detail calls <PropertyPhoto r={r} />.
+const PropertyPhoto = StorefrontPhoto;
 
 // Minimal markdown renderer for the research brief (bold, bullets, links).
 function renderBriefLine(str, keyBase) {
@@ -5927,7 +5968,7 @@ function PropertyDetail({ r, pw }) {
       <ResearchBrief r={r} pw={pw} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 22 }}>
       <div>
-        <PropertyPhoto r={r} />
+        <PropertyPhoto r={r} pw={pw} />
         <div className="mono" style={{ ...title, marginTop: 0 }}>HOW TO REACH</div>
         <div style={{ fontSize: 13, fontWeight: 600 }}>{r.name} <span style={{ color: C.muted, fontWeight: 400, fontSize: 12 }}>· {r.entity_type}</span></div>
         <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>

@@ -40,6 +40,7 @@ Add a provider there and it shows up in the health check automatically.
 | Phone verify | `PHONE_VERIFY_PROVIDER` (`twilio`) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | planned (drop-in) |
 | Entity unmask | `ENTITY_PROVIDER` (`web`) | web lane needs no key · `OPENSOSDATA_API_KEY` | web active; structured planned |
 | SC SOS registry (structured) | — (`/api/scentity`) | `COBALT_API_KEY` (cobaltintelligence.com) | **wired** — lane off until key set; Charleston tab falls back to web unmask |
+| Storefront photo (Street View) | — (`/api/streetview`) | `GOOGLE_MAPS_API_KEY` (enable "Street View Static API") | **wired** — off until key set; UI falls back to a free street map + "open in Street View" link. ~$200/mo free credit (~28k images) makes it effectively free at this volume. |
 | Property data | `PROPERTY_PROVIDER` (`attom`) | `ATTOM_API_KEY` · `REGRID_API_TOKEN` | parked (branch) |
 
 ### Optional

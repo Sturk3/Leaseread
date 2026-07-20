@@ -113,6 +113,19 @@ const STREET_ABBR = {
 // Exported for the RetailAvailability Charleston connector (corridor street matching).
 export const normStreet = (s) => clean(s).toUpperCase().split(/\s+/).map((w) => STREET_ABBR[w] || w).join(" ");
 
+// Assessor mailing assembly (shared with the RetailAvailability Charleston connector).
+// The mail address is split across EIGHT fields, and the second line is itself split:
+// MAIL_2ND_ADDR carries the label ("PO BOX", "STE") and MAIL_2ND_ADDT the number
+// ("20400", "1100") — dropping ADDT used to emit "PO BOX, Charleston" with no box
+// number and "STE" with no suite. MAIL_COUNTRY is appended only when foreign.
+export const MAIL_FIELDS = "MAIL_ST_NO,MAIL_ST_NAME,MAIL_ST_TYPE,MAIL_2ND_ADDR,MAIL_2ND_ADDT,MAIL_CITY,MAIL_STATE,MAIL_ZIP,MAIL_COUNTRY";
+export function mailingAddress(r) {
+  const line1 = [clean(r.MAIL_ST_NO), clean(r.MAIL_ST_NAME), clean(r.MAIL_ST_TYPE)].filter(Boolean).join(" ");
+  const line2 = [clean(r.MAIL_2ND_ADDR), clean(r.MAIL_2ND_ADDT)].filter(Boolean).join(" ");
+  const country = clean(r.MAIL_COUNTRY);
+  return addr([line1, line2, r.MAIL_CITY, r.MAIL_STATE, r.MAIL_ZIP, /^(USA?|UNITED STATES|US)$/i.test(country) ? "" : country]);
+}
+
 // Address-first search: find PIDs whose situs matches the typed street, across both
 // address layers (the county layer only covers unincorporated Charleston County).
 // Exported for api/charlestonintel.js (address → parcel resolution).
@@ -204,7 +217,7 @@ export async function search(q) {
 
   const params = {
     where: where.join(" AND ") || "1=1",
-    outFields: "PID,OWNER1,OWNER2,MAIL_ST_NO,MAIL_ST_NAME,MAIL_ST_TYPE,MAIL_2ND_ADDR,MAIL_CITY,MAIL_STATE,MAIL_ZIP,CLASS_CODE,ACREAGE,SALE_PRICE,RECORDED_DATE,DEED_BOOK_PAGE,LEGAL_DESCR,SUBDIVISION,TAX_DISTRICT",
+    outFields: `PID,OWNER1,OWNER2,${MAIL_FIELDS},CLASS_CODE,ACREAGE,SALE_PRICE,RECORDED_DATE,DEED_BOOK_PAGE,LEGAL_DESCR,SUBDIVISION,TAX_DISTRICT`,
     orderByFields: "SALE_PRICE DESC",
     resultRecordCount: "2000",
   };
@@ -234,7 +247,7 @@ export async function search(q) {
     const saleYear = msYear(r.RECORDED_DATE);
     out.push({
       owner: clean(r.OWNER1), co_owner: clean(r.OWNER2),
-      mailing: addr([[clean(r.MAIL_ST_NO), clean(r.MAIL_ST_NAME), clean(r.MAIL_ST_TYPE)].filter(Boolean).join(" "), r.MAIL_2ND_ADDR, r.MAIL_CITY, r.MAIL_STATE, r.MAIL_ZIP]),
+      mailing: mailingAddress(r),
       mailing_city: clean(r.MAIL_CITY), mailing_state: mState, mailing_zip: clean(r.MAIL_ZIP),
       absentee: mState && mState !== "SC" ? "out-of-state" : null, // out-of-area refined after the situs join
       address: "", town: "", pid,

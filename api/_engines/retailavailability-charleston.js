@@ -27,8 +27,8 @@
 // City layers only cover the City of Charleston — fine for King St (all city). All
 // layers are free ArcGIS, no key; failures land in the coverage report, not throws.
 
-import { clean, toNum, addr, chunk } from "../_lib/util.js";
-import { normStreet } from "../_markets/charleston.js";
+import { clean, toNum, chunk } from "../_lib/util.js";
+import { normStreet, mailingAddress, MAIL_FIELDS } from "../_markets/charleston.js";
 import { clipToSegment } from "./corridorgeo.js";
 
 export const BUILD = "retailavail-chs-v1";
@@ -175,7 +175,7 @@ async function resolveUniverse(corridor, cov) {
   for (const batch of chunk([...byPid.keys()], 80)) {
     const rows = await arcgis(CC_PARCELS, {
       where: `PID IN (${quoteIn(batch)})`,
-      outFields: "PID,OWNER1,OWNER2,MAIL_ST_NO,MAIL_ST_NAME,MAIL_ST_TYPE,MAIL_2ND_ADDR,MAIL_CITY,MAIL_STATE,MAIL_ZIP,CLASS_CODE,ACREAGE,SALE_PRICE,RECORDED_DATE,DEED_BOOK_PAGE,LEGAL_DESCR",
+      outFields: `PID,OWNER1,OWNER2,${MAIL_FIELDS},CLASS_CODE,ACREAGE,SALE_PRICE,RECORDED_DATE,DEED_BOOK_PAGE,LEGAL_DESCR`,
       resultRecordCount: "2000",
     }, cov.sources.parcels);
     for (const r of rows) { const pid = clean(r.PID); if (pid && !parcelByPid.has(pid)) parcelByPid.set(pid, r); }
@@ -216,7 +216,7 @@ async function enrich(universe, cov) {
   for (const u of universe) {
     const r = u.parcel;
     u.owner_entity = [clean(r.OWNER1), clean(r.OWNER2)].filter(Boolean).join(" & ") || null;
-    u.owner_mailing = addr([[clean(r.MAIL_ST_NO), clean(r.MAIL_ST_NAME), clean(r.MAIL_ST_TYPE)].filter(Boolean).join(" "), r.MAIL_2ND_ADDR, r.MAIL_CITY, r.MAIL_STATE, r.MAIL_ZIP]) || null;
+    u.owner_mailing = mailingAddress(r) || null;
     u.last_sale_date = fmtDate(r.RECORDED_DATE);
     u.last_sale_price = toNum(r.SALE_PRICE) || null;
   }

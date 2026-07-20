@@ -2821,10 +2821,23 @@ function CharlestonIntelPanel({ pid, address, pw }) {
   if (state === "error") return <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Charleston city records unavailable right now.</div>;
   if (state !== "done" || !d) return null;
   const z = d.zoning || {}, fl = d.flood || {}, cr = d.crime_300m || {}, pm = d.permits || {}, hot = d.hotel_entitlement;
+  const val = d.valuation || {}, bld = d.buildings || {}, code = d.code_enforcement || {};
   const zoneBits = [z.city_base_zone && `city ${z.city_base_zone}`, z.city_pud && `PUD ${z.city_pud}`, !z.city_base_zone && z.county_zone && z.county_zone !== "MUNI" && `county ${z.county_zone}${z.county_zone_desc ? ` (${z.county_zone_desc})` : ""}`].filter(Boolean);
+  const fmt$ = (n) => n != null ? `$${Number(n).toLocaleString()}` : null;
   return (
     <div style={{ marginTop: 6 }}>
       <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "12px 0 2px" }}>CHARLESTON CITY RECORDS</div>
+      {(val.total_appraised || bld.count) && <>
+        <H>VALUATION / BUILDING</H>
+        {val.total_appraised && <div style={{ fontSize: 12.5 }}><span style={muted}>Appraised value: </span><span style={ivory}>{fmt$(val.total_appraised)}</span>{(val.land_appraised || val.improvement_appraised) ? <span style={muted}> · land {fmt$(val.land_appraised)} + improvement {fmt$(val.improvement_appraised)}</span> : ""}</div>}
+        {bld.count > 0 && <div style={{ fontSize: 12.5 }}><span style={muted}>Buildings: </span><span style={ivory}>{bld.count} footprint{bld.count === 1 ? "" : "s"}{bld.total_sqft ? ` · ${bld.total_sqft.toLocaleString()} sq ft` : ""}</span>{bld.note ? <span style={muted}> · {bld.note}</span> : ""}</div>}
+      </>}
+      {code.count > 0 && <>
+        <H>CODE ENFORCEMENT · VIOLATIONS</H>
+        <div style={{ fontSize: 12.5 }}><span style={{ color: C.amber }}>{code.count} code case{code.count === 1 ? "" : "s"}</span><span style={muted}> on the parcel{code.recent_year ? ` · most recent ${code.recent_year}` : ""}</span></div>
+        {(code.rows || []).slice(0, 4).map((c, i) => (<div key={i} style={{ fontSize: 11.5, ...muted, marginLeft: 8 }}>• {[c.case, c.type, c.year].filter(Boolean).join(" · ")}</div>))}
+        <div style={{ fontSize: 10.5, ...muted }}>County EnerGov code-enforcement cases at the parcel — a distress / deferred-maintenance signal.</div>
+      </>}
       {(zoneBits.length > 0 || z.old_and_historic_district || z.old_city_height_district || z.short_term_rental_overlay || z.accommodations_overlay) && <>
         <H>ZONING / OVERLAYS</H>
         {zoneBits.length > 0 && <div style={{ fontSize: 12.5 }}><span style={muted}>Zoning: </span><span style={ivory}>{zoneBits.join(" · ")}</span></div>}

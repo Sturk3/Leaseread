@@ -302,7 +302,9 @@ const TOOLS = [
     description:
       "Consolidated public-records intel for ONE Charleston, SC parcel (the SC analog of nashville_property_intel / " +
       "sf_property_intel). Pass the PID from search_charleston_properties (or just the address) and it fans out across county + " +
-      "City of Charleston open data, parcel-exact where keyed and point-in-polygon at the parcel centroid: city CONSTRUCTION " +
+      "City of Charleston open data, parcel-exact where keyed and point-in-polygon at the parcel centroid: APPRAISED land/" +
+      "improvement/total VALUE, building FOOTPRINT count + square footage, CODE-ENFORCEMENT / violation case history (a " +
+      "distress signal), city CONSTRUCTION " +
       "PERMITS detail 2010–present (repositioning signal), HOTEL ENTITLEMENT on the parcel (name/rooms/status — hospitality is " +
       "Charleston's big use fight), ZONING (city base zone + PUD, or county zoning outside the city), OLD & HISTORIC DISTRICT + " +
       "OLD CITY HEIGHT DISTRICT membership (BAR design review + height caps — THE binding constraint on the peninsula), " +

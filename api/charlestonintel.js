@@ -28,6 +28,9 @@ const CC_PARCELS = process.env.CHS_PARCELS_URL ||
   "https://gisccapps.charlestoncounty.org/arcgis/rest/services/GIS_VIEWER/New_Public_Search/MapServer/7";
 const CC_FEMA = "https://gisccapps.charlestoncounty.org/arcgis/rest/services/GIS_VIEWER/New_Public_Search/MapServer/36";
 const CC_ZONING = "https://gisccapps.charlestoncounty.org/arcgis/rest/services/GIS_VIEWER/New_Public_Search/MapServer/44";
+const CC_FOOTPRINTS = "https://gisccapps.charlestoncounty.org/arcgis/rest/services/GIS_VIEWER/New_Public_Search/MapServer/61"; // 2025 building footprints (by PID)
+const CC_APPRAISAL = "https://gisccapps.charlestoncounty.org/arcgis/rest/services/ENERGOV/energov_css/MapServer/4";       // parcels w/ appraised values (by PID)
+const CC_ENERGOV = "https://gisccapps.charlestoncounty.org/arcgis/rest/services/ENERGOV/energov_history/MapServer/0";     // code enforcement / permits / inspections (spatial)
 const CITY = "https://services2.arcgis.com/tQaXW7Zb1Vphzvgd/arcgis/rest/services";
 
 async function q(base, params) {
@@ -96,7 +99,7 @@ export default async function handler(req, res) {
     const { lat, lon } = parcel;
     const cpid = "C" + parcel.pid;
 
-    const [permits, hotel, cityZoning, countyZoning, historic, heightDist, strOverlay, accomOverlay, fema, floodPts, crime] = await Promise.all([
+    const [permits, hotel, cityZoning, countyZoning, historic, heightDist, strOverlay, accomOverlay, fema, floodPts, crime, appraisal, footprints, codeCases] = await Promise.all([
       q(`${CITY}/New_Construction_Permits/FeatureServer/0`, { where: `MAIN_PARCEL_NUMBER = '${cpid}'`, outFields: "PERMIT_NUMBER,PERMIT_TYPE,WORK_CLASS,PERMIT_STATUS,DESCRIPTION,ISSUE_YEAR,ISSUE_DATE,VALUATION,PASSEDFINAL", orderByFields: "ISSUE_DATE DESC", resultRecordCount: "50" }),
       q(`${CITY}/Hotel_Entitlements/FeatureServer/0`, { where: `PARCELID = '${cpid}' OR TMS_ALL LIKE '%${parcel.pid}%'`, outFields: "NAME,ADDRESS,Rooms,STATUS,Open_Date,DECADE_OPEN,HOTEL", resultRecordCount: "5" }),
       lat != null ? q(`${CITY}/Base_Zoning/FeatureServer/0`, { ...ptParams(lon, lat), outFields: "ZONE_BASE,PUD_NAME,ORDSTAT", resultRecordCount: "3" }) : [],
@@ -108,6 +111,13 @@ export default async function handler(req, res) {
       lat != null ? q(CC_FEMA, { ...ptParams(lon, lat), outFields: "FLD_ZONE,SFHA_TF,STATIC_BFE,FLOODWAY", resultRecordCount: "3" }) : [],
       lat != null ? q(`${CITY}/Flooded_Vehicle_History/FeatureServer/0`, { ...ptParams(lon, lat, 400), outFields: "Date,Location,Cars", resultRecordCount: "200" }) : [],
       lat != null ? q(`${CITY}/PDI_Reported_Incidents/FeatureServer/0`, { ...ptParams(lon, lat, 300), where: `IncidentYear >= ${new Date().getUTCFullYear() - 2}`, outFields: "IncidentCategory,IncidentYear", resultRecordCount: "1000" }) : [],
+      // County appraised value (assessed land/improvement/total — the NYC-parity value fields) by PID.
+      q(CC_APPRAISAL, { where: `PID = '${parcel.pid.replace(/'/g, "''")}'`, outFields: "LAND_APPR,IMP_APPR,APPRAISAL", resultRecordCount: "1" }),
+      // Building footprints (count + square footage per building on the lot) by PID.
+      q(CC_FOOTPRINTS, { where: `PID = '${parcel.pid.replace(/'/g, "''")}'`, outFields: "SDE_S_BLDG_2025_area,status", resultRecordCount: "20" }),
+      // Code enforcement / violations at the parcel — county EnerGov, spatial (no PID field).
+      // ~45m buffer at the centroid catches the lot's own cases; join by MODULENAME.
+      lat != null ? q(CC_ENERGOV, { ...ptParams(lon, lat, 45), where: `MODULENAME='CodeManagement'`, outFields: "CASENUMBER,CASETYPE,APPLICATIONDATE,PROJECTNAME", resultRecordCount: "50" }) : [],
     ]);
 
     // Permits: detail rows + repositioning signals (hospitality/commercial work).
@@ -138,9 +148,37 @@ export default async function handler(req, res) {
     const femaRow = fema[0] || {};
     const hotelRow = hotel[0] || null;
 
+    // Appraised values (the assessed land/improvement/total the NYC dossier carries).
+    const av = appraisal[0] || {};
+    const valuation = {
+      land_appraised: toNum(av.LAND_APPR) || null,
+      improvement_appraised: toNum(av.IMP_APPR) || null,
+      total_appraised: toNum(av.APPRAISAL) || null,
+    };
+    // Building footprints: count + total square footage on the lot (existing buildings).
+    const existing = footprints.filter((f) => clean(f.status).toLowerCase() !== "demolished");
+    const buildings = {
+      count: existing.length,
+      total_sqft: Math.round(existing.reduce((s, f) => s + (toNum(f.SDE_S_BLDG_2025_area) || 0), 0)) || null,
+      note: footprints.some((f) => clean(f.status).toLowerCase() === "new") ? "includes a newly-added footprint" : null,
+    };
+    // Code enforcement / violations — case number, type, year; sorted newest first.
+    const codeRows = (codeCases || [])
+      .map((c) => ({ case: clean(c.CASENUMBER), type: clean(c.CASETYPE) || clean(c.PROJECTNAME) || "Code enforcement", year: toNum(new Date(Number(c.APPLICATIONDATE)).getUTCFullYear()) || null, date: fmtDate(c.APPLICATIONDATE) }))
+      .filter((c) => c.case)
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const codeEnforcement = {
+      count: codeRows.length,
+      recent_year: codeRows[0] ? codeRows[0].year : null,
+      rows: codeRows.slice(0, 12),
+    };
+
     return res.status(200).json({
       pid: parcel.pid, address: clean(address) || null, lat, lon,
       parcel,
+      valuation,
+      buildings,
+      code_enforcement: codeEnforcement,
       zoning: {
         city_base_zone: clean((cityZoning[0] || {}).ZONE_BASE) || null,
         city_pud: clean((cityZoning[0] || {}).PUD_NAME) || null,
@@ -164,7 +202,7 @@ export default async function handler(req, res) {
         street_flood_events_400m: floodEvents, recent_flood_dates: floodDates,
       },
       crime_300m: { count: crime.length, years_covered: crimeYears, by_category: crimeTop },
-      note: "Charleston parcel intel — county assessor parcel + FEMA DFIRM + county zoning, and City of Charleston open data: construction permits (2010–present, parcel-exact), hotel entitlements (parcel-exact), base zoning/PUD, Old & Historic District + Old City height district, short-term-rental + accommodations overlays (point-in-polygon at the parcel centroid), street-flooding history within 400m (Charleston's chronic-flooding signal, distinct from the FEMA zone), and reported crime within 300m. City layers only cover the City of Charleston — parcels in Mt Pleasant / N. Charleston etc. get county zoning + FEMA + parcel facts only.",
+      note: "Charleston parcel intel — county assessor parcel + APPRAISED land/improvement/total value + building footprint count & SF + CODE-ENFORCEMENT case history (county EnerGov, ~45m at the centroid) + FEMA DFIRM + county zoning, and City of Charleston open data: construction permits (2010–present, parcel-exact), hotel entitlements (parcel-exact), base zoning/PUD, Old & Historic District + Old City height district, short-term-rental + accommodations overlays (point-in-polygon at the parcel centroid), street-flooding history within 400m (Charleston's chronic-flooding signal, distinct from the FEMA zone), and reported crime within 300m. City layers only cover the City of Charleston — parcels in Mt Pleasant / N. Charleston etc. get county zoning + FEMA + parcel facts only. NOT available as a free feed (HTML-portal only): property-tax delinquency / tax-sale status, full multi-year deed history (only the latest sale is public here), and evictions.",
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, where: "charlestonintel" });

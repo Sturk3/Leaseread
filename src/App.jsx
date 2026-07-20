@@ -3120,7 +3120,12 @@ function CorridorsPage({ pw }) {
   useEffect(() => {
     let alive = true;
     postJSON("/api/availability", { password: pw, list: true })
-      .then((d) => { if (alive) setCorridors(d.corridors || []); })
+      .then((d) => {
+        if (!alive) return;
+        const list = d.corridors || [];
+        setCorridors(list);
+        if (list.length) run(list[0].id); // auto-load the first corridor so results appear with no click
+      })
       .catch((e) => { if (alive) setError(e.message || "Couldn't load corridors."); });
     return () => { alive = false; };
   }, []);
@@ -4669,39 +4674,47 @@ function parseTraceList(text) {
 // The bridge from an unmask result to the skip trace: every person the research
 // actually named becomes a chip that seeds the trace form — LLC → principal → phone
 // with no retyping. fallback city/state fill blanks (e.g. the property's market).
+// FREE people-search deep links for a name (same numbers the paid providers sell,
+// ad-supported + bot-gated — a human clicks through). Always shown, no cost.
+function freePeopleLinks(name, city, st) {
+  const q = encodeURIComponent(name);
+  const loc = encodeURIComponent([city, st].filter(Boolean).join(", "));
+  return [
+    ["TruePeopleSearch", `https://www.truepeoplesearch.com/results?name=${q}&citystatezip=${loc}`],
+    ["FastPeopleSearch", `https://www.fastpeoplesearch.com/name/${String(name).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`],
+    ["Google", `https://www.google.com/search?q=%22${q}%22+${loc}+phone+OR+contact`],
+    ["LinkedIn", `https://www.linkedin.com/search/results/people/?keywords=${q}%20${encodeURIComponent(city)}`],
+  ];
+}
+
+// Everyone the unmask found, with their FREE lookup links shown inline for each — no
+// click needed to see the free paths. The paid auto-trace (~$0.10/hit) stays behind a
+// per-person toggle so browsing never spends by accident.
 function TracePeople({ people, pw, fallback = {} }) {
   const [sel, setSel] = useState(-1);
   if (!people || !people.length) return null;
   return (
     <div style={{ marginTop: 12 }}>
-      <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em", marginBottom: 6 }}>PEOPLE FOUND — ONE CLICK TO TRACE</div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {people.map((p, i) => (
-          <button key={`${p.name}-${i}`} onClick={() => setSel(sel === i ? -1 : i)} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: sel === i ? C.goldSoft : C.panel, border: `1px solid ${sel === i ? C.gold : C.line}`, color: sel === i ? C.gold : C.ivory }}>▸ {p.name}{p.city ? ` · ${p.city}${p.state ? ", " + p.state : ""}` : ""}</button>
-        ))}
-      </div>
-      {sel >= 0 && people[sel] && (() => {
-        const p = people[sel];
+      <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em", marginBottom: 6 }}>PEOPLE FOUND — free lookups shown, trace optional</div>
+      {people.map((p, i) => {
         const city = p.city || fallback.city || "", st = p.state || fallback.state || "";
-        const q = encodeURIComponent(p.name);
-        const loc = encodeURIComponent([city, st].filter(Boolean).join(", "));
-        // The FREE last mile: people-search sites publish the same numbers the paid
-        // providers sell, ad-supported — they captcha-gate bots, so these are deep
-        // links for a HUMAN click, not an integration.
-        const free = [
-          ["TruePeopleSearch", `https://www.truepeoplesearch.com/results?name=${q}&citystatezip=${loc}`],
-          ["FastPeopleSearch", `https://www.fastpeoplesearch.com/name/${p.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`],
-          ["Google", `https://www.google.com/search?q=%22${q}%22+${loc}+phone+OR+contact`],
-          ["LinkedIn", `https://www.linkedin.com/search/results/people/?keywords=${q}%20${encodeURIComponent(city)}`],
-        ];
+        const links = freePeopleLinks(p.name, city, st);
         return (
-          <div style={{ marginTop: 10, background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 }}>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}><strong style={{ color: C.green }}>FREE lookups</strong> (open by hand — these sites show phones/emails but gate bots): {free.map(([lab, url], i) => <span key={lab}>{i > 0 ? " · " : ""}<a href={url} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{lab} ↗</a></span>)}</div>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>Or trace automatically — matches on the <strong style={{ color: C.ivory }}>person's own address</strong> (~$0.10, charged only on a hit).</div>
-            <SkipTraceForm key={`${p.name}-${sel}`} pw={pw} seed={{ name: p.name, street: p.street, city, state: st, zip: p.zip }} />
+          <div key={`${p.name}-${i}`} style={{ background: C.panel2, border: `1px solid ${sel === i ? C.gold : C.line}`, borderRadius: 9, padding: "9px 12px", marginBottom: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+              <div style={{ fontSize: 12.5 }}><span style={{ color: C.ivory, fontWeight: 600 }}>{p.name}</span>{city ? <span style={{ color: C.muted }}> · {city}{st ? ", " + st : ""}</span> : ""}</div>
+              <button onClick={() => setSel(sel === i ? -1 : i)} className="mono lift" style={{ ...ACTION_PILL, padding: "3px 10px", fontSize: 10.5, background: sel === i ? C.goldSoft : C.panel, border: `1px solid ${sel === i ? C.gold : C.line}`, color: sel === i ? C.gold : C.ivory }}>{sel === i ? "▾ close" : "▸ trace ~$0.10"}</button>
+            </div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 5 }}><strong style={{ color: C.green }}>FREE:</strong> {links.map(([lab, url], j) => <span key={lab}>{j > 0 ? " · " : " "}<a href={url} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{lab} ↗</a></span>)}</div>
+            {sel === i && (
+              <div style={{ marginTop: 10, borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Paid auto-trace — matches on the <strong style={{ color: C.ivory }}>person's own address</strong> (~$0.10, only charged on a hit). The free links above cost nothing.</div>
+                <SkipTraceForm key={`${p.name}-${sel}`} pw={pw} seed={{ name: p.name, street: p.street, city, state: st, zip: p.zip }} />
+              </div>
+            )}
           </div>
         );
-      })()}
+      })}
     </div>
   );
 }

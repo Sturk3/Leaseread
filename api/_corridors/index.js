@@ -71,7 +71,9 @@ function validateCorridor(c) {
   return c;
 }
 
-const CORRIDORS = [downtownNycTrophyRetail, kingStreetCharleston].map(validateCorridor);
+// King Street first — it's the primary focus and screens in ~3s (the NYC SoHo pass is
+// slower), so it's the right default to auto-load on the Corridors page.
+const CORRIDORS = [kingStreetCharleston, downtownNycTrophyRetail].map(validateCorridor);
 {
   const ids = new Set();
   for (const c of CORRIDORS) {

@@ -328,7 +328,7 @@ export default function App() {
         </div>
         <nav className="rail-nav" style={{ padding: "28px 18px", display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
           <div className="rail-label" style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2.4px", textTransform: "uppercase", color: "#555f76", padding: "4px 14px 12px" }}>Engines</div>
-          {[["agent", "Agent", "✦"], ["sourcing", "Sourcing", "◎"], ["pipeline", "Pipeline", "★"], ["comps", "Comp Sheet", "≣"], ["skiptrace", "Skip Trace", "🔎"]].map(([v, lab, ic]) => (
+          {[["agent", "Agent", "✦"], ["sourcing", "Sourcing", "◎"], ["corridors", "Corridors", "▚"], ["pipeline", "Pipeline", "★"], ["comps", "Comp Sheet", "≣"], ["skiptrace", "Skip Trace", "🔎"]].map(([v, lab, ic]) => (
             <button key={v} onClick={() => setView(v)} className={view === v ? "rail-item active" : "rail-item"}>
               <span className="ic">{ic}</span> {lab}
             </button>
@@ -343,7 +343,7 @@ export default function App() {
       <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: C.ink }}>
         <header className="main-top" style={{ padding: "20px 40px", borderBottom: `1px solid ${C.line}`, display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap", background: C.panel }}>
           <h1 style={{ fontSize: 12, fontWeight: 600, letterSpacing: "2px", textTransform: "uppercase", color: C.ivory, margin: 0 }}>
-            {view === "agent" ? "Agent" : view === "sourcing" ? "Sourcing" : view === "pipeline" ? "Pipeline" : view === "comps" ? "Comp Sheet" : view === "screener" ? "Screener" : view === "skiptrace" ? "Skip Trace" : view === "nda" ? "NDA Review" : "Lease Radar"}
+            {view === "agent" ? "Agent" : view === "sourcing" ? "Sourcing" : view === "corridors" ? "Corridors" : view === "pipeline" ? "Pipeline" : view === "comps" ? "Comp Sheet" : view === "screener" ? "Screener" : view === "skiptrace" ? "Skip Trace" : view === "nda" ? "NDA Review" : "Lease Radar"}
           </h1>
           <p style={{ fontSize: 13, color: C.muted, fontWeight: 300, margin: 0, flex: "1 1 240px" }}>
             {view === "agent"
@@ -380,6 +380,8 @@ export default function App() {
         {view === "comps" && <CompTool pw={pw} />}
 
         {view === "sourcing" && <UnifiedSourcing pw={pw} rows={sourcingRows} setRows={setSourcingRows} />}
+
+        {view === "corridors" && <CorridorsPage pw={pw} />}
 
         {view === "radar" && <LeaseRadar pw={pw} />}
 
@@ -3018,6 +3020,186 @@ function ScEntityFinder({ owner, pw }) {
           <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>{res.note}</div>
         </div>
       ) : <div style={{ color: C.muted, fontSize: 12, marginTop: 8 }}>{res?.note || "No SC registry match for this name — try the 👥 unmask (web) below."}</div>)}
+    </div>
+  );
+}
+
+// ── CORRIDORS PAGE ────────────────────────────────────────────────────────────
+// The RetailAvailability engine (api/availability.js) as its OWN tab — previously
+// only Scout could run it. Pick a configured corridor (King St Charleston / SoHo
+// NYC), get every likely-available retail space ranked by buy-box fit + availability
+// probability, each row expandable into the SAME free owner-contact chain as Sourcing
+// (county mailing-address unmask, SC registry, AI unmask, trace chips).
+
+const zipFromMailing = (m) => { const x = String(m || "").match(/(\d{5})(-\d{4})?\s*$/); return x ? x[1] : ""; };
+
+// Map a corridor screen row → the assessor/lead row shape the detail chain expects.
+function corridorToRow(row) {
+  const saleYr = row.last_sale_date ? String(row.last_sale_date).slice(0, 4) : null;
+  const valueStr = row.last_sale_price ? `${fmtAmount(row.last_sale_price)}${saleYr ? ` (${saleYr})` : ""}` : "";
+  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${row.address || ""}, ${row.city === "New York" ? "New York NY" : "Charleston SC"}`)}`;
+  if (row.city === "New York") {
+    return {
+      market: "nyc", marketLabel: "NYC", owner: row.ownership_entity, address: row.address,
+      use: row.tier, value: valueStr, mailing: row.owner_mailing, mapsUrl,
+      raw: { ...row, lat: row.lat, lon: row.lon },
+    };
+  }
+  return {
+    market: "sc", marketLabel: "Charleston, SC", owner: row.ownership_entity, address: row.address,
+    use: row.class_code || row.tier, value: valueStr, mailing: row.owner_mailing, mapsUrl,
+    raw: {
+      ...row, pid: row.pid, mailing: row.owner_mailing, mailing_zip: zipFromMailing(row.owner_mailing),
+      mailing_city: "Charleston", mailing_state: "SC", town: row.town || "Charleston",
+      lat: row.lat, lon: row.lon, sale_price: row.last_sale_price, sale_year: saleYr,
+      use: row.class_code, acres: row.acres, deed_book_page: row.deed_book_page,
+    },
+  };
+}
+
+const TIER_COLOR = { flagship: "#e8c37e", luxury: "#c9a24a", boutique: "#8a7a52" };
+
+// The availability read for one corridor candidate — the engine's numbers + reasons.
+function AvailabilityHeader({ row }) {
+  const pct = Math.round((row.availability_probability || 0) * 100);
+  const col = pct >= 60 ? C.green : pct >= 35 ? C.amber : C.muted;
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 14px", marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "baseline" }}>
+        <div className="mono" style={{ fontSize: 11, letterSpacing: "0.04em", color: C.muted }}>FIT <span style={{ color: C.ivory, fontSize: 15 }}>{row.fit_score}</span>/100</div>
+        <div className="mono" style={{ fontSize: 11, letterSpacing: "0.04em", color: C.muted }}>AVAILABILITY <span style={{ color: col, fontSize: 15 }}>{pct}%</span></div>
+        <div className="mono" style={{ fontSize: 10, padding: "2px 8px", borderRadius: 5, background: C.panel, border: `1px solid ${C.line}`, color: TIER_COLOR[row.tier] || C.muted, textTransform: "uppercase" }}>{row.tier}</div>
+        {row.hotel_entitlement && <div className="mono" style={{ fontSize: 10, padding: "2px 8px", borderRadius: 5, background: C.goldSoft, color: C.amber }}>HOTEL ENTITLEMENT</div>}
+      </div>
+      {(row.availability_reasons || []).length > 0 ? (
+        <ul style={{ margin: "9px 0 0", paddingLeft: 18, color: C.ivory, fontSize: 12.5, lineHeight: 1.6 }}>
+          {row.availability_reasons.map((r, i) => <li key={i}>{r}</li>)}
+        </ul>
+      ) : <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>No active turnover signal — baseline availability. Ranked here for corridor fit; worth a direct owner approach.</div>}
+      {row.principal && <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Named principal (HPD): <strong style={{ color: C.ivory }}>{row.principal}</strong>{row.principal_role ? ` · ${row.principal_role}` : ""}</div>}
+    </div>
+  );
+}
+
+// One corridor candidate's expandable detail: the availability read, then the SAME
+// free owner-contact chain the Sourcing tab uses (Charleston gets the county mailing
+// unmask + SC registry; NYC gets the AI unmask + trace). No new paid calls.
+function CorridorRowDetail({ row, pw }) {
+  const r = corridorToRow(row);
+  const isCo = ENTITY_RE.test(r.owner || "");
+  const contactR = {
+    name: r.owner || "", entity_type: isCo ? "company" : "person",
+    contact_address: (r.mailing || "").split(",")[0].trim(),
+    city: r.market === "nyc" ? "New York" : "Charleston", state: r.market === "nyc" ? "NY" : "SC",
+    zip: r.raw.mailing_zip || zipFromMailing(r.mailing), address: r.address, borough: row.borough || "",
+    last_sale_price: row.last_sale_price || null, last_sale_date: row.last_sale_date || null,
+  };
+  return (
+    <div style={{ padding: "4px 14px 18px" }}>
+      <AvailabilityHeader row={row} />
+      {r.market === "sc"
+        ? <AssessorMarketDetail r={r} pw={pw} />
+        : <>
+            <AssessorDetail p={{ owner: r.owner, mailing: r.mailing, use: row.tier, frontage_ft: row.frontage_ft, sale_price: row.last_sale_price, sale_date: row.last_sale_date }} market="nyc-corridor" />
+            <ResearchBrief r={contactR} pw={pw} />
+            <ContactReveal r={contactR} pw={pw} />
+            <OwnerPeople r={contactR} pw={pw} market="nyc" />
+          </>}
+    </div>
+  );
+}
+
+function CorridorsPage({ pw }) {
+  const [corridors, setCorridors] = useState(null);
+  const [active, setActive] = useState(null); // corridor id
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [data, setData] = useState(null); // { corridor, rows, candidate_count, coverage }
+  const [openIdx, setOpenIdx] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    postJSON("/api/availability", { password: pw, list: true })
+      .then((d) => { if (alive) setCorridors(d.corridors || []); })
+      .catch((e) => { if (alive) setError(e.message || "Couldn't load corridors."); });
+    return () => { alive = false; };
+  }, []);
+
+  const run = async (id) => {
+    setActive(id); setLoading(true); setError(""); setData(null); setOpenIdx(null);
+    try {
+      const d = await postJSON("/api/availability", { password: pw, corridor: id });
+      if (d.no_match) { setError(d.note || "No match."); return; }
+      setData(d);
+    } catch (e) { setError(e.message || "Screen failed."); }
+    finally { setLoading(false); }
+  };
+
+  const uiRows = useMemo(() => (data?.rows || []).map(corridorToRow), [data]);
+  const points = useSourcingPoints(uiRows);
+  const pickPin = (id) => { setOpenIdx(id); const el = document.getElementById(`corr-row-${id}`); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); };
+  const cov = data?.coverage;
+
+  return (
+    <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+      <div style={{ marginBottom: 6, fontSize: 22, fontWeight: 700, color: C.ivory, letterSpacing: "-0.01em" }}>Corridors</div>
+      <div style={{ color: C.muted, fontSize: 13, marginBottom: 18, lineHeight: 1.55, maxWidth: 760 }}>
+        Screen a whole retail corridor for likely-<strong style={{ color: C.ivory }}>available</strong> space — a deterministic pass over every retail lot in the corridor, ranked by buy-box fit and an availability probability with the reasons behind it. Expand any candidate for the full free owner-contact workup: mailing address, the county <strong style={{ color: C.ivory }}>same-address unmask</strong>, the SC registry, and one-click people lookups.
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+        {corridors == null ? <div style={{ color: C.muted, fontSize: 13 }}>Loading corridors…</div>
+          : corridors.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No corridors configured.</div>
+          : corridors.map((c) => (
+            <button key={c.id} onClick={() => run(c.id)} className="lift" style={{ cursor: "pointer", textAlign: "left", padding: "13px 16px", borderRadius: 12, border: `1px solid ${active === c.id ? C.gold : C.line}`, background: active === c.id ? C.goldSoft : C.panel, minWidth: 230 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: active === c.id ? C.gold : C.ivory }}>{c.name}</div>
+              <div className="mono" style={{ fontSize: 10.5, color: C.muted, marginTop: 3 }}>{(c.market || "").toUpperCase()} · {c.segments} segment{c.segments === 1 ? "" : "s"} · {c.asset_class}</div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>{(c.streets || []).slice(0, 4).join(" · ")}</div>
+            </button>
+          ))}
+      </div>
+
+      {error && <div style={{ fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "10px 13px", marginBottom: 16 }}>{error}</div>}
+      {loading && <div style={{ color: C.muted, fontSize: 13, padding: "20px 0" }}>Screening {corridors?.find((c) => c.id === active)?.name || "corridor"}… (a full corridor pass — a few seconds)</div>}
+
+      {data && !loading && (
+        <>
+          {points.some((p) => p.lat != null) && (
+            <div style={{ marginBottom: 16 }}>
+              <PropertyMap points={points} center={points.find((p) => p.lat != null)} activeId={openIdx} onPick={pickPin} height={320} />
+            </div>
+          )}
+          <div className="mono" style={{ fontSize: 11, color: C.muted, letterSpacing: "0.05em", marginBottom: 8 }}>
+            {data.candidate_count} CANDIDATE{data.candidate_count === 1 ? "" : "S"} · {data.corridor?.name}
+            {cov?.nulls ? <span> · owner known on {cov.nulls.of - (cov.nulls.ownership_entity || 0)}/{cov.nulls.of}</span> : ""}
+          </div>
+          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>
+                {["Fit", "Avail", "Address", "Tier", "Owner", ""].map((h, i) => <th key={h} style={{ textAlign: i === 5 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {uiRows.map((r, i) => { const row = data.rows[i]; const pct = Math.round((row.availability_probability || 0) * 100); return (
+                  <React.Fragment key={i}>
+                    <tr id={`corr-row-${i}`} style={{ borderBottom: `1px solid ${C.line}`, background: openIdx === i ? C.goldSoft : "transparent" }}>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 13, color: C.ivory }}>{row.fit_score}</td>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12.5, color: pct >= 60 ? C.green : pct >= 35 ? C.amber : C.muted }}>{pct}%</td>
+                      <td style={{ padding: "9px 12px", fontSize: 12.5 }}><a href={r.mapsUrl} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{r.address || "—"} ↗</a></td>
+                      <td style={{ padding: "9px 12px", fontSize: 11, color: TIER_COLOR[row.tier] || C.muted, textTransform: "capitalize" }}>{row.tier}</td>
+                      <td style={{ padding: "9px 12px", fontSize: 12.5, color: C.ivory, maxWidth: 220 }}>{r.owner || "—"}</td>
+                      <td style={{ padding: "9px 12px", textAlign: "right" }}><button onClick={() => setOpenIdx(openIdx === i ? null : i)} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "4px 10px", borderRadius: 7, border: `1px solid ${openIdx === i ? C.gold : C.line}`, background: openIdx === i ? C.goldSoft : C.panel, color: openIdx === i ? C.gold : C.ivory, whiteSpace: "nowrap" }}>{openIdx === i ? "▾ hide" : "▸ work it"}</button></td>
+                    </tr>
+                    {openIdx === i && <tr><td colSpan={6} style={{ background: C.ink, padding: 0 }}><CorridorRowDetail row={row} pw={pw} /></td></tr>}
+                  </React.Fragment>
+                ); })}
+              </tbody>
+            </table>
+          </div>
+          {cov && <div style={{ fontSize: 10.5, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>
+            Coverage: {cov.universe?.pids || cov.universe?.bbls || 0} lots screened{cov.notes?.length ? ` · ${cov.notes[0]}` : ""}. Availability is a prospecting signal from public records (permits, vacancy class, recent trades) — verify before outreach; no public feed confirms a live listing.
+          </div>}
+        </>
+      )}
     </div>
   );
 }

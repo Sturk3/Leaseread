@@ -4721,7 +4721,6 @@ function StorefrontPhoto({ r, pw }) {
       <div style={{ display: "flex", gap: 12, marginTop: 5, alignItems: "center", flexWrap: "wrap" }}>
         <a href={pano} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ open in Street View</a>
         <a href={sat} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 10.5, color: C.gold, textDecoration: "none" }}>↗ map / satellite</a>
-        {state === "nokey" && <span style={{ fontSize: 10, color: C.muted }}>· to show the real storefront photo: set <span className="mono">GOOGLE_MAPS_API_KEY</span>, or <span className="mono">MAPILLARY_TOKEN</span> (free, no billing card) in Vercel</span>}
       </div>
     </div>
   );

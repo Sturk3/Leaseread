@@ -57,6 +57,9 @@
     "api/charlestonintel.js": {
       "maxDuration": 30
     },
+    "api/scentity.js": {
+      "maxDuration": 60
+    },
     "api/leasecomps.js": {
       "maxDuration": 30
     },

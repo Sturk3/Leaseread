@@ -39,6 +39,7 @@ Add a provider there and it shows up in the health check automatically.
 | Skip trace | `SKIPTRACE_PROVIDER` (`tracerfy`) | `TRACERFY_API_KEY` · `BATCHDATA_API_KEY` | **active** |
 | Phone verify | `PHONE_VERIFY_PROVIDER` (`twilio`) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | planned (drop-in) |
 | Entity unmask | `ENTITY_PROVIDER` (`web`) | web lane needs no key · `OPENSOSDATA_API_KEY` | web active; structured planned |
+| SC SOS registry (structured) | — (`/api/scentity`) | `COBALT_API_KEY` (cobaltintelligence.com) | **wired** — lane off until key set; Charleston tab falls back to web unmask |
 | Property data | `PROPERTY_PROVIDER` (`attom`) | `ATTOM_API_KEY` · `REGRID_API_TOKEN` | parked (branch) |
 
 ### Optional
@@ -91,11 +92,13 @@ No key → this block is skipped and behaviour is unchanged. Flip the `phone_ver
 `implemented: false` → `true` in `api/_lib/providers.js` once wired.
 
 ### Structured entity registry (instead of AI web unmask)
-Create `api/entity.js` exposing `resolve(name, state) → { status, registeredAgent, principals[] }`
-behind `ENTITY_PROVIDER` + its key (e.g. `OPENSOSDATA_API_KEY`). In the frontend, `OwnerPeople`
-should prefer `/api/entity` when the health check shows the capability `ready`, and fall back to
-the existing web-research lane otherwise. Flip the `entity` → `opensosdata` lane's `implemented`
-flag when done. The web lane keeps working everywhere in the meantime.
+DONE for South Carolina: `api/scentity.js` hits the live SC SOS record via Cobalt
+Intelligence's Secretary of State API (set `COBALT_API_KEY`; field names marked CONFIRM
+are verified by the first real call / `{debug:true}`). The Charleston tab's SC entity box
+is registry-first and falls back to the web unmask on `noKey` / no match. SC filings name
+the registered agent + officers, NOT LLC members — the web unmask stays the route to a human
+principal. To generalize to other states, follow the same pattern (Cobalt covers all 50):
+create the state's endpoint or extend scentity with a `state` param, keep the web fallback.
 
 ## Deploy notes
 - Vercel env vars must have **Production** checked, and a change needs a fresh deploy to take effect.

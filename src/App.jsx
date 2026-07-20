@@ -3219,6 +3219,55 @@ function CtEntityFinder({ owner, pw }) {
   );
 }
 
+// SC SOS registry — the LIVE state record behind a South Carolina LLC (the "real
+// database" lane the AI unmask can't reach: SC captcha-gates businessfilings.sc.gov).
+// /api/scentity runs it through Cobalt Intelligence when COBALT_API_KEY is set; with
+// the lane off it says so and the 👥 AI unmask below stays the working path. Found
+// officers / an individual agent render as one-click skip-trace chips (TracePeople).
+function ScEntityFinder({ owner, pw }) {
+  const [state, setState] = useState("idle"); // idle | loading | done | nokey | error
+  const [res, setRes] = useState(null);
+  const [err, setErr] = useState("");
+  const run = async () => {
+    setState("loading"); setErr("");
+    try {
+      const d = await postJSON("/api/scentity", { password: pw, name: owner });
+      if (d.noKey) { setRes(d); setState("nokey"); return; }
+      setRes(d); setState("done");
+    } catch (e) { setErr(e.message || "Lookup failed."); setState("error"); }
+  };
+  const ents = (res?.entities || []).slice(0, 4);
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>🏛️ SC SOS REGISTRY — the live state record</div>
+        {state !== "loading" && <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "idle" ? "▸ pull record" : "↻"}</button>}
+      </div>
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Pulls the <strong style={{ color: C.ivory }}>actual SC Secretary of State filing</strong> for <strong style={{ color: C.ivory }}>{owner}</strong> — exact status, filing date, registered agent + address, officers — via the Cobalt Intelligence SOS API (SC's own site is captcha-gated). Structured record, not AI guesswork; pair with the 👥 unmask below for the humans.</div>}
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Pulling the state record… (SC scrapes in real time — can take ~20s)</div>}
+      {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+      {state === "nokey" && <div style={{ color: C.muted, fontSize: 12, marginTop: 8 }}>Registry lane is <strong style={{ color: C.amber }}>off</strong> — no <span className="mono" style={{ color: C.ivory }}>COBALT_API_KEY</span> in the Vercel env. Sign up at <a href="https://cobaltintelligence.com" target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>cobaltintelligence.com ↗</a> (they have a trial), add the key, and this pulls the live SOS record. Until then the 👥 AI unmask below is the SC path.</div>}
+      {state === "done" && (ents.length ? (
+        <div style={{ marginTop: 10 }}>
+          {ents.map((e, i) => (
+            <div key={i} style={{ marginBottom: 9, paddingBottom: 9, borderBottom: i < ents.length - 1 ? `1px solid ${C.line}` : "none" }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: C.ivory }}>{e.name}{e.status && <span className="mono" style={{ fontSize: 9, color: /good|active|exist/i.test(e.status) ? C.green : C.amber, marginLeft: 6, border: `1px solid ${/good|active|exist/i.test(e.status) ? C.green : C.line}`, borderRadius: 4, padding: "0 5px" }}>{e.status.toUpperCase()}</span>}</div>
+              <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>{[e.entity_type, e.filing_date && `filed ${e.filing_date}`, e.sos_id && `#${e.sos_id}`].filter(Boolean).join(" · ")}</div>
+              {e.registered_agent && <div style={{ fontSize: 12.5, marginTop: 3 }}>Agent: <span style={{ color: C.ivory, fontWeight: 600 }}>{e.registered_agent}</span>{e.agent_address ? <span style={{ color: C.muted }}> · {e.agent_address}</span> : ""}</div>}
+              {e.principal_address && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>Principal address: {e.principal_address}</div>}
+              {e.officers && e.officers.length > 0 && e.officers.map((o, j) => (
+                <div key={j} style={{ fontSize: 12.5, marginTop: 3 }}>👤 <span style={{ color: C.ivory, fontWeight: 600 }}>{o.name}</span>{o.title ? <span style={{ color: C.muted }}> · {o.title}</span> : ""}</div>
+              ))}
+            </div>
+          ))}
+          <TracePeople people={res.people || []} pw={pw} fallback={{ city: "Charleston", state: "SC" }} />
+          <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>{res.note}</div>
+        </div>
+      ) : <div style={{ color: C.muted, fontSize: 12, marginTop: 8 }}>{res?.note || "No SC registry match for this name — try the 👥 unmask (web) below."}</div>)}
+    </div>
+  );
+}
+
 // Detail panel for the assessor markets (CT · Hamptons · Nashville): the record, the AI quick take,
 // and the PAID skip trace — the SAME owner-contact workflow NYC has, so it works in every market.
 function AssessorMarketDetail({ r, pw }) {
@@ -3236,6 +3285,7 @@ function AssessorMarketDetail({ r, pw }) {
     <>
       <AssessorDetail p={raw} market={r.market} />
       {r.market === "ct" && r.owner && ENTITY_RE.test(r.owner) && <CtEntityFinder owner={r.owner} pw={pw} />}
+      {r.market === "sc" && r.owner && ENTITY_RE.test(r.owner) && <ScEntityFinder owner={r.owner} pw={pw} />}
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
       {r.market === "sc" && <CharlestonIntelPanel pid={raw.pid} address={r.address} pw={pw} />}
       {(r.market === "tn" || r.market === "sc" || r.market === "savannah") && r.owner && <OwnerPortfolio owner={r.owner} pw={pw} st={r.market} />}
@@ -3803,11 +3853,15 @@ function CharlestonSourcing({ pw }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [props, setProps] = useState(null);
-  // SC entity / registered-agent lookup — AI web research, since SC has no free structured feed.
+  // SC entity / registered-agent lookup. Registry-first: /api/scentity hits the REAL
+  // SC SOS record via Cobalt Intelligence when COBALT_API_KEY is set (structured:
+  // status, filing date, registered agent, officers); with no key or no match it falls
+  // back to the AI web unmask (SC's own registry is captcha-gated with no free feed).
   const [entQ, setEntQ] = useState("");
   const [entLoading, setEntLoading] = useState(false);
   const [entError, setEntError] = useState("");
   const [entRes, setEntRes] = useState("");
+  const [entSOS, setEntSOS] = useState(null); // structured registry result (when the lane is on)
 
   const run = async () => {
     setError(""); setProps(null); setLoading(true);
@@ -3820,8 +3874,12 @@ function CharlestonSourcing({ pw }) {
 
   const entRun = async () => {
     if (!entQ.trim() || entLoading) return; // Enter re-fires while loading → duplicate concurrent PAID web runs
-    setEntError(""); setEntRes(""); setEntLoading(true);
+    setEntError(""); setEntRes(""); setEntSOS(null); setEntLoading(true);
     try {
+      // Structured SOS lane first — the actual state record, and no AI cost on a hit.
+      const sos = await postJSON("/api/scentity", { password: pw, name: entQ.trim() }).catch(() => null);
+      if (sos && Array.isArray(sos.entities) && sos.entities.length) { setEntSOS(sos); return; }
+      // Lane off (no key), registry miss, or provider hiccup → the AI web unmask.
       const d = await postJSON("/api/research", { mode: "web", password: pw, query: SC_ENTITY_QUERY(entQ.trim()) });
       addScoutSpend(WEB_RUN_COST);
       setEntRes(d.brief || "");
@@ -3857,10 +3915,32 @@ function CharlestonSourcing({ pw }) {
           <button onClick={entRun} disabled={entLoading} className="mono lift" style={{ cursor: entLoading ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: entLoading ? 0.5 : 1 }}>{entLoading ? "…" : "SEARCH"}</button>
         </div>
         <div style={{ marginTop: 8, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
-          Names the <strong style={{ color: C.ivory }}>registered agent</strong> and likely principals behind a South Carolina owner LLC. SC's registry (<a href="https://businessfilings.sc.gov/BusinessFiling/Entity/Search" target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>businessfilings.sc.gov ↗</a>) is captcha-gated with no free data feed, so this runs <strong style={{ color: C.ivory }}>live AI web research</strong> across the business-record sites that mirror the SOS filing (Bizapedia, OpenCorporates, OpenGovUS, CorporationWiki) plus deed/press coverage and LinkedIn (~${WEB_RUN_COST.toFixed(2)}). If nothing's on the crawlable web, it says so — pull it by hand at the link above.
+          Names the <strong style={{ color: C.ivory }}>registered agent</strong> and likely principals behind a South Carolina owner LLC. Registry-first: with a <span className="mono" style={{ color: C.ivory }}>COBALT_API_KEY</span> set (cobaltintelligence.com), this pulls the <strong style={{ color: C.ivory }}>live SC Secretary of State record</strong> — exact status, filing date, registered agent, officers. Otherwise (SC's own registry, <a href="https://businessfilings.sc.gov/BusinessFiling/Entity/Search" target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>businessfilings.sc.gov ↗</a>, is captcha-gated with no free feed) it falls back to <strong style={{ color: C.ivory }}>live AI web research</strong> across the sites that mirror the SOS filing (Bizapedia, OpenCorporates, OpenGovUS, CorporationWiki) plus deed/press coverage and LinkedIn (~${WEB_RUN_COST.toFixed(2)}).
         </div>
         {entError && <div style={{ marginTop: 10, fontSize: 12.5, color: C.red }}>{entError}</div>}
         {entLoading && <div style={{ marginTop: 12, fontSize: 12.5, color: C.muted }}>Searching public records…</div>}
+        {entSOS && (
+          <div style={{ marginTop: 12 }}>
+            <div className="mono" style={{ fontSize: 10.5, color: C.green, letterSpacing: "0.06em", marginBottom: 8 }}>✓ LIVE SC SECRETARY OF STATE RECORD</div>
+            {entSOS.entities.map((e, i) => (
+              <div key={i} style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 13.5, color: C.ivory, fontWeight: 600 }}>{e.name}</div>
+                  {e.status && <div className="mono" style={{ fontSize: 11, color: /good|active|exist/i.test(e.status) ? C.green : C.amber }}>{e.status.toUpperCase()}</div>}
+                </div>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 4, lineHeight: 1.6 }}>
+                  {e.entity_type && <span>{e.entity_type}</span>}{e.filing_date && <span> · filed {e.filing_date}</span>}{e.sos_id && <span> · #{e.sos_id}</span>}
+                  {e.registered_agent && <div><span style={{ color: C.gold }}>Registered agent:</span> <span style={{ color: C.ivory }}>{e.registered_agent}</span>{e.agent_address ? <span> — {e.agent_address}</span> : ""}</div>}
+                  {e.principal_address && <div><span style={{ color: C.gold }}>Principal address:</span> {e.principal_address}</div>}
+                  {e.officers.length > 0 && <div><span style={{ color: C.gold }}>Officers:</span> {e.officers.map((o) => `${o.name}${o.title ? ` (${o.title})` : ""}`).join(", ")}</div>}
+                </div>
+              </div>
+            ))}
+            <TracePeople people={entSOS.people || []} pw={pw} fallback={{ city: "Charleston", state: "SC" }} />
+            <div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>{entSOS.note}</div>
+            <button onClick={async () => { setEntSOS(null); setEntLoading(true); try { const d = await postJSON("/api/research", { mode: "web", password: pw, query: SC_ENTITY_QUERY(entQ.trim()) }); addScoutSpend(WEB_RUN_COST); setEntRes(d.brief || ""); } catch (e) { setEntError(e.message || "Lookup failed."); } finally { setEntLoading(false); } }} className="mono lift" style={{ ...ACTION_PILL, marginTop: 10, padding: "5px 12px", background: C.panel, border: `1px solid ${C.line}` }}>👥 also run the AI unmask (find the humans behind it, ~${WEB_RUN_COST.toFixed(2)})</button>
+          </div>
+        )}
         {entRes && (() => { const { display, people } = parseTraceList(entRes); return <div style={{ marginTop: 12 }}><ResearchBriefBody text={display} /><TracePeople people={people} pw={pw} fallback={{ city: "Charleston", state: "SC" }} /><div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>Verify before relying on any name — public matches can be wrong. Confirm the registered agent / principal address lines up with the property owner.{people.length ? <> Click a <strong style={{ color: C.ivory }}>person chip above</strong> to skip-trace them directly.</> : ""}</div></div>; })()}
       </div>
 

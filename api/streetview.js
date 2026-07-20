@@ -43,7 +43,7 @@ async function mapillaryPhoto(token, lat, lon, res) {
   if (!img.ok) return { none: true };
   const buf = Buffer.from(await img.arrayBuffer());
   res.setHeader("Content-Type", img.headers.get("content-type") || "image/jpeg");
-  res.setHeader("Cache-Control", "private, max-age=86400");
+  res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
   res.setHeader("X-Photo-Source", "mapillary");
   if (pick.captured_at) res.setHeader("X-Pano-Date", new Date(Number(pick.captured_at)).toISOString().slice(0, 10));
   res.status(200).send(buf);
@@ -88,7 +88,7 @@ export default async function handler(req, res) {
           if (img.ok) {
             const buf = Buffer.from(await img.arrayBuffer());
             res.setHeader("Content-Type", img.headers.get("content-type") || "image/jpeg");
-            res.setHeader("Cache-Control", "private, max-age=86400");
+            res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
             res.setHeader("X-Photo-Source", "google");
             if (meta.date) res.setHeader("X-Pano-Date", String(meta.date));
             return res.status(200).send(buf);

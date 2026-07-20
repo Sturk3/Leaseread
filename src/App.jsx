@@ -3027,6 +3027,12 @@ function ScEntityFinder({ owner, pw }) {
 // tax bill usually goes to the principal's home or office, so the INDIVIDUALS sharing
 // the address are the likely people behind it (each becomes a trace chip), and the
 // entities sharing it are the owner's hidden portfolio — no registry, no key, no cost.
+// County assessor person names are "LAST FIRST MIDDLE" — flip to "FIRST MIDDLE LAST"
+// for trace seeds and people-search links (editable in the form if the guess is off).
+const flipCountyName = (s) => {
+  const t = String(s || "").trim().split(/\s+/);
+  return t.length > 1 ? [...t.slice(1), t[0]].join(" ") : s;
+};
 function MailingXref({ r, pw }) {
   const raw = r.raw || {};
   const line = (r.mailing || raw.mailing || "").split(",")[0].trim();
@@ -3069,7 +3075,7 @@ function MailingXref({ r, pw }) {
               {people.slice(0, 6).map((g, i) => (
                 <div key={i} style={{ fontSize: 12.5, marginTop: 3 }}>👤 <span style={{ color: C.ivory, fontWeight: 600 }}>{g.owner}</span><span style={{ color: C.muted }}> · {g.n} parcel{g.n === 1 ? "" : "s"}{g.sample.length ? ` · ${g.sample[0]}` : ""} — likely a person behind this address</span></div>
               ))}
-              <TracePeople people={people.slice(0, 6).map((g) => ({ name: g.owner, street: line, city: raw.mailing_city || "", state: raw.mailing_state || "SC", zip }))} pw={pw} fallback={{ city: raw.mailing_city || "Charleston", state: raw.mailing_state || "SC" }} />
+              <TracePeople people={people.slice(0, 6).map((g) => ({ name: flipCountyName(g.owner), street: line, city: raw.mailing_city || "", state: raw.mailing_state || "SC", zip }))} pw={pw} fallback={{ city: raw.mailing_city || "Charleston", state: raw.mailing_state || "SC" }} />
             </div>
           )}
           {ents.length > 0 && (
@@ -4492,12 +4498,28 @@ function TracePeople({ people, pw, fallback = {} }) {
           <button key={`${p.name}-${i}`} onClick={() => setSel(sel === i ? -1 : i)} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: sel === i ? C.goldSoft : C.panel, border: `1px solid ${sel === i ? C.gold : C.line}`, color: sel === i ? C.gold : C.ivory }}>▸ {p.name}{p.city ? ` · ${p.city}${p.state ? ", " + p.state : ""}` : ""}</button>
         ))}
       </div>
-      {sel >= 0 && people[sel] && (
-        <div style={{ marginTop: 10, background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 }}>
-          <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>Confirm or complete the address — the trace matches on the <strong style={{ color: C.ivory }}>person's own address</strong> (~$0.10, charged only on a hit).</div>
-          <SkipTraceForm key={`${people[sel].name}-${sel}`} pw={pw} seed={{ name: people[sel].name, street: people[sel].street, city: people[sel].city || fallback.city || "", state: people[sel].state || fallback.state || "", zip: people[sel].zip }} />
-        </div>
-      )}
+      {sel >= 0 && people[sel] && (() => {
+        const p = people[sel];
+        const city = p.city || fallback.city || "", st = p.state || fallback.state || "";
+        const q = encodeURIComponent(p.name);
+        const loc = encodeURIComponent([city, st].filter(Boolean).join(", "));
+        // The FREE last mile: people-search sites publish the same numbers the paid
+        // providers sell, ad-supported — they captcha-gate bots, so these are deep
+        // links for a HUMAN click, not an integration.
+        const free = [
+          ["TruePeopleSearch", `https://www.truepeoplesearch.com/results?name=${q}&citystatezip=${loc}`],
+          ["FastPeopleSearch", `https://www.fastpeoplesearch.com/name/${p.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`],
+          ["Google", `https://www.google.com/search?q=%22${q}%22+${loc}+phone+OR+contact`],
+          ["LinkedIn", `https://www.linkedin.com/search/results/people/?keywords=${q}%20${encodeURIComponent(city)}`],
+        ];
+        return (
+          <div style={{ marginTop: 10, background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 }}>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}><strong style={{ color: C.green }}>FREE lookups</strong> (open by hand — these sites show phones/emails but gate bots): {free.map(([lab, url], i) => <span key={lab}>{i > 0 ? " · " : ""}<a href={url} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{lab} ↗</a></span>)}</div>
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>Or trace automatically — matches on the <strong style={{ color: C.ivory }}>person's own address</strong> (~$0.10, charged only on a hit).</div>
+            <SkipTraceForm key={`${p.name}-${sel}`} pw={pw} seed={{ name: p.name, street: p.street, city, state: st, zip: p.zip }} />
+          </div>
+        );
+      })()}
     </div>
   );
 }

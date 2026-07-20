@@ -3094,13 +3094,21 @@ function CorridorRowDetail({ row, pw }) {
     zip: r.raw.mailing_zip || zipFromMailing(r.mailing), address: r.address, borough: row.borough || "",
     last_sale_price: row.last_sale_price || null, last_sale_date: row.last_sale_date || null,
   };
+  // The corridor's rich signals make the outreach draft specific (the vacant-lot flag,
+  // the build-out permit, the tier) — pass them into the studio.
+  const oExtra = {
+    corridor_name: (row.corridor || "").replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+    tier: row.tier, availability_probability: row.availability_probability,
+    availability_reasons: row.availability_reasons || [], principal: row.principal || "",
+  };
   return (
     <div style={{ padding: "4px 14px 18px" }}>
       <AvailabilityHeader row={row} />
       {r.market === "sc"
-        ? <AssessorMarketDetail r={r} pw={pw} />
+        ? <AssessorMarketDetail r={r} pw={pw} outreachExtra={oExtra} />
         : <>
             <AssessorDetail p={{ owner: r.owner, mailing: r.mailing, use: row.tier, frontage_ft: row.frontage_ft, sale_price: row.last_sale_price, sale_date: row.last_sale_date }} market="nyc-corridor" />
+            <OutreachStudio ctx={outreachCtx(r, oExtra)} pw={pw} />
             <ResearchBrief r={contactR} pw={pw} />
             <ContactReveal r={contactR} pw={pw} />
             <OwnerPeople r={contactR} pw={pw} market="nyc" />
@@ -3279,9 +3287,86 @@ function MailingXref({ r, pw }) {
   );
 }
 
+// ── AI OUTREACH STUDIO ──────────────────────────────────────────────────────────
+// The wow: one click turns a property's real signals into a ready-to-send outreach kit
+// — cold-call opener, voicemail script, email, and text, personalized to THIS owner and
+// building. The cheaper-Terrakotta move (their AI-voicemail/dialing, minus the auto-
+// dialer). A human sends/dials — copy buttons, a prefilled email draft, and tel:/sms:
+// links that light up when you paste the owner's number (from the trace/free lookup).
+const COPY_LABELS = { call_opener: "Cold-call opener", voicemail: "Voicemail (~20s)", email: "Email", sms: "Text" };
+function CopyBtn({ text, small }) {
+  const [ok, setOk] = useState(false);
+  return <button onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setOk(true); setTimeout(() => setOk(false), 1400); }).catch(() => {}); }}
+    className="mono lift" style={{ ...ACTION_PILL, padding: small ? "3px 9px" : "4px 11px", fontSize: 10.5, background: ok ? C.goldSoft : C.panel, border: `1px solid ${ok ? C.gold : C.line}`, color: ok ? C.gold : C.ivory }}>{ok ? "✓ copied" : "⧉ copy"}</button>;
+}
+function OutreachStudio({ ctx, pw }) {
+  const [state, setState] = useState("idle"); // idle | loading | done | error
+  const [kit, setKit] = useState(null);
+  const [err, setErr] = useState("");
+  const [tab, setTab] = useState("call_opener");
+  const [phone, setPhone] = useState(""); // paste the owner's number → tel:/sms: light up
+  const run = async () => {
+    setState("loading"); setErr("");
+    try {
+      const d = await postJSON("/api/outreach", { password: pw, ...ctx });
+      if (d.error) { setErr(d.error); setState("error"); return; }
+      addScoutSpend(0.02); setKit(d.kit); setState("done");
+    } catch (e) { setErr(e.message || "Draft failed."); setState("error"); }
+  };
+  const tel = phone.replace(/[^\d+]/g, "");
+  const tabs = [["call_opener", "📞 Call"], ["voicemail", "🎙 Voicemail"], ["email", "✉️ Email"], ["sms", "💬 Text"]];
+  const bodyFor = (t) => t === "email" ? `${kit.email_body}` : t === "sms" ? kit.sms : kit[t];
+  const copyText = (t) => t === "email" ? `Subject: ${kit.email_subject}\n\n${kit.email_body}` : bodyFor(t);
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.06em" }}>✍️ AI OUTREACH STUDIO — call · voicemail · email · text</div>
+        {state !== "loading" && <button onClick={run} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" ? "↻ redraft" : "▸ draft outreach"}</button>}
+      </div>
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Writes a personalized <strong style={{ color: C.ivory }}>cold-call opener, voicemail, email, and text</strong> for <strong style={{ color: C.ivory }}>{ctx.owner || "this owner"}</strong>, grounded in this property's real signals (corridor, availability read, tenure, last trade). One click, ~$0.02 — you send it.</div>}
+      {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Drafting the outreach kit…</div>}
+      {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+      {state === "done" && kit && (
+        <div style={{ marginTop: 10 }}>
+          {kit.hook && <div style={{ fontSize: 12.5, color: C.ivory, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 11px", marginBottom: 10 }}><span style={{ color: C.gold }}>Angle:</span> {kit.hook}</div>}
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10 }}>
+            {tabs.map(([k, lab]) => <button key={k} onClick={() => setTab(k)} className="mono lift" style={{ ...ACTION_PILL, padding: "4px 11px", fontSize: 11, background: tab === k ? C.goldSoft : C.panel, border: `1px solid ${tab === k ? C.gold : C.line}`, color: tab === k ? C.gold : C.ivory }}>{lab}</button>)}
+          </div>
+          <div style={{ background: C.ink, border: `1px solid ${C.line}`, borderRadius: 8, padding: "11px 13px" }}>
+            {tab === "email" && <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>Subject: <span style={{ color: C.ivory }}>{kit.email_subject}</span></div>}
+            <div style={{ fontSize: 13, color: C.ivory, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{bodyFor(tab)}</div>
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+              <CopyBtn text={copyText(tab)} />
+              {tab === "email" && <a href={`mailto:?subject=${encodeURIComponent(kit.email_subject)}&body=${encodeURIComponent(kit.email_body)}`} className="mono lift" style={{ ...ACTION_PILL, padding: "4px 11px", fontSize: 10.5, background: C.panel, border: `1px solid ${C.gold}`, color: C.gold, textDecoration: "none" }}>✉️ open email draft</a>}
+              {(tab === "call_opener" || tab === "voicemail") && (tel ? <a href={`tel:${tel}`} className="mono lift" style={{ ...ACTION_PILL, padding: "4px 11px", fontSize: 10.5, background: C.panel, border: `1px solid ${C.gold}`, color: C.gold, textDecoration: "none" }}>📞 call {phone}</a> : <span style={{ fontSize: 10.5, color: C.muted }}>paste a number below to enable one-tap call</span>)}
+              {tab === "sms" && (tel ? <a href={`sms:${tel}?body=${encodeURIComponent(kit.sms)}`} className="mono lift" style={{ ...ACTION_PILL, padding: "4px 11px", fontSize: 10.5, background: C.panel, border: `1px solid ${C.gold}`, color: C.gold, textDecoration: "none" }}>💬 text {phone}</a> : <span style={{ fontSize: 10.5, color: C.muted }}>paste a number below to enable one-tap text</span>)}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="paste owner's number (from a trace / free lookup) for one-tap call & text" style={{ ...fieldStyle, flex: 1, fontSize: 12 }} />
+          </div>
+          <div style={{ fontSize: 10, color: C.muted, marginTop: 7, lineHeight: 1.5 }}>Review before sending — [bracketed] bits are yours to fill in. Grounded only in this property's data; verify any claim before you use it. You send it — no auto-dialing.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Build the OutreachStudio context from an owner row (assessor / corridor shapes).
+function outreachCtx(r, extra = {}) {
+  const raw = r.raw || {};
+  return {
+    owner: r.owner || "", address: r.address || "", mailing: r.mailing || raw.mailing || "",
+    market: r.marketLabel || "", use: r.use || raw.use || "",
+    years_owned: raw.years_owned ?? "", last_sale_date: raw.sale_date || (raw.sale_year ? String(raw.sale_year) : "") || raw.last_sale_date || "",
+    last_sale_price: raw.sale_price || raw.last_sale_price || null,
+    ...extra,
+  };
+}
+
 // Detail panel for the assessor markets (CT · Hamptons · Nashville): the record, the AI quick take,
 // and the PAID skip trace — the SAME owner-contact workflow NYC has, so it works in every market.
-function AssessorMarketDetail({ r, pw }) {
+function AssessorMarketDetail({ r, pw, outreachExtra = {} }) {
   const raw = r.raw || {};
   const isCo = ENTITY_RE.test(r.owner || "");
   const mState = raw.mailing_state || (r.market === "ct" ? "CT" : r.market === "tn" ? "TN" : r.market === "sc" ? "SC" : r.market === "savannah" ? "GA" : "NY");
@@ -3301,6 +3386,7 @@ function AssessorMarketDetail({ r, pw }) {
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
       {r.market === "sc" && <CharlestonIntelPanel pid={raw.pid} address={r.address} pw={pw} />}
       {(r.market === "tn" || r.market === "sc" || r.market === "savannah") && r.owner && <OwnerPortfolio owner={r.owner} pw={pw} st={r.market} />}
+      <OutreachStudio ctx={outreachCtx(r, outreachExtra)} pw={pw} />
       <ResearchBrief r={contactR} pw={pw} />
       <ContactReveal r={contactR} pw={pw} />
       <OwnerPeople r={contactR} pw={pw} market={r.market} />
@@ -5797,6 +5883,7 @@ function PropertyDetail({ r, pw }) {
   const muted = { color: C.muted, fontSize: 12, padding: "8px 0" };
   return (
     <div style={{ paddingTop: 8 }}>
+      <OutreachStudio ctx={outreachCtx({ owner: r.name, address: r.address, marketLabel: "NYC", raw: r })} pw={pw} />
       <ResearchBrief r={r} pw={pw} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 22 }}>
       <div>

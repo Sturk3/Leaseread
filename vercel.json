@@ -60,6 +60,9 @@
     "api/scentity.js": {
       "maxDuration": 60
     },
+    "api/outreach.js": {
+      "maxDuration": 30
+    },
     "api/leasecomps.js": {
       "maxDuration": 30
     },

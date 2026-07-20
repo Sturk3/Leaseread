@@ -99,7 +99,8 @@ const sodaQuote = (vals) => vals.map((v) => "'" + String(v).replace(/'/g, "''") 
 const likeEsc = (s) => String(s).toUpperCase().replace(/'/g, "''");
 // Whole-street match: treats the input as a complete street token, so "9 STREET"
 // matches "9 STREET" / "EAST 9 STREET" but NOT "19 STREET" or "29 STREET".
-function streetClause(field, street) {
+// Exported: the RetailAvailability engine reuses it to pull corridor street lots.
+export function streetClause(field, street) {
   const s = likeEsc(street);
   return `(upper(${field})='${s}' OR upper(${field}) like '% ${s}' OR upper(${field}) like '${s} %' OR upper(${field}) like '% ${s} %')`;
 }
@@ -274,7 +275,8 @@ async function sourceDob({ borough, since, street, limit, appToken }) {
 
 // Development potential from PLUTO zoning: how much more can be built as-of-right.
 // Unused FAR (max allowable − built) × lot area = additional buildable sqft (air rights).
-function devFields(row) {
+// Exported: the RetailAvailability engine reuses it to enrich corridor lots.
+export function devFields(row) {
   const lotarea = toNum(row.lotarea) || 0;
   const builtFar = toNum(row.builtfar) || (lotarea ? (toNum(row.bldgarea) || 0) / lotarea : 0);
   const maxFar = Math.max(toNum(row.residfar) || 0, toNum(row.commfar) || 0, toNum(row.facilfar) || 0);
@@ -520,7 +522,9 @@ function buildLeads(deals, contacts) {
 // property's mailing address from the grantee (buyer) on its most recent ACRIS deed,
 // i.e. the current owner's address on record. Capped to the nearest `cap` properties
 // to stay within the serverless time budget; uncapped properties keep the fallback.
-async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
+// Exported: the RetailAvailability engine reuses this as its ACRIS ownership +
+// last-trade resolution chain (deals/contacts in the pluto shape below).
+export async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
   const targets = deals
     .filter((d) => d.source === "pluto" && d.block && d.lot && d.borough)
     .slice(0, cap);
@@ -539,8 +543,11 @@ async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
   for (const [code, list] of Object.entries(byBoro)) {
     for (const group of chunk(list, 40)) {
       const ors = group.map((d) => `(block=${Number(d.block)} AND lot=${Number(d.lot)})`).join(" OR ");
+      // $order matters: a multi-lot document yields one row per lot and the last row
+      // wins the docToKey slot below — unordered Socrata responses made that
+      // assignment (and thus last-sale attribution) vary between identical runs.
       const rows = await fetchSocrata(ACRIS_LEGALS, {
-        where: `borough='${code}' AND (${ors})`, select: "document_id,block,lot", limit: 5000, appToken,
+        where: `borough='${code}' AND (${ors})`, order: "document_id,block,lot", select: "document_id,block,lot", limit: 5000, appToken,
       }).catch(() => []);
       for (const r of rows) {
         const id = clean(r.document_id);
@@ -555,7 +562,8 @@ async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
   const docBatches = chunk([...new Set(Object.keys(docToKey))], 75);
   for (const wave of chunk(docBatches, 6)) {
     const res = await Promise.all(wave.map((b) =>
-      fetchSocrata(ACRIS_MASTER, { where: `document_id in (${sodaQuote(b)}) AND doc_type='DEED'`, select: "document_id,document_date,recorded_datetime,document_amt", limit: 2000, appToken }).catch(() => [])));
+      // $order so same-date deeds resolve the "latest per lot" tie identically every run.
+      fetchSocrata(ACRIS_MASTER, { where: `document_id in (${sodaQuote(b)}) AND doc_type='DEED'`, order: "document_id", select: "document_id,document_date,recorded_datetime,document_amt", limit: 2000, appToken }).catch(() => [])));
     for (const rows of res) for (const r of rows) { const id = clean(r.document_id); deedDate[id] = clean(r.document_date || r.recorded_datetime); deedAmt[id] = toNum(r.document_amt); }
   }
 
@@ -588,7 +596,8 @@ async function enrichOwnerMailing(deals, contacts, appToken, cap = 80) {
   const latestDocs = [...new Set(Object.values(latestByKey).map((v) => v.id))];
   for (const wave of chunk(chunk(latestDocs, 75), 6)) {
     const res = await Promise.all(wave.map((b) =>
-      fetchSocrata(ACRIS_PARTIES, { where: `document_id in (${sodaQuote(b)}) AND party_type='2'`, select: "document_id,name,address_1,address_2,city,state,zip", limit: 2000, appToken }).catch(() => [])));
+      // $order so the first-grantee-wins pick below is the same grantee every run.
+      fetchSocrata(ACRIS_PARTIES, { where: `document_id in (${sodaQuote(b)}) AND party_type='2'`, order: "document_id,name", select: "document_id,name,address_1,address_2,city,state,zip", limit: 2000, appToken }).catch(() => [])));
     for (const rows of res) for (const r of rows) { const id = clean(r.document_id); if (!granteeByDoc[id]) granteeByDoc[id] = r; }
   }
 

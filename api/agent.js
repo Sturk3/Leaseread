@@ -22,8 +22,8 @@ const AGENT_MODEL = process.env.AGENT_MODEL || "claude-sonnet-4-6";
 // token tracker costs it correctly). Routine Scout stays on the cheaper Sonnet.
 const AGENT_MODEL_DEEP = process.env.AGENT_MODEL_DEEP || "claude-opus-4-8";
 // Raised from 8000: adaptive thinking (below) spends tokens that count toward this cap, so a tight
-// ceiling truncated the synthesis turn. 16000 is the skill's non-streaming default and stays within
-// Vercel's 60s (one Claude turn per call). Env-overridable for cost tuning.
+// ceiling truncated the synthesis turn. 16000 is the skill's non-streaming default; vercel.json gives
+// this function 300s (a long Opus deep-research synthesis turn can exceed 60s). Env-overridable.
 const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 16000;
 // Adaptive thinking sharpens the JUDGEMENT part of the answer — ranking targets, weighing motivation
 // signals, deciding which tool to call next — which is exactly where a flat no-thinking proxy was weakest.
@@ -62,6 +62,28 @@ const TOOLS = [
         builtBefore: { type: "number", description: "Only buildings built on/before this year." },
         devOnly: { type: "boolean", description: "Only underbuilt development sites (meaningful unused air rights)." },
         minBuildable: { type: "number", description: "Minimum unused buildable square footage (air rights)." },
+      },
+    },
+  },
+  {
+    name: "retail_availability",
+    description:
+      "Screen a CONFIGURED retail corridor for likely-AVAILABLE spaces, ranked by buy-box fit. A deterministic engine (no " +
+      "LLM) resolves every retail lot inside the corridor's street segments, enriches ownership + last trade + permit / " +
+      "operating signals from that market's public records, computes an availability probability WITH the reasons behind " +
+      "it, and scores each lot against the corridor's saved buy box. Configured corridors: 'downtown-nyc-trophy-retail' " +
+      "(SoHo prime — PLUTO / ACRIS / DOB / DCWP / storefront vacancy registry) and 'king-street-charleston' (Lower / " +
+      "Middle / Upper King St tiers — county assessor parcels / city build-out permits / hotel entitlements / vacant-class " +
+      "parcels). Pass the corridor's id or name (fuzzy-matched), or list:true to see what's configured. Use this — NOT the " +
+      "market searches — whenever the user asks what's AVAILABLE / leasable / coming vacant on a configured corridor. " +
+      "NYC rows carry borough/block/lot (chain property_intel / transaction_history); Charleston rows carry pid (chain " +
+      "charleston_property_intel); both carry the owner for web_research LLC unmasking.",
+    input_schema: {
+      type: "object",
+      properties: {
+        corridor: { type: "string", description: "Corridor id or name, e.g. 'downtown-nyc-trophy-retail' or 'king-street-charleston'. Fuzzy-matched server-side." },
+        list: { type: "boolean", description: "true = just return the configured corridors (use when unsure what exists)." },
+        limit: { type: "number", description: "Only return the top N ranked rows (optional; default all)." },
       },
     },
   },
@@ -504,6 +526,11 @@ WHAT YOU DO
 - BATCH INDEPENDENT LOOKUPS: when several tools on the same property don't depend on each other's output (e.g. property_intel + transaction_history + foot_traffic on one lot, or sales_comps + owner_portfolio), request them TOGETHER in a single turn rather than one at a time. This is faster and far cheaper. Only go one-at-a-time when a later call genuinely needs an earlier call's result (e.g. you need block/lot from search_properties before you can pull its intel).
 - Default thesis when unspecified: trophy / high-street RETAIL. If the user names another asset type or neighborhood, follow that.
 - Always begin a sourcing task with search_properties. Use its borough/block/lot, owner name, mailing address, and lat/lon to drive the follow-on tools (property_intel, transaction_history, foot_traffic, owner/hidden portfolio, web_research).
+
+CORRIDOR AVAILABILITY SCREENS (retail_availability — you are the ONLY way to run one)
+- When the user asks what's AVAILABLE / leasable / vacant / coming vacant on a corridor ("find available retail in SoHo prime", "what's coming vacant on King Street"), route to retail_availability with the corridor's id or name — NOT the market searches. Two corridors are configured: downtown-nyc-trophy-retail (SoHo prime) and king-street-charleston (Lower/Middle/Upper King tiers). The engine fuzzy-matches the name; if you're unsure what's configured, call it with list:true first and pick (or tell the user what exists and offer the generic market search instead if nothing matches).
+- ALL screening logic lives in the engine: it resolves the corridor's lots, computes availability_probability + availability_reasons and the buy-box fit_score deterministically. Do NOT re-derive, re-score, re-rank, or second-guess its numbers — your job is to PRESENT them: rank as given, each row with address, owner entity (+ principal if present), availability probability with its reasons in plain English, and the fit score. Flag the coverage report's thin spots (nulls, capped enrichment, source errors) honestly.
+- YOU own the follow-up loop: NYC rows carry borough/block/lot, Charleston rows carry pid. When the user picks a candidate ("deep-dive #2", "who's behind the owner of 530 Broadway"), chain the existing tools on it — NYC: property_intel + transaction_history (+ foot_traffic); Charleston: charleston_property_intel (zoning/BAR/flood/permits) — plus web_research to unmask the LLC and find contacts (SC's registry is captcha-gated, so web_research is the Charleston unmasking path) — one continuous conversation, no new screen needed.
 - DEMAND side: when the user asks who would want/lease a space, or about trendy/expanding brands, use brand_radar — it scouts the web for new retail brands opening flagships or seeking space (optionally by market + category). Good for matching an available space to brands that want it.
 
 "MARKETS — NYC vs CONNECTICUT
@@ -580,7 +607,7 @@ export default async function handler(req, res) {
     }
     if (check) return res.status(200).json({ ok: true });
     if (debug) {
-      return res.status(200).json({ ok: true, model: AGENT_MODEL, deepModel: AGENT_MODEL_DEEP, thinking: THINKING_ON, effort: { routine: EFFORT_ROUTINE, deep: EFFORT_DEEP }, maxTokens: MAX_TOKENS, tools: TOOLS.map((t) => t.name), build: "agent-v27-savannah" });
+      return res.status(200).json({ ok: true, model: AGENT_MODEL, deepModel: AGENT_MODEL_DEEP, thinking: THINKING_ON, effort: { routine: EFFORT_ROUTINE, deep: EFFORT_DEEP }, maxTokens: MAX_TOKENS, tools: TOOLS.map((t) => t.name), build: "agent-v28-retailavail" });
     }
 
     if (!Array.isArray(messages) || !messages.length) {

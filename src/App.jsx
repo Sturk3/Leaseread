@@ -171,12 +171,9 @@ export default function App() {
         if (!memoText.trim()) { setError("Paste the memo text or load the sample deal."); setLoading(false); return; }
       }
       setProgress("Extracting underwriting data and scoring the buy box…");
-      const res = await fetch("/api/screen", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, pdfData, memoText, password: pw, config }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      // postJSON (not raw res.json()): a big PDF can push the function past the timeout,
+      // where Vercel returns an HTML error page — this turns that into a clear message.
+      const data = await postJSON("/api/screen", { mode, pdfData, memoText, password: pw, config });
       const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
       const start = text.indexOf("{"); const end = text.lastIndexOf("}");
       if (start === -1 || end === -1) throw new Error("Could not read a structured result. Try again or check the document.");
@@ -478,7 +475,9 @@ function Settings({ config, setConfig, presets, setPresets, onClose }) {
     const remaining = Object.keys(next);
     if (!remaining.length) { next[DEFAULT_CONFIG.name] = clone(DEFAULT_CONFIG); }
     setPresets(next);
-    loadPreset(Object.keys(next)[0]);
+    // Load from `next`, not loadPreset(): loadPreset reads the STALE `presets` closure, so
+    // deleting the last (re-seeded) preset would reload the just-deleted customized copy.
+    setConfig(clone(next[Object.keys(next)[0]]));
   }
 
   const label = { fontSize: 11, color: C.muted, letterSpacing: "0.05em" };
@@ -736,8 +735,11 @@ async function postJSON(url, body) {
         : `The server returned an error (HTTP ${res.status}). Please try again in a moment.`
     );
   }
-  if (!res.ok) throw new Error(data.error || `Server error (HTTP ${res.status}).`);
-  if (data.error) throw new Error(data.error);
+  // Anthropic error bodies pass through the endpoints verbatim as {error:{type,message}} —
+  // an OBJECT, which `new Error(obj)` would render as "[object Object]". Extract the message.
+  const errMsg = (e) => (typeof e === "string" ? e : e && e.message) || null;
+  if (!res.ok) throw new Error(errMsg(data.error) || `Server error (HTTP ${res.status}).`);
+  if (data.error) throw new Error(errMsg(data.error) || "The server reported an error.");
   return data;
 }
 
@@ -752,6 +754,7 @@ async function postJSON(url, body) {
 // password is injected by the caller). Field names mirror what each endpoint accepts.
 const TOOL_ROUTES = {
   search_properties: { url: "/api/search", label: "Searching properties", body: (a) => ({ market: "nyc", sources: ["pluto"], assetType: a.assetType || "retail", borough: a.borough, nearAddress: a.nearAddress, radiusMiles: a.radiusMiles || 0, limit: 50, minSqft: a.minSqft, minRetailSqft: a.minRetailSqft, minUnits: a.minUnits, builtAfter: a.builtAfter, builtBefore: a.builtBefore, devOnly: a.devOnly, minBuildable: a.minBuildable }) },
+  retail_availability: { url: "/api/availability", label: "Screening corridor availability", body: (a) => ({ corridor: a.corridor, list: a.list, limit: a.limit }) },
   property_intel: { url: "/api/intel", label: "Pulling public records", body: (a) => ({ borough: a.borough, block: a.block, lot: a.lot, name: a.name }) },
   transaction_history: { url: "/api/history", label: "Reading ACRIS history", body: (a) => ({ borough: a.borough, block: a.block, lot: a.lot }) },
   owner_portfolio: { url: "/api/owner", label: "Mapping owner portfolio", body: (a) => ({ name: a.name }) },
@@ -798,12 +801,26 @@ function pickLeadFields(r) {
 }
 
 const SPEND_KEY = "fr_skiptrace_spend_v1";
-function addSpend(amount) { try { const cur = Number(localStorage.getItem(SPEND_KEY)) || 0; localStorage.setItem(SPEND_KEY, String(cur + amount)); } catch { /* quota */ } }
+// Same {hits, est} shape as readSkipSpend/bumpSkipSpend (the dossier's ContactReveal) —
+// this key has TWO writers (Scout's reveal_contact lands here too), and a plain-number
+// write used to corrupt the dossier's counter (and vice versa). One reveal = one hit.
+function addSpend(amount) {
+  try {
+    const cur = JSON.parse(localStorage.getItem(SPEND_KEY) || "{}");
+    const base = typeof cur === "number" ? { hits: 0, est: cur } : cur; // migrate legacy plain-number value
+    localStorage.setItem(SPEND_KEY, JSON.stringify({
+      hits: (Number(base.hits) || 0) + 1,
+      est: Math.round(((Number(base.est) || 0) + (Number(amount) || 0)) * 100) / 100,
+    }));
+  } catch { /* quota */ }
+}
 
 // Scout web-research spend tracking + monthly cap (client-side guardrail; cost is an
-// estimate, ~$0.15 per live web run). Resets automatically each calendar month.
+// estimate, ~$0.30 per live web run). Resets automatically each calendar month.
 const SCOUT_SPEND_KEY = "fr_scout_spend_v1", SCOUT_CAP_KEY = "fr_scout_cap_v1", SCOUT_MODE_KEY = "fr_scout_mode_v1";
-const WEB_RUN_COST = 0.15;
+// Per deep web-research run. Bumped 0.15 -> 0.30 after depth was raised (up to 8 web
+// searches + longer briefs), so the monthly spend tracker stays roughly honest.
+const WEB_RUN_COST = 0.30;
 const MAX_AGENT_STEPS = 10; // cap tool steps per request. The system prompt tells Scout to chain
 // search -> intel/history/foot_traffic -> portfolio -> web_research and "go deep"; 6 cut routine
 // dossiers off mid-chain (esp. when calls run one-at-a-time). Free tools dominate, so 10 buys depth
@@ -881,6 +898,21 @@ function shapeResult(name, data) {
     const leads = (data.leads || []).slice(0, 15).map(pickLeadFields);
     const n = leads.length;
     return { forModel: { count: data.counts?.deals ?? n, center: data.center, leads }, uiSummary: `${n} propert${n === 1 ? "y" : "ies"}` };
+  }
+  if (name === "retail_availability") {
+    if (data.corridors) return { forModel: data, uiSummary: data.no_match ? "no corridor match — returned the configured list" : `${data.corridors.length} corridor${data.corridors.length === 1 ? "" : "s"} configured` };
+    // The engine can emit hundreds of ranked rows; the model only needs the head of the
+    // ranking (it's already sorted) + the coverage report to caveat thin data honestly.
+    const all = data.rows || [];
+    const rows = all.slice(0, 20);
+    return {
+      forModel: {
+        corridor: data.corridor, candidate_count: data.candidate_count,
+        rows, ...(all.length > rows.length ? { note: `showing top ${rows.length} of ${data.candidate_count} ranked candidates — ask with a higher limit if the user wants deeper cuts` } : {}),
+        coverage: data.coverage,
+      },
+      uiSummary: `${data.candidate_count} candidates in ${data.corridor?.name || "corridor"}`,
+    };
   }
   if (name === "search_ct_properties" || name === "search_hamptons_properties" || name === "search_ma_properties") {
     const props = (data.properties || []).slice(0, 30);
@@ -986,6 +1018,7 @@ function scoutMapData(fm) {
   let items = null;
   if (Array.isArray(fm.leads)) items = fm.leads.map((l) => ({ address: l.address, city: "New York", lat: l.lat ?? null, lon: l.lon ?? null, label: [l.address, l.name].filter(Boolean).join(" — ") }));
   else if (Array.isArray(fm.properties)) items = fm.properties.map((p) => ({ address: p.address, city: p.city || p.town || "", lat: p.lat ?? p.latitude ?? null, lon: p.lon ?? p.longitude ?? null, label: [p.address, p.owner].filter(Boolean).join(" — ") }));
+  else if (Array.isArray(fm.rows)) items = fm.rows.filter((r) => r.address).map((r) => ({ address: r.address, city: r.city || r.town || "New York", lat: r.lat ?? null, lon: r.lon ?? null, label: [r.address, r.ownership_entity].filter(Boolean).join(" — ") })); // corridor availability screen (NYC or Charleston — rows carry their city)
   if (!items || !items.length) return null;
   return { items, center: fm.center || null };
 }
@@ -1048,6 +1081,11 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
   const idRef = useRef(0);
   const scrollRef = useRef(null);
   const fileRef = useRef(null);
+  // AgentChat is conditionally rendered (tab switch unmounts it), but runLoop is a plain
+  // async loop — without this flag it would keep calling /api/agent and PAID tools
+  // invisibly after unmount. Checked between steps to stop the run (and the spend).
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
   // Dedupe identical tool calls within a session: same tool + same args -> reuse the
   // shaped result instead of re-hitting the endpoint and burning an agent turn. Keyed by
   // name+args (web tools also key on mode, since deep vs quick yields a different answer).
@@ -1147,7 +1185,9 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
   const runLoop = async (messages, deep = false) => {
     const maxSteps = deep ? DEEP_RESEARCH_STEPS : MAX_AGENT_STEPS;
     for (let turn = 0; turn < maxSteps; turn++) {
+      if (!aliveRef.current) return; // tab switched away — stop the run instead of spending invisibly
       const data = await postJSON("/api/agent", { password: pw, messages, deepResearch: deep });
+      if (!aliveRef.current) return;
       if (data && data.usage) setTokens(recordUsage(data.usage, data.model));
       const content = data.content || [];
       const toolUses = [];
@@ -1160,6 +1200,7 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
 
       const results = [];
       for (const tu of toolUses) {
+        if (!aliveRef.current) return; // don't start more (possibly paid) tool calls after unmount
         const id = pushTool(tu.name);
         try {
           const out = await runTool(tu.name, tu.input || {});
@@ -1285,7 +1326,7 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
           🧠 Deep Research{deepResearch ? " · ON" : ""}
         </button>
         <div style={{ display: "flex", gap: 3, border: `1px solid ${C.line}`, borderRadius: 8, padding: 2 }}>
-          {[["quick", "⚡ Quick", "Knowledge only — no paid web search"], ["deep", "🔎 Deep web", "Live web research (~$0.15/run)"]].map(([m, lab, tip]) => (
+          {[["quick", "⚡ Quick", "Knowledge only — no paid web search"], ["deep", "🔎 Deep web", "Live web research (~$0.30/run)"]].map(([m, lab, tip]) => (
             <button key={m} onClick={() => setMode(m)} title={tip} className="mono"
               style={{ cursor: "pointer", fontSize: 10.5, padding: "5px 11px", borderRadius: 6, border: "none", background: mode === m ? C.goldSoft : "transparent", color: mode === m ? C.gold : C.muted, letterSpacing: "0.04em" }}>{lab}</button>
           ))}
@@ -1792,7 +1833,11 @@ function CompSheet({ pw }) {
     try {
       const hi = siteHighlights(s).join("; ");
       const q = `Write a concise investment thesis — 3 to 4 tight bullet points, no fluff — for why this NYC retail property is an attractive acquisition target. Ground it ONLY in these facts: Address ${s.address}, ${s.borough}. Attributes: ${hi || "n/a"}. Building ${s.bldg_sqft ? Number(s.bldg_sqft).toLocaleString() + " SF" : "size n/a"}${s.year_built ? `, built ${s.year_built}` : ""}. Focus on trophy / high-street retail value drivers (frontage, location, retail SF, air rights, zoning, owner motivation). Do not invent facts not given.`;
-      const d = await postJSON("/api/research", { mode: "web", password: pw, query: q });
+      // webResearchMode (not hardcoded "web"): honors the Quick/Deep toggle + monthly cap,
+      // and meters the spend like every sibling caller (pullRent/pullSales/findLeases).
+      const m = webResearchMode();
+      const d = await postJSON("/api/research", { mode: m, password: pw, query: q });
+      if (m === "web") addScoutSpend(WEB_RUN_COST);
       const brief = (d.brief || "").trim();
       if (brief) updateNotes(notes ? `${notes}\n\n${brief}` : brief);
     } catch (e) { setError(e.message || "Draft failed."); }
@@ -2536,7 +2581,7 @@ function GreenwichSourcing({ pw }) {
   };
 
   const entRun = async () => {
-    if (!entQ.trim()) return;
+    if (!entQ.trim() || entLoading) return; // Enter re-fires while loading → duplicate concurrent lookups
     setEntError(""); setEntRes(null); setEntLoading(true);
     try { const d = await postJSON("/api/ctentity", { password: pw, name: entQ }); setEntRes(d.entities || []); }
     catch (e) { setEntError(e.message || "Entity lookup failed."); }
@@ -3059,7 +3104,18 @@ function CharlestonIntelPanel({ pid, address, pw }) {
 // works the wider web too (sale coverage / deed aggregators / local CRE press / LinkedIn
 // usually name the principal behind a Charleston LLC). The dossier's own unmask lives in
 // OwnerPeople (which merges the LLC-unmask with the relatives/associates lookup).
-const SC_ENTITY_QUERY = (name) => `Identify who is actually behind the South Carolina entity "${name}" (a South Carolina property owner). Work every angle of the public web: (1) the SC Secretary of State Business Entities Online registry (businessfilings.sc.gov) and OpenCorporates (opencorporates.com/companies/us_sc) for the exact entity name, type, status, filing date, the REGISTERED AGENT (name + full address — the key contact for an anonymous LLC) and any listed officers/members — note these registry pages are often not reachable by web search; AND (2) search news and commercial real estate press (Charleston Post and Courier, Charleston Regional Business Journal, trade press), property/deed record aggregators, court filings, business directories, and LinkedIn for the entity name — sale and development coverage usually names the principal or firm behind a single-asset LLC. Report: the most likely PRINCIPAL(S) / manager and their firm, the registered agent + address if found, entity status/filing date if found, and the best way to reach the decision-maker. Cite each source, clearly separate CONFIRMED record facts from inference, and do NOT invent details. If the SOS record itself can't be reached, say so — it can be pulled manually at businessfilings.sc.gov.`;
+const SC_ENTITY_QUERY = (name) => `You are looking up the South Carolina business entity "${name}" (a South Carolina / Charleston-area property owner) to find its REGISTERED AGENT and the people behind it. South Carolina's official registry (businessfilings.sc.gov) is captcha-gated and usually NOT reachable by search — but its filings are mirrored on crawlable third-party business-record sites that DO surface in search results (often the agent + address appear right in the result snippet even when the page itself is gated). Work those hard before concluding anything is unavailable, and do NOT give up just because the SOS site can't be opened.
+
+Run several TARGETED searches (don't narrate them). Search the EXACT entity name together with "South Carolina" and "registered agent", and mine these mirrors of the SOS filing for the agent name + address, principal/office address, entity type, status, and filing/registration date:
+- Bizapedia (bizapedia.com/sc/…), OpenCorporates (opencorporates.com/companies/us_sc/…), OpenGovUS, CorporationWiki, Buzzfile, Bisprofiles, Dun & Bradstreet.
+Then, to put a real decision-maker behind a single-asset LLC, also check property/deed aggregators, Charleston CRE press (Post and Courier, Charleston Regional Business Journal, trade press), and LinkedIn — sale/development coverage frequently names the principal or firm.
+
+Report, leading with what matters most:
+1. REGISTERED AGENT — name + full address (the key contact for an anonymous LLC), with its source.
+2. PRINCIPALS / manager / organizer — named people + their firm and where they're based (so they can be skip-traced).
+3. Entity status, type, and filing date, if found.
+4. The best way to reach the decision-maker.
+Cite each source inline and clearly separate CONFIRMED record facts from inference. NEVER invent an agent, name, address, or contact. Report whatever you DID find rather than giving up — a partial answer (just the agent, or just an aggregator listing) is still valuable. Only if genuinely nothing is on the crawlable web, say so plainly and note the record can be pulled by hand at businessfilings.sc.gov.`;
 
 // LLC tracker — every county parcel held by the same owner name (Nashville / Davidson Co.
 // and Charleston Co. both support owner-name search). Maps an entity to its whole book
@@ -3350,6 +3406,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
   const pickPin = (id) => { setOpenIdx(id); const el = document.getElementById(`usrc-row-${id}`); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); };
 
   const run = async () => {
+    if (loading) return; // Enter can re-fire mid-search — two runs race and the older response would clobber the newer market/rows
     let det = unifiedDetect(loc, coords);
     // If the user TYPED a city that names a specific market (e.g. "…Charleston SC") but then
     // PICKED an autocomplete suggestion from a different market (usually a same-named NYC street —
@@ -3416,9 +3473,15 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           // street isn't dropped before the house-number filter — e.g. 145 Greenwich Ave sits
           // outside the top 100 Greenwich Avenue parcels by assessed value.
           const d = await postJSON("/api/search", { password: pw, market: "ct", town: det.town, propertyType: "any", address: core, limit: 500 });
-          let rows = (d.properties || []).map(ctRow);
-          if (num) { const exact = rows.filter((r) => houseInAddress(r.address, num, true)); if (exact.length) rows = exact; }
-          out = rows.slice(0, 1);
+          const rows = (d.properties || []).map(ctRow);
+          const exact = num ? rows.filter((r) => houseInAddress(r.address, num, true)) : [];
+          if (exact.length) out = exact.slice(0, 1);
+          else if (num && rows.length) {
+            // Don't silently present the street's highest-assessed parcel as the searched
+            // building — say the number missed and show the street so the user can pick.
+            setNotice(`No ${det.town || "CT"} parcel carries #${num} on ${core} — showing the street's parcels instead; pick the right one.`);
+            out = rows.slice(0, 25);
+          } else out = rows.slice(0, 1);
         } else {
           const d = await postJSON("/api/search", { password: pw, market: "ct", town: det.town, propertyType: mapType(type, "ct"), minValue });
           out = (d.properties || []).map(ctRow);
@@ -3521,9 +3584,14 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           // then keep only the parcel whose address carries the looked-up house number.
           const { num, core } = streetBits(addr);
           const d = await postJSON("/api/search", { password: pw, market: "hamptons", town: det.town, propertyType: "any", address: core, limit: 500 });
-          let rows = (d.properties || []).map(nyRow);
-          if (num) { const exact = rows.filter((r) => houseInAddress(r.address, num, false)); if (exact.length) rows = exact; }
-          out = rows.slice(0, 1);
+          const rows = (d.properties || []).map(nyRow);
+          const exact = num ? rows.filter((r) => houseInAddress(r.address, num, false)) : [];
+          if (exact.length) out = exact.slice(0, 1);
+          else if (num && rows.length) {
+            // Same guard as CT: never pass off an arbitrary street parcel as the searched building.
+            setNotice(`No ${det.town || "Hamptons"} parcel carries #${num} on ${core} — showing the street's parcels instead; pick the right one.`);
+            out = rows.slice(0, 25);
+          } else out = rows.slice(0, 1);
         } else {
           const d = await postJSON("/api/search", { password: pw, market: "hamptons", town: det.town, propertyType: mapType(type, "ny"), minValue });
           out = (d.properties || []).map(nyRow);
@@ -3540,7 +3608,10 @@ function UnifiedSourcing({ pw, rows, setRows }) {
       // wrong street), which the number check alone can't catch.
       const coreToks = String(typedCore || "").split(/\s+/).filter((t) => t.length >= 3 && !STREET_SUFFIX.has(t) && !["EAST", "WEST", "NORTH", "SOUTH"].includes(t));
       const streetOk = (a) => !coreToks.length || coreToks.some((t) => String(a || "").toUpperCase().includes(t));
-      const addrOk = (r) => houseInAddress(r.address, typedNum, false) && streetOk(r.address);
+      // Both number formats: leading (NYC/TN/SC "145 GREENWICH AVE") AND trailing (CT
+      // "GREENWICH AVENUE 0145") — checking only leading made every CORRECT CT pin look
+      // like a miss, which sent the fallback hunting and let NYC replace the right answer.
+      const addrOk = (r) => (houseInAddress(r.address, typedNum, false) || houseInAddress(r.address, typedNum, true)) && streetOk(r.address);
       const hasHouseMatch = typedNum ? (out && out.some(addrOk)) : (out && out.length > 0);
       // Only when AUTO-detecting — a locked market must not silently jump to another (that's the point).
       // Also skip when we intentionally broadened a Nashville street (that result is what we want to show).
@@ -3550,24 +3621,27 @@ function UnifiedSourcing({ pw, rows, setRows }) {
             const d = await postJSON("/api/search", { password: pw, market: "nashville", propertyType: "any", address: addrText });
             let rows = (d.properties || []).map(nashRow);
             if (typedNum) rows = rows.filter(addrOk);
-            if (rows.length) { out = typedNum ? rows.slice(0, 1) : rows; setResolved({ market: "tn", town: "Nashville" }); }
+            if (rows.length) { out = typedNum ? rows.slice(0, 1) : rows; setResolved({ market: "tn", town: "Nashville" }); setNotice(""); }
           } catch { /* keep trying */ }
         }
-        let stillNoMatch = !out || (typedNum && !out.some(addrOk));
+        let stillNoMatch = !out.length || (typedNum && !out.some(addrOk));
         if (stillNoMatch && det.market !== "sc") {
           try {
             const d = await postJSON("/api/search", { password: pw, market: "charleston", propertyType: "any", address: addrText });
             let rows = (d.properties || []).map(scRow);
             if (typedNum) rows = rows.filter(addrOk);
-            if (rows.length) { out = typedNum ? rows.slice(0, 1) : rows; setResolved({ market: "sc", town: "Charleston" }); }
+            if (rows.length) { out = typedNum ? rows.slice(0, 1) : rows; setResolved({ market: "sc", town: "Charleston" }); setNotice(""); }
           } catch { /* keep trying */ }
         }
-        stillNoMatch = !out || (typedNum && !out.some(addrOk));
+        stillNoMatch = !out.length || (typedNum && !out.some(addrOk));
         if (stillNoMatch && det.market !== "nyc") {
           try {
             const d = await postJSON("/api/search", { password: pw, market: "nyc", sources: ["pluto"], assetType: "any", nearAddress: addrText });
-            const rows = (d.leads || []).map(nycRow);
-            if (rows.length) { out = rows; setResolved({ market: "nyc", borough: "" }); }
+            let rows = (d.leads || []).map(nycRow);
+            // Same house+street guard as the other legs — the NYC geocoder fuzzy-matches
+            // hard, and an unfiltered last leg would swap in a wrong-borough lot.
+            if (typedNum) rows = rows.filter(addrOk);
+            if (rows.length) { out = typedNum ? rows.slice(0, 1) : rows; setResolved({ market: "nyc", borough: "" }); setNotice(""); }
           } catch { /* give up gracefully */ }
         }
       }
@@ -3607,7 +3681,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
         {notice && <div style={{ marginTop: 12, fontSize: 12, color: C.amber, background: C.goldSoft, border: `1px solid ${C.amber}40`, borderRadius: 8, padding: "9px 12px" }}>{notice}</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
-          One bar, every US market. Free public-records dossiers in <strong style={{ color: C.ivory }}>NYC</strong> (21 datasets), <strong style={{ color: C.ivory }}>Greenwich/CT</strong>, <strong style={{ color: C.ivory }}>Hamptons/NY</strong>, <strong style={{ color: C.ivory }}>Nashville/TN</strong>, <strong style={{ color: C.ivory }}>Charleston/SC</strong>, and <strong style={{ color: C.ivory }}>Savannah/GA</strong> — and for <strong style={{ color: C.ivory }}>any other US address</strong>, an on-demand AI web lookup that finds the owner + contacts (~$0.15, only when you click). Type a place or address; we route automatically; click <strong style={{ color: C.ivory }}>▸ details</strong> for the record + AI deep dive.
+          One bar, every US market. Free public-records dossiers in <strong style={{ color: C.ivory }}>NYC</strong> (21 datasets), <strong style={{ color: C.ivory }}>Greenwich/CT</strong>, <strong style={{ color: C.ivory }}>Hamptons/NY</strong>, <strong style={{ color: C.ivory }}>Nashville/TN</strong>, <strong style={{ color: C.ivory }}>Charleston/SC</strong>, and <strong style={{ color: C.ivory }}>Savannah/GA</strong> — and for <strong style={{ color: C.ivory }}>any other US address</strong>, an on-demand AI web lookup that finds the owner + contacts (~$0.30, only when you click). Type a place or address; we route automatically; click <strong style={{ color: C.ivory }}>▸ details</strong> for the record + AI deep dive.
         </div>
       </div>
 
@@ -3667,7 +3741,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
                           const webR = { name: "", entity_type: "", address: parts[0] || r.address, contact_address: "", city: parts[1] || "", state: (parts[2] || "").split(/\s+/)[0] || "", zip: "", borough: "", last_sale_price: null, last_sale_date: "", years_owned: null };
                           return (
                             <div style={{ padding: "12px 14px 16px" }}>
-                              <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>No free public-records feed covers this address, but you can still source it. Run AI web research to identify the owner of record, unmask the entity behind it, and pull published contacts — from the live web (~$0.15, only when you click). For deeper work, ask Scout the same.</div>
+                              <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>No free public-records feed covers this address, but you can still source it. Run AI web research to identify the owner of record, unmask the entity behind it, and pull published contacts — from the live web (~$0.30, only when you click). For deeper work, ask Scout the same.</div>
                               <ResearchBrief r={webR} pw={pw} forceMode="web" />
                               <div style={{ fontSize: 11, color: C.muted, margin: "10px 0 0" }}>No owner of record here, so the skip trace runs on the <strong>property address</strong> — it returns occupants / the operating business (verify before calling). For the actual owner, run the AI research above first.</div>
                               <ContactReveal r={webR} pw={pw} />
@@ -3690,6 +3764,124 @@ function UnifiedSourcing({ pw, rows, setRows }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Charleston / SC sourcing tab — the SC analog of GreenwichSourcing. Property search runs on
+// the free Charleston County parcel + assessor layers (market: charleston). SC keeps owner data
+// public, so each row already carries the owner of record + mailing. The second box is the
+// SC ENTITY / REGISTERED AGENT lookup: unlike CT (a free structured principals feed), SC's
+// registry (businessfilings.sc.gov) is reCAPTCHA-gated and OpenCorporates now needs a paid key,
+// so there is no crawlable feed — this box runs AI web research (the SOS registered agent +
+// OpenCorporates + deed/press/LinkedIn coverage) to name the registered agent + principals.
+const CHS_TYPE_OPTIONS = [
+  ["commercial", "Commercial (retail / office)"], ["any", "Any type"], ["retail", "Retail"], ["office", "Office"],
+  ["apartments", "Apartments"], ["hotel", "Hotel"], ["industrial", "Industrial"], ["condo", "Condo"],
+  ["single_family", "Single family"], ["residential", "Residential"], ["vacant", "Vacant land"],
+];
+function scCSV(rows) {
+  const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const cols = [["Owner", (r) => r.owner], ["Co-owner", (r) => r.co_owner], ["Mailing address", (r) => r.mailing], ["Absentee", (r) => r.absentee || ""], ["Property address", (r) => r.address], ["Town", (r) => r.town], ["Use (class)", (r) => r.use], ["Last sale price", (r) => r.sale_price], ["Last sale year", (r) => r.sale_year], ["Parcel PID", (r) => r.pid]];
+  return cols.map((c) => esc(c[0])).join(",") + "\n" + rows.map((r) => cols.map((c) => esc(c[1](r))).join(",")).join("\n");
+}
+function CharlestonSourcing({ pw }) {
+  const [propertyType, setPropertyType] = useState("commercial");
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [sinceYear, setSinceYear] = useState("");
+  const [streetq, setStreetq] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [props, setProps] = useState(null);
+  // SC entity / registered-agent lookup — AI web research, since SC has no free structured feed.
+  const [entQ, setEntQ] = useState("");
+  const [entLoading, setEntLoading] = useState(false);
+  const [entError, setEntError] = useState("");
+  const [entRes, setEntRes] = useState("");
+
+  const run = async () => {
+    setError(""); setProps(null); setLoading(true);
+    try {
+      const d = await postJSON("/api/search", { password: pw, market: "charleston", propertyType, minValue: minPrice, maxValue: maxPrice, sinceYear, address: streetq });
+      setProps(d.properties || []);
+    } catch (e) { setError(e.message || "Charleston sourcing failed."); }
+    finally { setLoading(false); }
+  };
+
+  const entRun = async () => {
+    if (!entQ.trim() || entLoading) return; // Enter re-fires while loading → duplicate concurrent PAID web runs
+    setEntError(""); setEntRes(""); setEntLoading(true);
+    try {
+      const d = await postJSON("/api/research", { mode: "web", password: pw, query: SC_ENTITY_QUERY(entQ.trim()) });
+      addScoutSpend(WEB_RUN_COST);
+      setEntRes(d.brief || "");
+    } catch (e) { setEntError(e.message || "Entity lookup failed."); }
+    finally { setEntLoading(false); }
+  };
+
+  return (
+    <>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+          <label><div className="mono" style={labelStyle}>TYPE</div><select value={propertyType} onChange={(e) => setPropertyType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{CHS_TYPE_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+          <label><div className="mono" style={labelStyle}>STREET (optional)</div><input value={streetq} onChange={(e) => setStreetq(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="e.g. KING ST" /></label>
+          <label><div className="mono" style={labelStyle}>MIN SALE $</div><input type="number" value={minPrice} onChange={(e) => setMinPrice(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="1000000" /></label>
+          <label><div className="mono" style={labelStyle}>MAX SALE $</div><input type="number" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
+          <label><div className="mono" style={labelStyle}>SOLD SINCE (YEAR)</div><input type="number" value={sinceYear} onChange={(e) => setSinceYear(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center" }}>
+          <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "SEARCHING…" : "◎ SOURCE PROPERTIES"}</button>
+          {props && props.length > 0 && <button onClick={() => downloadBlob(scCSV(props), `frontage_charleston_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXPORT CSV</button>}
+        </div>
+        {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
+        <div style={{ marginTop: 10, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
+          Charleston County parcels + assessor data (gisccapps.charlestoncounty.org) — <strong style={{ color: C.ivory }}>owner of record + mailing</strong> (absentee owners flagged), assessor class/use, and latest sale. SC publishes no assessed value or building SF, so the $ filters run on the <strong style={{ color: C.ivory }}>last sale price</strong> (long-held parcels show none). For an owner LLC, use the <strong style={{ color: C.ivory }}>SC Entity / Registered Agent Lookup</strong> below.
+        </div>
+      </div>
+
+      {/* SC entity / registered-agent lookup — AI web research (no free SC feed) */}
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, marginTop: 14 }}>
+        <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>SC ENTITY / REGISTERED AGENT LOOKUP — WHO'S BEHIND AN LLC</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={entQ} onChange={(e) => setEntQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") entRun(); }} placeholder="LLC / company name, e.g. PALMETTO KING ST HOLDINGS LLC" style={{ ...fieldStyle, flex: 1 }} />
+          <button onClick={entRun} disabled={entLoading} className="mono lift" style={{ cursor: entLoading ? "default" : "pointer", fontSize: 12, padding: "0 20px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: entLoading ? 0.5 : 1 }}>{entLoading ? "…" : "SEARCH"}</button>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>
+          Names the <strong style={{ color: C.ivory }}>registered agent</strong> and likely principals behind a South Carolina owner LLC. SC's registry (<a href="https://businessfilings.sc.gov/BusinessFiling/Entity/Search" target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>businessfilings.sc.gov ↗</a>) is captcha-gated with no free data feed, so this runs <strong style={{ color: C.ivory }}>live AI web research</strong> across the business-record sites that mirror the SOS filing (Bizapedia, OpenCorporates, OpenGovUS, CorporationWiki) plus deed/press coverage and LinkedIn (~${WEB_RUN_COST.toFixed(2)}). If nothing's on the crawlable web, it says so — pull it by hand at the link above.
+        </div>
+        {entError && <div style={{ marginTop: 10, fontSize: 12.5, color: C.red }}>{entError}</div>}
+        {entLoading && <div style={{ marginTop: 12, fontSize: 12.5, color: C.muted }}>Searching public records…</div>}
+        {entRes && <div style={{ marginTop: 12 }}><ResearchBriefBody text={entRes} /><div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>Verify before relying on any name — public matches can be wrong. Confirm the registered agent / principal address lines up with the property owner.</div></div>}
+      </div>
+
+      {props && (
+        <div style={{ marginTop: 18 }}>
+          <div className="mono" style={{ ...labelStyle, marginBottom: 8 }}>{props.length} PROPERT{props.length === 1 ? "Y" : "IES"} · CHARLESTON, SC</div>
+          {props.length === 0 ? <div style={{ color: C.muted, fontSize: 13 }}>No parcels matched. Widen the sale price range, type, or year.</div> : (
+            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, overflow: "hidden" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ borderBottom: `2px solid ${C.line}` }}>
+                  {["Owner", "Property", "Use", "Last sale"].map((h, i) => <th key={h} style={{ textAlign: i === 3 ? "right" : "left", padding: "9px 12px", fontSize: 10, letterSpacing: "0.05em", textTransform: "uppercase", color: C.muted }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {props.map((p, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "9px 12px", fontSize: 13, maxWidth: 230 }}>
+                        <div style={{ fontWeight: 700, color: C.ivory }}>{p.owner || "—"}{p.absentee && <span className="mono" style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 5, background: C.goldSoft, color: C.amber, whiteSpace: "nowrap" }}>{p.absentee === "out-of-state" ? "OUT-OF-STATE" : "OUT-OF-AREA"}</span>}</div>
+                        {p.mailing && <div style={{ color: C.muted, fontSize: 11, marginTop: 1 }}>{p.mailing}</div>}
+                      </td>
+                      <td style={{ padding: "9px 12px", fontSize: 12.5 }}><a href={p.maps_url} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{p.address} ↗</a></td>
+                      <td style={{ padding: "9px 12px", fontSize: 12, color: C.muted }}>{p.use}</td>
+                      <td className="mono" style={{ padding: "9px 12px", fontSize: 12, color: C.muted, whiteSpace: "nowrap", textAlign: "right" }}>{p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -3745,7 +3937,7 @@ function Sourcing({ pw }) {
     <div style={{ marginTop: 22 }}>
       {/* Market toggle — one Sourcing tab, two markets */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {[["nyc", "NEW YORK CITY"], ["ct", "GREENWICH · CT"], ["hampt", "HAMPTONS · NY"]].map(([m, lab]) => (
+        {[["nyc", "NEW YORK CITY"], ["ct", "GREENWICH · CT"], ["hampt", "HAMPTONS · NY"], ["charleston", "CHARLESTON · SC"]].map(([m, lab]) => (
           <button key={m} onClick={() => setMarket(m)} className="mono"
             style={{ cursor: "pointer", fontSize: 12, padding: "8px 16px", borderRadius: 8, border: `1px solid ${market === m ? C.gold : C.line}`, background: market === m ? C.goldSoft : "transparent", color: market === m ? C.gold : C.muted, letterSpacing: "0.05em" }}>
             {lab}
@@ -3756,6 +3948,8 @@ function Sourcing({ pw }) {
       {market === "ct" && <GreenwichSourcing pw={pw} />}
 
       {market === "hampt" && <HamptonsSourcing pw={pw} />}
+
+      {market === "charleston" && <CharlestonSourcing pw={pw} />}
 
       {market === "nyc" && (<>
           {/* Filters */}
@@ -4653,7 +4847,7 @@ function ResearchBriefBody({ text }) {
 // silent knowledge downgrade). Metered + cached; a found name drops into the "trace a
 // person" box below to get a number.
 const REGISTRY_HINT = {
-  sc: "the SC Secretary of State Business Entities Online registry (businessfilings.sc.gov — captcha-gated, so it may not be reachable by search; it can be pulled by hand) and OpenCorporates",
+  sc: "the SC Secretary of State registry (businessfilings.sc.gov — captcha-gated, usually NOT reachable by search) and, crucially, the crawlable sites that MIRROR its filings and DO show the registered agent + address (often right in the search snippet): Bizapedia (bizapedia.com/sc), OpenCorporates (opencorporates.com/companies/us_sc), OpenGovUS, CorporationWiki, and Buzzfile — mine these before concluding the agent isn't public",
   tn: "the Tennessee Secretary of State registry (TNBear / tncab.tnsos.gov) and OpenCorporates",
   ct: "the Connecticut Business Registry (data.ct.gov — CT publicly discloses LLC principals) and OpenCorporates",
   savannah: "the Georgia Secretary of State corporations registry (ecorp.sos.ga.gov — lists the registered agent + officers) and OpenCorporates",
@@ -4715,8 +4909,8 @@ function OwnerPeople({ r, pw, market }) {
         )}
       </div>
       {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>{isCo
-        ? <>Unmasks <strong style={{ color: C.ivory }}>{owner}</strong> — the registered agent + principals behind it — and maps their business associates, from public records. Drop any name into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to get their number. <span>Live web search (~$0.15).</span></>
-        : <>Finds likely <strong style={{ color: C.ivory }}>family and associates of {owner}</strong> — a way in when the owner’s own line is a dead end. Take any name into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to skip-trace them. <span>Live web search (~$0.15).</span></>}</div>}
+        ? <>Unmasks <strong style={{ color: C.ivory }}>{owner}</strong> — the registered agent + principals behind it — and maps their business associates, from public records. Drop any name into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to get their number. <span>Live web search (~$0.30).</span></>
+        : <>Finds likely <strong style={{ color: C.ivory }}>family and associates of {owner}</strong> — a way in when the owner’s own line is a dead end. Take any name into the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below to skip-trace them. <span>Live web search (~$0.30).</span></>}</div>}
       {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Searching public records…</div>}
       {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
       {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={text} /><div style={{ fontSize: 10.5, color: C.muted, marginTop: 8, lineHeight: 1.5 }}>Verify before relying on any name — public matches can be wrong. To reach one, use the <strong style={{ color: C.ivory }}>“trace a person”</strong> box below with their name + a likely address.</div></div>}
@@ -4832,7 +5026,9 @@ const statusColor = (s) => (s === "pursuing" ? C.green : s === "contacted" ? C.g
 const OUTREACH_STATES = [["none", "Not called"], ["called", "Called"], ["voicemail", "Voicemail"], ["callback", "Callback set"], ["dnc", "DNC"]];
 const outreachLabel = (s) => (OUTREACH_STATES.find(([v]) => v === s) || OUTREACH_STATES[0])[1];
 const outreachColor = (s) => (s === "dnc" ? C.red : s === "callback" ? C.amber : s === "called" || s === "voicemail" ? C.gold : C.muted);
-const callbackDue = (l) => l.outreach === "callback" && l.callbackAt && l.callbackAt <= new Date().toISOString().slice(0, 10);
+// Local date (en-CA = YYYY-MM-DD), not toISOString(): UTC flips to tomorrow at ~7-8pm ET,
+// which flagged callbacks "DUE" the evening before.
+const callbackDue = (l) => l.outreach === "callback" && l.callbackAt && l.callbackAt <= new Date().toLocaleDateString("en-CA");
 function loadPipeline() { try { return JSON.parse(localStorage.getItem(PIPELINE_KEY) || "{}") || {}; } catch { return {}; } }
 function writePipeline(p) { try { localStorage.setItem(PIPELINE_KEY, JSON.stringify(p)); } catch { /* quota — drop silently */ } }
 function isSavedLead(r) { const id = aiCacheId(r); return !!(id && loadPipeline()[id]); }
@@ -5213,7 +5409,7 @@ function AcquisitionMemo({ r, score, pw }) {
           {state !== "loading" && <button onClick={() => run(false)} className="mono lift" style={{ ...ACTION_PILL, padding: "5px 12px", background: C.panel, border: `1px solid ${C.gold}` }}>{state === "done" || state === "error" ? "↻ fresh" : "▸ generate"}</button>}
         </div>
       </div>
-      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Builds a full memo — executive summary, highlights, ownership & motivation, market, comps, risks, recommendation — grounded in this property's records{webOn ? ", plus live-web market context (~$0.15 in Deep mode)." : ". Switch Scout to Deep mode for live-web market & comps colour."} Saved on this browser for instant re-open; exports to a printable PDF.</div>}
+      {state === "idle" && <div style={{ color: C.muted, fontSize: 11.5, marginTop: 6 }}>Builds a full memo — executive summary, highlights, ownership & motivation, market, comps, risks, recommendation — grounded in this property's records{webOn ? ", plus live-web market context (~$0.30 in Deep mode)." : ". Switch Scout to Deep mode for live-web market & comps colour."} Saved on this browser for instant re-open; exports to a printable PDF.</div>}
       {state === "loading" && <div style={{ color: C.muted, fontSize: 12.5, marginTop: 8 }}>Drafting the memo… (a few seconds)</div>}
       {state === "error" && <div style={{ color: C.red, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
       {state === "done" && <div style={{ marginTop: 10 }}><ResearchBriefBody text={memo} /></div>}
@@ -5282,7 +5478,7 @@ const _skipCache = new Map();
 // Key by owner name; for nameless rows (web/address-only traces) fall back to the property address
 // so two different addresses don't collide on the same cache slot.
 const skipKey = (r) => `${(r.name || r.address || "").toUpperCase().trim()}|${(r.zip || r.state || "").toString().trim()}`;
-function readSkipSpend() { try { return JSON.parse(localStorage.getItem("fr_skiptrace_spend_v1") || "{}"); } catch { return {}; } }
+function readSkipSpend() { try { const v = JSON.parse(localStorage.getItem("fr_skiptrace_spend_v1") || "{}"); return typeof v === "number" ? { hits: 0, est: v } : v; } catch { return {}; } }
 function bumpSkipSpend(est) {
   const cur = readSkipSpend();
   const next = { hits: (cur.hits || 0) + 1, est: Math.round(((cur.est || 0) + (est || 0)) * 100) / 100 };

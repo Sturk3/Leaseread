@@ -12,7 +12,9 @@ const PED = process.env.PED_COUNT_DATASET || "cqsj-cfgu";
 const STATIONS = process.env.SUBWAY_STATIONS_DATASET || "39hk-dx4f";
 
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
-const toNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+// null/"" guard first: Number(null) and Number("") are 0, which turned a missing lat/lon
+// into coordinates at latitude 0 instead of the 400 below.
+const toNum = (v) => { if (v == null || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 function haversine(lat1, lon1, lat2, lon2) {
   const R = 3958.8, d = Math.PI / 180;
   const a = Math.sin((lat2 - lat1) * d / 2) ** 2 +

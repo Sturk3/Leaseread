@@ -110,7 +110,8 @@ const STREET_ABBR = {
   PLACE: "PL", PARKWAY: "PKWY", HIGHWAY: "HWY", CIRCLE: "CIR", TERRACE: "TER", TRAIL: "TRL",
   SQUARE: "SQ", COVE: "CV", CROSSING: "XING", NORTH: "N", SOUTH: "S", EAST: "E", WEST: "W",
 };
-const normStreet = (s) => clean(s).toUpperCase().split(/\s+/).map((w) => STREET_ABBR[w] || w).join(" ");
+// Exported for the RetailAvailability Charleston connector (corridor street matching).
+export const normStreet = (s) => clean(s).toUpperCase().split(/\s+/).map((w) => STREET_ABBR[w] || w).join(" ");
 
 // Address-first search: find PIDs whose situs matches the typed street, across both
 // address layers (the county layer only covers unincorporated Charleston County).

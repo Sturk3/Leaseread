@@ -9,13 +9,14 @@
 // research depth/quality once on Pro. (Env-configurable so no code change is needed.)
 const RESEARCH_MODEL = process.env.RESEARCH_MODEL || "claude-sonnet-4-6";
 // How many web_search rounds the agent may run. Vercel Hobby (60s) only fits ~1; Vercel
-// Pro (300s) can go deeper for a richer brief — default 5, override RESEARCH_MAX_SEARCHES.
-// Only used in WEB mode (knowledge mode runs no searches), so this is inert until the
-// frontend is flipped to mode:"web" (which only makes sense on Pro's higher timeout).
-const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 5;
+// Pro (300s) can go deeper for a richer brief — default 8 (the user wants maximum detail),
+// override RESEARCH_MAX_SEARCHES. Only used in WEB mode (knowledge mode runs no searches),
+// so this is inert until the frontend is flipped to mode:"web" (which only makes sense on
+// Pro's higher timeout). If briefs start timing out, drop this back toward 5.
+const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 8;
 
 function buildSystem() {
-  return `You are an off-market real estate acquisitions research analyst for a firm that buys trophy / high-street RETAIL property (primarily NYC, expanding nationwide). You are given a PROPERTY (an address, and often — but not always — its owner of record). Use the web_search tool to find WHO owns it, their PORTFOLIO, and HOW TO REACH them, then write a tight intelligence brief.
+  return `You are an off-market real estate acquisitions research analyst for a firm that buys trophy / high-street RETAIL property. Its two primary hunting grounds are NEW YORK CITY (Manhattan high-street corridors — Fifth Ave, Madison, SoHo, Meatpacking) and CHARLESTON, SC — above all KING STREET, Charleston's premier retail corridor (Upper/Lower King), plus the surrounding downtown/peninsula. Treat properties on or near these as high priority and lean in hard. You are given a PROPERTY (an address, and often — but not always — its owner of record). Use the web_search tool to find WHO owns it, their PORTFOLIO, and HOW TO REACH them, then write a DEEP, exhaustive intelligence brief.
 
 WORK THE CHAIN with multiple searches as needed (don't narrate them — output ONLY the final brief):
 1. If the owner isn't given, IDENTIFY it from the web first: property/assessor records, the building's own site, news, listings, business registries. Name the owning entity (often an LLC).
@@ -31,7 +32,7 @@ Format in markdown (omit a section only if you truly found nothing):
 - **Signals** — news, financing/maturing debt, litigation, distress, redevelopment plans — anything hinting at motivation to sell.
 - **Bottom line** — 1–2 sentences: plausible motivated seller? worth the team's time?
 
-Rules: Ground every claim in what you found and name the source inline. For "Contacts found": include ONLY phone numbers, emails, or sites you LITERALLY saw in a result, each with its source — NEVER guess or pattern-construct an email/number (no firstname@company.com), and never present an unconfirmed contact as real. If something is thin or unconfirmed, say so plainly — never fabricate. Be thorough and decision-grade: surface every contact and signal you actually found (aim ~600 words, more if the findings genuinely warrant it — don't pad). This is for professional real-estate sourcing.`;
+Rules: Ground every claim in what you found and name the source inline. For "Contacts found": include ONLY phone numbers, emails, or sites you LITERALLY saw in a result, each with its source — NEVER guess or pattern-construct an email/number (no firstname@company.com), and never present an unconfirmed contact as real. If something is thin or unconfirmed, say so plainly — never fabricate. Be MAXIMALLY thorough and decision-grade — run as many searches as it takes and surface EVERY owner detail, principal, related entity, portfolio property, contact, and signal you actually found; err toward completeness over brevity (a long, fully-sourced brief is the goal — but detail must come from real findings, never padding or repetition). This is for professional real-estate sourcing.`;
 }
 
 // Knowledge-only brief (no web). Fast, but the model only knows public, well-known
@@ -57,7 +58,7 @@ function buildSystemQuery() {
 
 Run focused searches (don't narrate them), then write ONLY the final answer in clean markdown. Ground factual claims in what you found and cite sources inline (publication/site, with the URL when useful). If results are thin or conflicting, say so. Never fabricate facts, numbers, quotes, or contacts — and when surfacing someone's contact details, include only what literally appeared in a result, with its source; never guess or pattern-construct an email or phone.
 
-CONTEXT: the user works in commercial real estate (sourcing trophy / high-street retail and reaching property owners), so when a request is in that domain, lean in and be genuinely useful. But you are NOT limited to real estate — answer ANYTHING the user asks, on any topic. Be concise by default; go longer only when the request clearly needs it.`;
+CONTEXT: the user works in commercial real estate (sourcing trophy / high-street retail and reaching property owners), with two primary focuses — NEW YORK CITY high-street corridors and CHARLESTON, SC (above all KING STREET). When a request is in that domain, lean in HARD and be exhaustive: run as many searches as it takes and surface every owner, principal, registered agent, related entity, portfolio property, contact, and signal you actually find — err toward a long, fully-sourced answer over a short one. But you are NOT limited to real estate — answer ANYTHING the user asks, on any topic; for those, match the length to the request (concise when that's all it needs). Detail must always come from real findings, never padding.`;
 }
 // Knowledge-only fallback for free-form queries (used until live web is enabled).
 function buildSystemQueryKnowledge() {
@@ -125,10 +126,11 @@ export default async function handler(req, res) {
     // The web_search server tool runs a search loop server-side; if it hits its
     // iteration cap the response comes back as stop_reason "pause_turn" and we
     // re-send to let it continue. Bounded so a runaway can't burn the budget — raised
-    // to 6 so a deeper multi-search run (on Pro) can finish its continuation legs.
+    // to 10 so a deeper multi-search run (MAX_SEARCHES up to 8, on Pro) can finish all
+    // its continuation legs without being cut off mid-brief.
     const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, web_search_requests: 0 };
     const sources = []; const seenSrc = new Set(); // verifiable citations from the web-search results
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -138,7 +140,9 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: RESEARCH_MODEL,
-          max_tokens: freeQuery ? 4096 : 3600,
+          // Roomy ceilings so a deep, fully-sourced brief isn't cut off (the user wants
+          // maximum detail). These are caps, not targets — a thin lookup still returns short.
+          max_tokens: freeQuery ? 8000 : 7000,
           system: systemPrompt,
           ...(useWeb ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_SEARCHES }] } : {}),
           messages,

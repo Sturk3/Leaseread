@@ -90,7 +90,8 @@ export default async function handler(req, res) {
     for (const p of prinRows) {
       const id = clean(p.business_id);
       (prinBy[id] = prinBy[id] || []).push({
-        name: clean(p.name__c) || addr([p.firstname, p.lastname]),
+        // Space-join, not addr(): addr is an ADDRESS joiner (", ") and rendered people as "JOHN, SMITH".
+        name: clean(p.name__c) || [p.firstname, p.lastname].map(clean).filter(Boolean).join(" "),
         business_location: addr([p.business_city, p.business_state]),
         residence_location: addr([p.residence_city, p.residence_state]),
         residence_address: addr([p.residence_street_address_1, p.residence_city, p.residence_state, p.residence_zip_code]),
@@ -99,7 +100,7 @@ export default async function handler(req, res) {
     for (const a of agentRows) {
       const id = clean(a.business_id);
       if (!agentBy[id]) agentBy[id] = {
-        name: clean(a.name__c) || addr([a.firstname, a.lastname]),
+        name: clean(a.name__c) || [a.firstname, a.lastname].map(clean).filter(Boolean).join(" "),
         address: addr([a.business_street_address_1, a.business_city, a.business_state, a.business_zip_code]),
       };
     }

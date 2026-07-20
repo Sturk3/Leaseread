@@ -94,8 +94,8 @@ export default async function handler(req, res) {
         $select: "business_name,dba_trade_name,business_category,license_status,contact_phone,license_creation_date",
         $order: "license_creation_date DESC", $limit: "40",
       }, appToken) : Promise.resolve([]),
-      // 311 — recent complaint volume (last ~2 years)
-      bbl10 ? getJson(NYC, C311, { $select: "count(*)", $where: `bbl='${bbl10}' AND created_date > '2024-06-01T00:00:00'` }, appToken) : Promise.resolve([]),
+      // 311 — recent complaint volume (last ~2 years, computed so the window doesn't drift)
+      bbl10 ? getJson(NYC, C311, { $select: "count(*)", $where: `bbl='${bbl10}' AND created_date > '${new Date(Date.now() - 730 * 864e5).toISOString().slice(0, 10)}T00:00:00'` }, appToken) : Promise.resolve([]),
       // Evictions at this lot (commercial = strong turnover/distress signal)
       bbl10 ? getJson(NYC, EVICT, { $select: "executed_date,residential_commercial_ind", $where: `bbl='${bbl10}'`, $order: "executed_date DESC", $limit: "50" }, appToken) : Promise.resolve([]),
       // Food tenants — restaurant inspections give the DBA + cuisine + grade + phone

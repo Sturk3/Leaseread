@@ -141,7 +141,9 @@ export function providerReport(env = process.env) {
         configured,
         active: it.select ? selected === l.id : true,
         optional: !!l.optional,
-        gateEnv: l.gateEnv ? { [l.gateEnv]: env[l.gateEnv] ?? null } : undefined,
+        // Set/on-off only — NEVER the raw value (this report goes to the client, and the
+        // file's contract is that env values don't leak; only booleans do).
+        gateEnv: l.gateEnv ? { [l.gateEnv]: env[l.gateEnv] == null ? null : !/^(0|false|off|no|)$/i.test(String(env[l.gateEnv]).trim()) } : undefined,
         note: l.note,
       };
     });

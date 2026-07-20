@@ -5422,9 +5422,10 @@ function bestContact(persons) {
   let bestPhone = null, bestScore = -1, firstEmail = null, firstEmailName = "";
   for (const p of persons || []) {
     for (const ph of p.phones || []) {
-      // Strongly prefer a number on the owner-name-matched person over a building occupant.
-      const s = (ph.grade?.score || 0) + (p.matchesOwner ? 1000 : 0);
-      if (s > bestScore) { bestScore = s; bestPhone = { ...ph, name: p.name, matchesOwner: p.matchesOwner }; }
+      // Name-match dominates (a strong match beats a weak one beats a non-match), then the
+      // phone's own callability grade breaks ties — so we never lead with a random occupant.
+      const s = (p.matchScore || 0) * 12 + (ph.grade?.score || 0);
+      if (s > bestScore) { bestScore = s; bestPhone = { ...ph, name: p.name, matchesOwner: p.matchesOwner, matchLabel: p.matchLabel }; }
     }
     if (!firstEmail && p.emails && p.emails.length) { firstEmail = p.emails[0]; firstEmailName = p.name; }
   }
@@ -5461,18 +5462,20 @@ function ContactList({ phones = [], emails = [] }) {
 // side-channel for reaching an owner (a spouse or adult child often answers, or leads
 // you to them). Only renders when the provider actually returned relatives. Each may
 // carry its own phones/emails; where it doesn't, the name is a one-click trace lead.
-function RelativeList({ relatives = [] }) {
+function RelativeList({ relatives = [], loc = {} }) {
   const [open, setOpen] = useState(false);
   if (!relatives.length) return null;
   return (
     <div style={{ marginTop: 6 }}>
       <button onClick={() => setOpen(!open)} className="mono lift" style={{ ...ACTION_PILL, fontSize: 9.5, padding: "2px 8px", color: C.muted, border: `1px solid ${C.line}` }}>
-        {open ? "▾" : "▸"} RELATIVES / ASSOCIATES ({relatives.length})
+        {open ? "▾" : "▸"} FAMILY / RELATIVES ({relatives.length})
       </button>
       {open && (
         <div style={{ marginTop: 6, paddingLeft: 10, borderLeft: `2px solid ${C.line}` }}>
-          {relatives.map((rel, i) => (
-            <div key={i} style={{ marginBottom: 6 }}>
+          {relatives.map((rel, i) => {
+            const links = freePeopleLinks(rel.name, loc.city || "", loc.state || "");
+            return (
+            <div key={i} style={{ marginBottom: 7 }}>
               <div style={{ fontSize: 12, color: C.ivory }}>
                 {rel.name}
                 {rel.relationship && <span className="mono" style={{ fontSize: 9, color: C.muted, marginLeft: 6, border: `1px solid ${C.line}`, borderRadius: 4, padding: "0 5px" }}>{String(rel.relationship).toUpperCase()}</span>}
@@ -5480,9 +5483,9 @@ function RelativeList({ relatives = [] }) {
               </div>
               {(rel.phones?.length || rel.emails?.length)
                 ? <div style={{ marginTop: 2 }}><ContactList phones={rel.phones} emails={rel.emails} /></div>
-                : <div style={{ fontSize: 10.5, color: C.muted, marginTop: 1 }}>no direct number on record — trace by name + owner address to reach them</div>}
+                : <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}><span style={{ color: C.green }}>FREE:</span> {links.map(([lab, url], j) => <span key={lab}>{j > 0 ? " · " : " "}<a href={url} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{lab} ↗</a></span>)}</div>}
             </div>
-          ))}
+          ); })}
         </div>
       )}
     </div>
@@ -5514,7 +5517,7 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
         address: r.address, borough: r.borough,
       });
       if (d.noKey) { setSkip(d); setSkipState("nokey"); return; }
-      const result = { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched, tracedAddress: d.tracedAddress, entityLowConfidence: d.entityLowConfidence };
+      const result = { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched, tracedAddress: d.tracedAddress, entityLowConfidence: d.entityLowConfidence, ownerMatch: d.ownerMatch || null, weakMatch: d.weakMatch, ownerName: d.ownerName };
       _skipCache.set(skipKey(r), result);
       setSkip(result);
       if (result.matched) setSpend(bumpSkipSpend(d.cost));
@@ -5565,6 +5568,12 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
           <>
             <button onClick={runSkip} className="mono lift" style={pill(C.gold)}>🔎 Find owner contact</button>
             <span style={{ fontSize: 11, color: C.muted, marginLeft: 10 }}>~$0.12 · charged only on a match · cached</span>
+            {r.name && !ENTITY_RE.test(r.name) && (() => {
+              // FREE family/relatives — people-search sites list living relatives + associates
+              // on a person's page at no cost; a human clicks through. No paid trace needed.
+              const links = freePeopleLinks(r.name, r.city || "", r.state || "");
+              return <div style={{ fontSize: 11, color: C.muted, marginTop: 9, lineHeight: 1.5 }}>🌳 <strong style={{ color: C.green }}>Family & relatives, free:</strong> {links.slice(0, 2).map(([lab, url], j) => <span key={lab}>{j > 0 ? " · " : " "}<a href={url} target="_blank" rel="noreferrer" style={{ color: C.gold, textDecoration: "none" }}>{lab} ↗</a></span>)} <span style={{ color: C.muted }}>— these list {r.name.split(/[ ,]/)[0] || "the owner"}’s relatives & associates. Or 👥 “Who’s behind / relatives” above for an AI sweep.</span></div>;
+            })()}
           </>
         )}
         {altBlock}
@@ -5590,6 +5599,18 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
               {skip.entityLowConfidence && (
                 <div style={{ fontSize: 11.5, color: C.red, lineHeight: 1.5, marginBottom: 9, padding: "7px 10px", background: `${C.red}12`, border: `1px solid ${C.red}44`, borderRadius: 7 }}>
                   ⚠ <strong>Likely the wrong party.</strong> This is an LLC and none of these names match the owner — they’re probably the registered agent, office staff, or a shared-suite neighbor at the entity’s mailing address, not the principal. Don’t dial these blind. Use <strong style={{ color: C.ivory }}>👥 Who’s behind this LLC</strong> above to get the actual principal, then trace that person.
+                </div>
+              )}
+              {/* Name-match verdict banner — the defense against "random names": say plainly
+                  whether a returned person actually matches the owner we're looking for. */}
+              {!skip.business && skip.ownerMatch && skip.ownerMatch.score >= 55 && (
+                <div style={{ fontSize: 11.5, color: C.green, lineHeight: 1.5, marginBottom: 9, padding: "7px 10px", background: `${C.green}10`, border: `1px solid ${C.green}44`, borderRadius: 7 }}>
+                  ✓ <strong>Name match: {skip.ownerMatch.name}</strong> {skip.ownerMatch.score >= 80 ? "— strong match to" : "— likely"} the owner{skip.ownerName ? ` of record (${skip.ownerName})` : ""}{skip.ownerMatch.reasons?.length ? ` · matched on ${skip.ownerMatch.reasons.join(" + ")}` : ""}. These numbers most likely reach the right person.
+                </div>
+              )}
+              {!skip.business && skip.weakMatch && (
+                <div style={{ fontSize: 11.5, color: C.amber, lineHeight: 1.5, marginBottom: 9, padding: "7px 10px", background: `${C.amber}12`, border: `1px solid ${C.amber}55`, borderRadius: 7 }}>
+                  ⚠ <strong>No strong name match to {skip.ownerName || "the owner"}.</strong> The returned people don’t clearly match the owner of record — they may be prior residents, relatives, or occupants at this address, not the owner. Verify the name before you dial. Each result below shows how well it matches.
                 </div>
               )}
               {(() => {
@@ -5621,11 +5642,17 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
                   <div key={i} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: i < skip.persons.length - 1 ? `1px solid ${C.line}` : "none" }}>
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: p.isEntity ? C.muted : C.ivory, marginBottom: 3 }}>
                       {p.name || "Unnamed contact"}
-                      {p.matchesOwner && <span className="mono" title="Name matches the owner of record — most likely the right party." style={{ fontSize: 9, color: C.green, marginLeft: 6, border: `1px solid ${C.green}`, borderRadius: 4, padding: "0 5px" }}>✓ OWNER MATCH</span>}
+                      {!p.isEntity && (() => {
+                        // Graded name-match badge, so a random occupant can't masquerade as the owner.
+                        const lab = p.matchLabel, sc = p.matchScore;
+                        const cfg = lab === "strong" ? [C.green, "✓ STRONG MATCH"] : lab === "likely" ? [C.green, "✓ LIKELY"] : lab === "weak" ? [C.amber, "~ WEAK MATCH"] : [C.muted, "✗ NOT MATCHED"];
+                        const why = (p.matchReasons && p.matchReasons.length ? `Matched on ${p.matchReasons.join(" + ")}. ` : "No name overlap with the owner. ") + `Score ${sc}/100 vs the owner of record.`;
+                        return <span className="mono" title={why} style={{ fontSize: 9, color: cfg[0], marginLeft: 6, border: `1px solid ${cfg[0]}`, borderRadius: 4, padding: "0 5px" }}>{cfg[1]}</span>;
+                      })()}
                       {p.isEntity && <span className="mono" title="A company name, not an individual — likely the owner's corporate web. Verify." style={{ fontSize: 9, color: C.amber, marginLeft: 6, border: `1px solid ${C.amber}`, borderRadius: 4, padding: "0 5px" }}>ENTITY ⚠</span>}
                     </div>
                     <ContactList phones={p.phones} emails={p.emails} />
-                    <RelativeList relatives={p.relatives} />
+                    <RelativeList relatives={p.relatives} loc={{ city: r.city, state: r.state }} />
                   </div>
                 ))
               ) : (
@@ -5640,7 +5667,7 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
                 {skip.tracedAddress === "property"
                   ? <>Traced on the <span style={{ color: C.amber }}>property address</span> (no owner mailing on file) — results may be building occupants; verify. </>
                   : <>Traced on the owner’s mailing address. </>}
-                <span style={{ color: C.green }}>✓ OWNER MATCH</span> = name matches the owner of record (most likely right). <span style={{ color: C.red }}>DNC</span> = Do-Not-Call — prefer email there.
+                Badges grade each result against the owner of record: <span style={{ color: C.green }}>✓ STRONG/LIKELY</span> = the name lines up (right party); <span style={{ color: C.amber }}>~ WEAK</span> = last name only (owner or a relative); <span style={{ color: C.muted }}>✗ NOT MATCHED</span> = a different name (probably not the owner). <span style={{ color: C.red }}>DNC</span> = Do-Not-Call — prefer email there.
               </div>
             </>
           ) : (

@@ -155,10 +155,6 @@ function personEmails(p) {
   }
   return out;
 }
-function nameTokens(s) {
-  return clean(s).toUpperCase().replace(/[^A-Z\s]/g, " ").split(/\s+/)
-    .filter((t) => t.length > 1 && !["LLC", "INC", "CORP", "THE", "AND", "CO", "LP"].includes(t));
-}
 
 // Relatives / associates. Providers that expose them use varying keys (relatives,
 // associates, related_persons, possible_relatives, associatedPeople, household…), each
@@ -184,9 +180,56 @@ function personRelatives(p) {
   }
   return out.slice(0, 8);
 }
+// Common nickname ↔ formal name pairs, so "Dave"/"David" or "Bob"/"Robert" match.
+const NICKNAMES = [["ROBERT", "BOB", "ROB", "BOBBY"], ["WILLIAM", "BILL", "WILL", "BILLY"], ["DAVID", "DAVE"], ["MICHAEL", "MIKE"], ["JAMES", "JIM", "JIMMY", "JAMIE"], ["RICHARD", "RICH", "RICK", "DICK"], ["THOMAS", "TOM", "TOMMY"], ["CHRISTOPHER", "CHRIS"], ["STEVEN", "STEVE", "STEPHEN"], ["DANIEL", "DAN", "DANNY"], ["JOSEPH", "JOE", "JOEY"], ["ANTHONY", "TONY"], ["EDWARD", "ED", "EDDIE", "TED"], ["BENJAMIN", "BEN"], ["ALEXANDER", "ALEX"], ["NICHOLAS", "NICK"], ["SAMUEL", "SAM"], ["ANDREW", "ANDY", "DREW"], ["MATTHEW", "MATT"], ["GREGORY", "GREG"], ["JEFFREY", "JEFF"], ["KENNETH", "KEN", "KENNY"], ["RONALD", "RON", "RONNIE"], ["LAWRENCE", "LARRY"], ["CHARLES", "CHARLIE", "CHUCK"], ["ELIZABETH", "LIZ", "BETH", "BETTY"], ["MARGARET", "MEG", "PEGGY", "MAGGIE"], ["PATRICIA", "PAT", "PATTY", "TRICIA"], ["KATHERINE", "KATE", "KATHY", "KATIE"], ["JENNIFER", "JEN", "JENNY"], ["DEBORAH", "DEB", "DEBBIE"], ["SUSAN", "SUE"], ["JOSHUA", "JOSH"], ["ZACHARY", "ZACH"], ["TIMOTHY", "TIM"], ["FREDERICK", "FRED"], ["THEODORE", "TED", "TEDDY"]];
+const nickKey = {};
+for (const grp of NICKNAMES) for (const n of grp) (nickKey[n] = nickKey[n] || []).push(...grp);
+const firstNameEq = (a, b) => {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if ((nickKey[a] || []).includes(b) || (nickKey[b] || []).includes(a)) return true; // nickname pair
+  const [s, l] = a.length <= b.length ? [a, b] : [b, a];
+  return s.length >= 3 && l.startsWith(s); // Chris/Christopher-style prefix
+};
+
+const NAME_STOP = new Set(["LLC", "INC", "CORP", "THE", "AND", "CO", "LP", "LLP", "JR", "SR", "II", "III", "IV", "MR", "MRS", "MS", "DR"]);
+const nameToks = (s) => clean(s).toUpperCase().replace(/[^A-Z, ]/g, " ").replace(/,/g, " ").split(/\s+/).filter((w) => w.length > 1 && !NAME_STOP.has(w));
+
+// Score how strongly a returned person's name matches the OWNER we're tracing, 0–100.
+// The core defense against the "random names" problem: a provider returns EVERY person
+// tied to an address (prior residents, relatives, occupants), so we must say which one is
+// actually the owner — and flag when NONE is a real match.
+//
+// ORDER-INDEPENDENT on the owner side: county owners are "LAST FIRST MIDDLE" (DARBY JOHN),
+// deed grantees vary, but the PROVIDER's person name is reliably "First Last". So we take
+// the person's first/last and test them for membership anywhere in the owner's tokens —
+// never assuming the owner's word order.
+function nameMatchScore(ownerName, personName) {
+  const oTok = nameToks(ownerName);
+  const pTok = nameToks(personName);
+  if (!oTok.length || !pTok.length) return { score: 0, label: "unknown", reasons: [] };
+  const pFirst = pTok[0], pLast = pTok.length > 1 ? pTok[pTok.length - 1] : "";
+  const reasons = [];
+  let score = 0;
+  const lastMatch = pLast && oTok.includes(pLast);
+  if (lastMatch) { score += 45; reasons.push("last name"); }
+  // First name (order-independent): exact/nickname beats a bare shared initial.
+  const firstStrong = oTok.some((t) => t !== pLast && firstNameEq(t, pFirst));
+  const firstInitial = !firstStrong && oTok.some((t) => t !== pLast && t[0] === pFirst[0]);
+  if (firstStrong) { score += 45; reasons.push("first name"); }
+  else if (firstInitial) { score += 12; reasons.push("first initial only"); }
+  // Extra shared token (a middle name lining up) — a little more confidence.
+  const shared = pTok.filter((t) => t !== pFirst && t !== pLast && oTok.includes(t)).length;
+  if (shared) { score += 8; reasons.push("middle name"); }
+  score = Math.min(100, score);
+  // strong = both names line up (this IS the owner); likely = last + partial first;
+  // weak = last-name-only (owner OR a relative); none = nothing solid.
+  const label = score >= 80 ? "strong" : score >= 55 ? "likely" : score >= 25 ? "weak" : "none";
+  return { score, label, reasons };
+}
+
 function extractPersons(json, ownerName) {
   const arr = findPersonsArray(json, 0) || [];
-  const ownerToks = nameTokens(ownerName);
   const seen = new Set(), out = [];
   for (const p of arr) {
     const name = personName(p);
@@ -200,15 +243,20 @@ function extractPersons(json, ownerName) {
     // A "person" whose name reads as a company is the data broker echoing the owner's
     // corporate web (common for institutional owners like Thor/REITs), NOT a real person.
     const isEntity = isCompany(name, "");
-    // Does this person's name overlap the OWNER's name? Only meaningful for an individual
-    // owner — tells the user WHICH returned person is actually the owner vs. an occupant.
-    const ptoks = nameTokens(name);
-    const overlap = ownerToks.filter((t) => ptoks.includes(t)).length;
-    const matchesOwner = !isEntity && ownerToks.length >= 2 && overlap >= 2;
-    out.push({ name, isEntity, matchesOwner, phones, emails, relatives });
+    // Graded name match against the OWNER of record — tells the user WHICH returned person
+    // is actually the owner vs. a random occupant, and how confident that is.
+    const m = isEntity ? { score: 0, label: "entity", reasons: [] } : nameMatchScore(ownerName, name);
+    out.push({
+      name, isEntity,
+      matchesOwner: m.score >= 55,          // kept for existing callers
+      matchScore: m.score, matchLabel: m.label, matchReasons: m.reasons,
+      phones, emails, relatives,
+    });
   }
-  // Owner-name matches first, then individuals, then entities.
-  out.sort((a, b) => (b.matchesOwner ? 1 : 0) - (a.matchesOwner ? 1 : 0) || (a.isEntity ? 1 : 0) - (b.isEntity ? 1 : 0));
+  // Best name match first (owner most likely), individuals over entities, then by score.
+  out.sort((a, b) =>
+    (a.isEntity ? 1 : 0) - (b.isEntity ? 1 : 0) ||
+    b.matchScore - a.matchScore);
   return out.slice(0, 8);
 }
 
@@ -358,6 +406,15 @@ export default async function handler(req, res) {
     // so the UI can warn instead of presenting a confident wrong number.
     const entityLowConfidence = business && phones.length + emails.length > 0 && !persons.some((p) => p.matchesOwner);
 
+    // Best name-match among the returned people, so the UI can lead with the confidence.
+    const indiv = persons.filter((p) => !p.isEntity);
+    const best = indiv.reduce((b, p) => (!b || p.matchScore > b.matchScore ? p : b), null);
+    const ownerMatch = best ? { name: best.name, score: best.matchScore, label: best.matchLabel, reasons: best.matchReasons } : null;
+    // The "random names" guard for INDIVIDUAL owners: something came back, but no returned
+    // person is even a likely match to the owner → these are probably prior residents /
+    // occupants at the address, not the owner. Tell the UI to warn rather than trust them.
+    const weakMatch = !business && (phones.length + emails.length > 0) && (!best || best.matchScore < 55);
+
     return res.status(200).json({
       provider: provider.label,
       business,
@@ -366,6 +423,9 @@ export default async function handler(req, res) {
       phones,
       emails,
       entityLowConfidence,
+      ownerMatch,
+      weakMatch,
+      ownerName,
       matched: phones.length > 0 || emails.length > 0,
       // est. cost only when something matched (providers bill per hit)
       cost: phones.length || emails.length ? provider.estCost(business) : 0,

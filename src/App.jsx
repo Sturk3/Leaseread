@@ -4696,12 +4696,17 @@ function StorefrontPhoto({ r, pw }) {
           const d = 0.0009, bbox = `${lon - d},${lat - d},${lon + d},${lat + d}`;
           const streetmap = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox=${bbox}&bboxSR=4326&imageSR=4326&size=640,300&format=png&f=image`;
           return (
-            <a href={pano} target="_blank" rel="noreferrer" style={{ display: "block", position: "relative" }}>
-              <img src={streetmap} alt="Street map of the property location" loading="lazy" style={frame} />
-              <svg width="28" height="36" viewBox="0 0 28 36" aria-hidden="true" style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-100%)", pointerEvents: "none", filter: "drop-shadow(0 1px 2px rgba(0,0,0,.5))" }}>
+            // No API key needed: click through to Google's REAL storefront photo (opens in
+            // a tab). The map shows the block; the overlay makes the one-click intent clear.
+            <a href={pano} target="_blank" rel="noreferrer" title="Open the real storefront in Google Street View" style={{ display: "block", position: "relative" }}>
+              <img src={streetmap} alt="Street map of the property location" loading="lazy" style={{ ...frame, filter: "brightness(0.7)" }} />
+              <svg width="28" height="36" viewBox="0 0 28 36" aria-hidden="true" style={{ position: "absolute", left: "50%", top: "42%", transform: "translate(-50%,-100%)", pointerEvents: "none", filter: "drop-shadow(0 1px 2px rgba(0,0,0,.5))" }}>
                 <path d="M14 0C6.8 0 1 5.8 1 13c0 9.5 13 23 13 23s13-13.5 13-23C27 5.8 21.2 0 14 0z" fill={C.gold} stroke="#fff" strokeWidth="2" />
                 <circle cx="14" cy="13" r="4.5" fill="#fff" />
               </svg>
+              <div className="mono" style={{ position: "absolute", left: 0, right: 0, bottom: 0, textAlign: "center", background: "linear-gradient(transparent, rgba(0,0,0,0.7))", color: "#fff", fontSize: 12, padding: "22px 8px 10px" }}>
+                📷 See the storefront in Google Street View ↗ <span style={{ color: C.muted, fontSize: 10 }}>(free, no key)</span>
+              </div>
             </a>
           );
         })()}

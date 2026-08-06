@@ -892,11 +892,11 @@ const SCOUT_SPEND_KEY = "fr_scout_spend_v1", SCOUT_CAP_KEY = "fr_scout_cap_v1", 
 // Per deep web-research run. Bumped 0.15 -> 0.30 after depth was raised (up to 8 web
 // searches + longer briefs), so the monthly spend tracker stays roughly honest.
 const WEB_RUN_COST = 0.30;
-const MAX_AGENT_STEPS = 10; // cap tool steps per request. The system prompt tells Scout to chain
-// search -> intel/history/foot_traffic -> portfolio -> web_research and "go deep"; 6 cut routine
-// dossiers off mid-chain (esp. when calls run one-at-a-time). Free tools dominate, so 10 buys depth
-// without much cost; web calls are still gated by the prompt.
-const DEEP_RESEARCH_STEPS = 24; // higher budget in Deep Research mode (opt-in, exhaustive)
+const MAX_AGENT_STEPS = 16; // cap tool steps per request (raised 10 → 16 for area sweeps: a
+// corridor query needs search + per-lot intel/history on the top targets + contact chains, and
+// 10 cut sweeps off mid-enrichment. Free tools dominate, so the extra steps buy coverage cheaply;
+// web calls are still governed by the prompt).
+const DEEP_RESEARCH_STEPS = 32; // higher budget in Deep Research mode (opt-in, exhaustive)
 // Final guard on how much of a (already array-bounded by shapeResult) tool result the model sees.
 // Was a blind 14k .slice() that could cut mid-JSON and silently drop whole layers of rich free
 // intel; raised + made truncation explicit so the model never reasons over malformed/half-dropped data.
@@ -967,16 +967,20 @@ function shapeWebResult(data) {
 // model never reasons over (coords, document ids, etc.).
 function shapeResult(name, data) {
   if (name === "search_properties") {
-    const leads = (data.leads || []).slice(0, 15).map(pickLeadFields);
+    // 75 rows (was 15): sourcing sweeps are the product — when the user asks for an AREA,
+    // Scout must see the whole roster, not a sample. Rows are compact (pickLeadFields), and
+    // prompt caching absorbs most of the re-send cost across turns.
+    const leads = (data.leads || []).slice(0, 75).map(pickLeadFields);
     const n = leads.length;
-    return { forModel: { count: data.counts?.deals ?? n, center: data.center, leads }, uiSummary: `${n} propert${n === 1 ? "y" : "ies"}` };
+    const total = data.counts?.deals ?? n;
+    return { forModel: { count: total, center: data.center, leads, ...(total > n ? { note: `showing ${n} of ${total} — tell the user the true total and offer the Sourcing tab CSV for the full list` } : {}) }, uiSummary: `${n} propert${n === 1 ? "y" : "ies"}` };
   }
   if (name === "retail_availability") {
     if (data.corridors) return { forModel: data, uiSummary: data.no_match ? "no corridor match — returned the configured list" : `${data.corridors.length} corridor${data.corridors.length === 1 ? "" : "s"} configured` };
     // The engine can emit hundreds of ranked rows; the model only needs the head of the
     // ranking (it's already sorted) + the coverage report to caveat thin data honestly.
     const all = data.rows || [];
-    const rows = all.slice(0, 20);
+    const rows = all.slice(0, 50); // was 20 — corridor sweeps deserve the full ranked roster
     return {
       forModel: {
         corridor: data.corridor, candidate_count: data.candidate_count,
@@ -987,27 +991,27 @@ function shapeResult(name, data) {
     };
   }
   if (name === "search_ct_properties" || name === "search_hamptons_properties" || name === "search_ma_properties") {
-    const props = (data.properties || []).slice(0, 30);
+    const props = (data.properties || []).slice(0, 75);
     return { forModel: { count: data.count, town: data.town, note: data.note, properties: props }, uiSummary: `${data.count || 0} in ${data.town || "area"}` };
   }
   if (name === "search_nashville_properties") {
-    const props = (data.properties || []).slice(0, 30);
+    const props = (data.properties || []).slice(0, 75);
     return { forModel: { count: data.count, county: data.county, note: data.note, properties: props }, uiSummary: `${data.count || 0} in Nashville` };
   }
   if (name === "search_charleston_properties") {
-    const props = (data.properties || []).slice(0, 30);
+    const props = (data.properties || []).slice(0, 75);
     return { forModel: { count: data.count, county: data.county, note: data.note, properties: props }, uiSummary: `${data.count || 0} in Charleston` };
   }
   if (name === "search_savannah_properties") {
-    const props = (data.properties || []).slice(0, 30);
+    const props = (data.properties || []).slice(0, 75);
     return { forModel: { count: data.count, county: data.county, note: data.note, properties: props }, uiSummary: `${data.count || 0} in Savannah` };
   }
   if (name === "search_teton_properties") {
-    const props = (data.properties || []).slice(0, 30);
+    const props = (data.properties || []).slice(0, 75);
     return { forModel: { count: data.count, county: data.county, note: data.note, properties: props }, uiSummary: `${data.count || 0} in Jackson Hole` };
   }
   if (name === "search_sf_properties") {
-    const props = (data.properties || []).slice(0, 30);
+    const props = (data.properties || []).slice(0, 75);
     return { forModel: { count: data.count, neighborhood: data.neighborhood, note: data.note, properties: props }, uiSummary: `${data.count || 0} in SF` };
   }
   if (name === "sf_property_intel") {

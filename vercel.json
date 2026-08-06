@@ -71,6 +71,9 @@
     },
     "api/health.js": {
       "maxDuration": 10
+    },
+    "api/mcp.js": {
+      "maxDuration": 60
     }
   }
 }

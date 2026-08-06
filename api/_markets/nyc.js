@@ -96,6 +96,30 @@ function absenteeFlag(state, zip) {
 
 const sodaQuote = (vals) => vals.map((v) => "'" + String(v).replace(/'/g, "''") + "'").join(", ");
 const STOREFRONT = process.env.STOREFRONT_DATASET || "92iy-9c3n"; // LL157 storefront registry — owner-reported vacancy by BBL
+
+// Owners who effectively never sell. Kept in the results but LABELLED, so a sweep shows
+// the whole block and the user can see at a glance which rows aren't worth a call.
+const NOT_ACQUIRABLE_NAMES = [
+  "OWNERS CORP", "TENANTS CORP", "APARTMENT CORP", "HOUSING DEVELOPMENT FUND", "HDFC", "CONDOMINIUM", "CONDO ASSN", "HOMEOWNERS",
+  "UNIVERSITY", "COLLEGE", "SCHOOL", "ACADEMY", "TRUSTEES", "CHURCH", "SYNAGOGUE", "ARCHDIOCESE", "DIOCESE",
+  "HOSPITAL", "MEDICAL CENTER", "MUSEUM", "LIBRARY", "YMCA", "YWCA",
+  "CITY OF NEW YORK", "NYC ", "HOUSING AUTHORITY", "DEPT OF", "DEPARTMENT OF", "BOARD OF EDUCATION",
+  "STATE OF NEW YORK", "UNITED STATES", "PORT AUTHORITY", "TRANSIT AUTHORITY", "METROPOLITAN TRANSPORTATION",
+];
+// → { owner_class, sale_likelihood, sale_note } on every lead.
+function classifyOwner(name, ownertype) {
+  const n = String(name || "").toUpperCase();
+  const pub = ["CITY OF NEW YORK", "NYC ", "HOUSING AUTHORITY", "DEPT OF", "DEPARTMENT OF", "BOARD OF EDUCATION", "STATE OF NEW YORK", "UNITED STATES", "PORT AUTHORITY", "TRANSIT AUTHORITY", "METROPOLITAN TRANSPORTATION"];
+  const inst = ["UNIVERSITY", "COLLEGE", "SCHOOL", "ACADEMY", "TRUSTEES", "CHURCH", "SYNAGOGUE", "ARCHDIOCESE", "DIOCESE", "HOSPITAL", "MEDICAL CENTER", "MUSEUM", "LIBRARY", "YMCA", "YWCA"];
+  const coop = ["OWNERS CORP", "TENANTS CORP", "APARTMENT CORP", "HOUSING DEVELOPMENT FUND", "HDFC", "CONDOMINIUM", "CONDO ASSN", "HOMEOWNERS"];
+  if (pub.some((x) => n.includes(x)) || ["C", "M", "O"].includes(String(ownertype || "").trim()))
+    return { owner_class: "public", sale_likelihood: "none", sale_note: "Government / public-authority owned — zero chance of selling" };
+  if (inst.some((x) => n.includes(x)) || String(ownertype || "").trim() === "X")
+    return { owner_class: "institution", sale_likelihood: "none", sale_note: "Institutional owner (university / church / hospital / museum) — effectively zero chance of selling" };
+  if (coop.some((x) => n.includes(x)))
+    return { owner_class: "coop", sale_likelihood: "none", sale_note: "Co-op / condo ownership corporation — owned by shareholders, no single seller to negotiate with" };
+  return { owner_class: "private", sale_likelihood: "possible", sale_note: "" };
+}
 // Escape user text for a SoQL upper(...) like '%...%' clause.
 const likeEsc = (s) => String(s).toUpperCase().replace(/'/g, "''");
 // Whole-street match: treats the input as a complete street token, so "9 STREET"
@@ -396,21 +420,13 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
   // O=other public authority, X=fully tax-exempt (universities, churches, hospitals);
   // private lots are 'P' or blank. Co-op / condo ownership corporations are excluded by
   // name (a co-op is owned by its shareholders — there's no single seller to call).
-  // NOTE: ownertype alone is NOT enough — NYU's lots came back with a private code, so
-  // institutions are also excluded by NAME (verified against a live Canal–17th run).
-  if (targetsOnly !== false) {
+  // Owner class is FLAGGED, not filtered, by default (see classifyOwner below): an
+  // institution like NYU still shows, labelled "zero chance of selling", so the user
+  // sees the whole block and knows why a row isn't worth a call. targetsOnly:true is
+  // the opt-in hard filter for when they want those rows gone entirely.
+  if (targetsOnly === true) {
     where.push("(ownertype is null OR ownertype in ('P',' ',''))");
-    const NOT_ACQUIRABLE = [
-      // co-op / condo ownership corps — owned by shareholders, no single seller
-      "OWNERS CORP", "TENANTS CORP", "APARTMENT CORP", "HOUSING DEVELOPMENT FUND", "HDFC", "CONDOMINIUM", "CONDO ASSN", "HOMEOWNERS",
-      // institutions
-      "UNIVERSITY", "COLLEGE", "SCHOOL", "ACADEMY", "TRUSTEES", "CHURCH", "SYNAGOGUE", "ARCHDIOCESE", "DIOCESE",
-      "HOSPITAL", "MEDICAL CENTER", "MUSEUM", "LIBRARY", "YMCA", "YWCA",
-      // public bodies
-      "CITY OF NEW YORK", "NYC ", "HOUSING AUTHORITY", "DEPT OF", "DEPARTMENT OF", "BOARD OF EDUCATION",
-      "STATE OF NEW YORK", "UNITED STATES", "PORT AUTHORITY", "TRANSIT AUTHORITY", "METROPOLITAN TRANSPORTATION",
-    ];
-    for (const bad of NOT_ACQUIRABLE) where.push(`upper(ownername) not like '%${bad}%'`);
+    for (const bad of NOT_ACQUIRABLE_NAMES) where.push(`upper(ownername) not like '%${bad}%'`);
   }
   if (minSqft) where.push(`bldgarea>=${Number(minSqft)}`);
   if (maxSqft) where.push(`(bldgarea<=${Number(maxSqft)} AND bldgarea>0)`);
@@ -476,6 +492,7 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
       borough: PLUTO_BOROUGH_NAME[clean(row.borough)] || clean(row.borough),
       address: clean(row.address), block: clean(row.block), lot: clean(row.lot),
       amount: toNum(row.assesstot), date: "", lat, lon, distance, ...devFields(row),
+      ...classifyOwner(row.ownername, row.ownertype), // owner_class / sale_likelihood / sale_note
     });
     const owner = clean(row.ownername);
     if (owner) {
@@ -564,6 +581,7 @@ function buildLeads(deals, contacts) {
       frontage_ft: d.frontage_ft ?? null, num_floors: d.num_floors ?? null, year_built: d.year_built ?? null, zoning: d.zoning ?? null,
       overlay: d.overlay ?? null, special_district: d.special_district ?? null, landmark: d.landmark ?? null, hist_district: d.hist_district ?? null,
       lat: d.lat ?? null, lon: d.lon ?? null, distance: d.distance ?? null, pinned: d.pinned || false,
+      owner_class: d.owner_class || "private", sale_likelihood: d.sale_likelihood || "possible", sale_note: d.sale_note || "",
       name: c.name, role: c.role, entity_type: c.entity_type || "unknown",
       first_name: c.first_name || "", last_name: c.last_name || "",
       contact_address: c.address || "", city: c.city || "", state: c.state || "", zip: c.zip || "",
@@ -825,6 +843,13 @@ export async function search(q) {
     if (devOnly) leads = leads.filter((l) => l.underbuilt || l.pinned);
     const minB = Number(minBuildable);
     if (Number.isFinite(minB) && minB > 0) leads = leads.filter((l) => (l.buildable_sqft || 0) >= minB || l.pinned);
+
+    // HARD SIZE BOUNDS — a requested square-footage range is absolute. The SQL filters
+    // already bound it, but the anchor/pinned lot and any non-PLUTO row bypass those, so
+    // re-assert here: nothing outside the range survives, no exceptions.
+    const inRange = (v, lo, hi) => { const n = Number(v); if (!Number.isFinite(n) || n <= 0) return false; if (lo && n < Number(lo)) return false; if (hi && n > Number(hi)) return false; return true; };
+    if (minOfficeSqft || maxOfficeSqft) leads = leads.filter((l) => inRange(l.office_sqft, minOfficeSqft, maxOfficeSqft));
+    if (minSqft || maxSqft) leads = leads.filter((l) => inRange(l.bldg_sqft, minSqft, maxSqft));
 
     // VACANT STOREFRONTS (LL157 registry): keep only lots whose LATEST storefront filing
     // reports a vacant unit. Batched bbl-in join against the registry; owner-reported

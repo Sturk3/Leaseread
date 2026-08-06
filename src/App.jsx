@@ -877,6 +877,7 @@ function pickLeadFields(r) {
     contact_address: r.contact_address, city: r.city, state: r.state, zip: r.zip,
     years_owned: r.years_owned, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price,
     absentee: r.absentee || null, tax_lien: r.tax_lien || false, buildable_sqft: r.buildable_sqft || null,
+    ...(r.sale_likelihood === "none" ? { sale_likelihood: "none", sale_note: r.sale_note } : {}),
     ...(r.storefront_vacant ? { storefront_vacant: true, vacancy_year: r.vacancy_year || null } : {}),
     // Areas: retail AND office AND total building — an office search must be able to show
     // office SF (leaving these out exported blank columns on a real sheet).
@@ -3584,6 +3585,7 @@ const SHEET_COLUMNS = [
   { g: "signals", h: "Tax lien", get: (r) => (r.tax_lien ? "YES" : "") },
   { g: "signals", h: "Vacant storefront", get: (r) => (r.storefront_vacant ? `reported ${r.vacancy_year || ""}` : "") },
   { g: "signals", h: "Unused buildable SF", get: (r) => r.buildable_sqft },
+  { g: "signals", h: "Sale likelihood", get: (r) => (r.sale_likelihood === "none" ? "NONE — " + (r.sale_note || "not acquirable") : "possible") },
   { g: "signals", h: "Owner portfolio (in results)", get: (r) => r.portfolio_count },
   { g: "ids", h: "Block", get: (r) => r.block },
   { g: "ids", h: "Lot", get: (r) => r.lot },
@@ -3990,14 +3992,14 @@ function MapView({ pw, config, onSourced, goSourcing }) {
     lg.clearLayers();
     if (tempLayerRef.current) tempLayerRef.current.clearLayers(); // stale highlight ring goes with the old set
     for (const r of leads) {
-      const pin = !!r.pinned, vacHit = !!r.storefront_vacant;
+      const pin = !!r.pinned, vacHit = !!r.storefront_vacant, dead = r.sale_likelihood === "none";
       const cm = L.circleMarker([r.lat, r.lon], {
-        radius: pin ? 9 : vacHit ? 7 : 6, weight: 2,
-        color: vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#8b80f9",
-        fillColor: vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#26224a", fillOpacity: 0.9,
+        radius: pin ? 9 : vacHit ? 7 : dead ? 5 : 6, weight: 2,
+        color: dead ? "#9a95ad" : vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#8b80f9",
+        fillColor: dead ? "#c9c5d6" : vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#26224a", fillOpacity: dead ? 0.5 : 0.9,
         bubblingMouseEvents: false, // pin click must NOT also fire the map's click (it would re-search at the pin and wipe the result set)
       });
-      cm.bindTooltip(`${r.address || "?"}${r.name ? ` — ${r.name}` : ""}${vacHit ? ` · 🚪 VACANT (reported ${r.vacancy_year || ""})` : ""}`, { direction: "top" });
+      cm.bindTooltip(`${r.address || "?"}${r.name ? ` — ${r.name}` : ""}${vacHit ? ` · 🚪 VACANT (reported ${r.vacancy_year || ""})` : ""}${dead ? ` · ⛔ ${r.sale_note || "won't sell"}` : ""}`, { direction: "top" });
       cm.on("click", () => setSel(r));
       cm.addTo(lg);
     }

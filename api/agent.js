@@ -22,10 +22,12 @@
 const AGENT_MODEL = process.env.AGENT_MODEL || "claude-opus-5";
 // Deep Research: same model, cranked to xhigh effort (below) for the hardest synthesis runs.
 const AGENT_MODEL_DEEP = process.env.AGENT_MODEL_DEEP || "claude-opus-5";
-// Adaptive thinking spends tokens that count toward this cap, and at high/xhigh effort Opus 5
-// thinks more — a tight ceiling truncated synthesis turns. 20000 leaves headroom for thinking +
-// a full report while staying inside vercel.json's 300s budget for this function. Env-overridable.
-const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 20000;
+// Adaptive thinking spends tokens that count toward this cap. 12000 (down from 20000) is the
+// timeout-and-cost guard: Opus 5 generates ~40-60 tok/s, so a full-cap turn stays inside the
+// function's time budget instead of dying at the Vercel limit mid-synthesis (a timed-out turn
+// bills its tokens and returns NOTHING — the worst spend of all). Also bounds the worst-case
+// cost of any single turn to ~$0.30. Env-overridable via AGENT_MAX_TOKENS.
+const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 12000;
 // Adaptive thinking sharpens the JUDGEMENT part of the answer — ranking targets, weighing motivation
 // signals, deciding which tool to call next — which is exactly where a flat no-thinking proxy was weakest.
 // "adaptive" lets Claude self-moderate (little thinking on routine tool-planning turns, more on

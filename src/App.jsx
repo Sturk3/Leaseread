@@ -395,7 +395,7 @@ export default function App() {
         {view === "radar" && <LeaseRadar pw={pw} />}
 
         {view === "pipeline" && <Pipeline pw={pw} />}
-        {view === "skiptrace" && <><PropertySharkImport /><ManualSkipTrace pw={pw} /></>}
+        {view === "skiptrace" && <><PropertySharkImport pw={pw} /><ManualSkipTrace pw={pw} /></>}
 
         {view === "nda" && <NDAReview pw={pw} />}
 
@@ -1248,6 +1248,8 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
     if (route.paid) {
       // PropertyShark pairing: if the firm's imported contact file already covers this
       // owner/property, serve it FREE — never pay to re-find a number you already own.
+      // (Sync the team's shared server file into this browser first, once per session.)
+      await psEnsureSynced(pw);
       const ps = psLookup(inputArgs);
       if (ps) {
         return {
@@ -3196,6 +3198,30 @@ const psNorm = (s) =>
 function psStore() { try { const o = JSON.parse(localStorage.getItem(PS_KEY) || "null"); return o && Array.isArray(o.rows) ? o : { rows: [], imported: null }; } catch { return { rows: [], imported: null }; } }
 function psSave(store) { try { localStorage.setItem(PS_KEY, JSON.stringify(store)); } catch {} }
 
+// Team-wide sync: the imported file also lives server-side (/api/contacts, Vercel KV) so
+// whoever imports it, EVERY browser on FRONTAGE gets the same numbers. Pulled once per
+// session and merged into the local cache (lookups stay synchronous); returns the server
+// response so the import panel can show shared/local status. Safe no-op when the shared
+// store isn't provisioned or the request fails — local contacts keep working.
+let _psSyncPromise = null;
+function psEnsureSynced(pw) {
+  if (!_psSyncPromise) {
+    _psSyncPromise = (async () => {
+      try {
+        const d = await postJSON("/api/contacts", { password: pw, action: "get" });
+        if (d && Array.isArray(d.rows) && d.rows.length) {
+          const cur = psStore();
+          const byKey = new Map(cur.rows.map((r) => [`${r.addrKey}|${r.ownerKey}`, r]));
+          for (const r of d.rows) byKey.set(`${r.addrKey}|${r.ownerKey}`, r);
+          psSave({ rows: [...byKey.values()], imported: d.imported || cur.imported });
+        }
+        return d || null;
+      } catch { return null; }
+    })();
+  }
+  return _psSyncPromise;
+}
+
 // Minimal CSV parser (quoted fields, escaped quotes, CR/LF) — enough for the exports.
 function parseCSV(text) {
   const rows = []; let row = [], field = "", q = false;
@@ -3287,11 +3313,14 @@ function psAsSkipResult(hit) {
 
 // The import panel (Skip Trace tab): paste or upload the PropertyShark owner-list CSV.
 // Re-imports merge by address+owner, so monthly exports accumulate instead of duplicating.
-function PropertySharkImport() {
+function PropertySharkImport({ pw }) {
   const [store, setStore] = useState(psStore());
   const [text, setText] = useState("");
   const [msg, setMsg] = useState("");
-  const doImport = (raw) => {
+  const [shared, setShared] = useState(null); // null=checking · true=team-wide store live · false=local-only
+  // Pull the team's shared file on open so this browser shows what everyone has.
+  useEffect(() => { psEnsureSynced(pw).then((d) => { setStore(psStore()); setShared(d ? !!d.shared : false); }); /* eslint-disable-next-line */ }, []);
+  const doImport = async (raw) => {
     const { rows, error } = parsePropertySharkCSV(raw);
     if (error) { setMsg(`⚠ ${error}`); return; }
     const cur = psStore();
@@ -3299,7 +3328,14 @@ function PropertySharkImport() {
     for (const r of rows) byKey.set(`${r.addrKey}|${r.ownerKey}`, r);
     const next = { rows: [...byKey.values()], imported: new Date().toISOString().slice(0, 10) };
     psSave(next); setStore(next); setText("");
-    setMsg(`✓ Imported ${rows.length} contact rows — ${next.rows.length} total on file. Reveals now check this file first ($0 on a match).`);
+    // Push to the shared server store so the whole team gets the same numbers.
+    let sharedNote = "";
+    try {
+      const d = await postJSON("/api/contacts", { password: pw, action: "put", rows });
+      if (d && d.shared) { sharedNote = ` Shared with the whole team (${d.count} on the server).`; setShared(true); }
+      else if (d && d.noStore) { sharedNote = " Saved in THIS browser only — team-wide sharing needs the free Vercel KV add-on (Storage → Upstash for Redis)."; setShared(false); }
+    } catch { sharedNote = " (Server sync failed — saved locally; will retry on next import.)"; }
+    setMsg(`✓ Imported ${rows.length} contact rows — ${next.rows.length} total on file. Reveals check this file first ($0 on a match).${sharedNote}`);
   };
   const onFile = (e) => {
     const f = e.target.files && e.target.files[0];
@@ -3310,9 +3346,10 @@ function PropertySharkImport() {
     e.target.value = "";
   };
   const clearAll = () => {
-    if (typeof window !== "undefined" && !window.confirm(`Delete all ${store.rows.length} imported PropertyShark contacts from this browser?`)) return;
+    if (typeof window !== "undefined" && !window.confirm(`Delete all ${store.rows.length} imported PropertyShark contacts${shared ? " for the WHOLE TEAM (server copy too)" : " from this browser"}?`)) return;
     const next = { rows: [], imported: null };
     psSave(next); setStore(next); setMsg("Cleared.");
+    postJSON("/api/contacts", { password: pw, action: "clear" }).catch(() => {});
   };
   return (
     <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
@@ -3321,6 +3358,8 @@ function PropertySharkImport() {
         PropertyShark has no contact API, so the link is its CSV export: in PropertyShark (Platinum), export a <strong style={{ color: C.ivory }}>real-owner list</strong> (up to 500/mo) and drop it here.
         Contacts are stored in this browser permanently and matched by property address / owner — every reveal (Scout included) serves them <strong style={{ color: C.green }}>free</strong> before any paid skip trace runs.
         {store.rows.length ? <> · <strong style={{ color: C.ivory }}>{store.rows.length} contacts on file</strong>{store.imported ? ` (last import ${store.imported})` : ""}</> : null}
+        {shared === true && <> · <span style={{ color: C.green }}>team-wide ✓ (everyone on FRONTAGE sees these)</span></>}
+        {shared === false && <> · <span style={{ color: "#e0a050" }}>this browser only — enable the free Vercel KV add-on for team-wide</span></>}
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
         <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste the PropertyShark CSV here (with its header row)…" rows={3}
@@ -5886,6 +5925,8 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
     setSkipState("loading"); setErr("");
     // PropertyShark pairing: a researched contact already on file is served free —
     // the paid trace only runs when the imported file has nothing for this owner/property.
+    // (Sync the team's shared server file into this browser first, once per session.)
+    await psEnsureSynced(pw);
     const ps = psLookup({ name: r.name, address: r.address, contact_address: r.contact_address });
     if (ps) {
       const result = psAsSkipResult(ps);

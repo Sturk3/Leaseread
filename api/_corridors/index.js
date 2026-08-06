@@ -46,6 +46,12 @@ import fifthMadisonTrophyRetail from "./fifth-madison-trophy-retail.js";
 import meatpackingWestVillageRetail from "./meatpacking-west-village-retail.js";
 import sohoNohoOffice from "./soho-noho-office.js";
 import flatironUnionSquareOffice from "./flatiron-union-square-office.js";
+import nomadMidtownSouthOffice from "./nomad-midtown-south-office.js";
+import plazaDistrictOffice from "./plaza-district-office.js";
+import grandCentralOffice from "./grand-central-office.js";
+import tribecaHudsonSquareOffice from "./tribeca-hudson-square-office.js";
+import chelseaPennOffice from "./chelsea-penn-office.js";
+import fidiWaterStreetOffice from "./fidi-water-street-office.js";
 
 const TIERS = new Set(["flagship", "luxury", "boutique"]);
 const SIDES = new Set(["both", "north", "south", "east", "west"]);
@@ -80,7 +86,10 @@ function validateCorridor(c) {
 const CORRIDORS = [
   kingStreetCharleston,
   downtownNycTrophyRetail, fifthMadisonTrophyRetail, meatpackingWestVillageRetail, // retail
-  sohoNohoOffice, flatironUnionSquareOffice,                                        // office
+  // office — downtown → midtown
+  sohoNohoOffice, tribecaHudsonSquareOffice, fidiWaterStreetOffice,
+  flatironUnionSquareOffice, nomadMidtownSouthOffice, chelseaPennOffice,
+  grandCentralOffice, plazaDistrictOffice,
 ].map(validateCorridor);
 {
   const ids = new Set();

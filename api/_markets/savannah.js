@@ -35,7 +35,7 @@ async function arcgis(where, spatial) {
   const params = {
     where: where || "1=1",
     outFields: "PIN,Owner,Owner2,Mailing_Address,Mailing_City,Mailing_State,Mailing_Zip,PropAddress_Full,PropAddress_City,PropAddress_Zip,Property_Use,Commercial_Cat,FairMarketValue,FMV_Land,FMV_Building,Total_Assessment,Acres,YearBuilt,Sale_Price,Sale_YY,Land_Frontage_1,Legal_Description,Municipality",
-    orderByFields: "FairMarketValue DESC", returnGeometry: "false", resultRecordCount: "2000", f: "json",
+    orderByFields: "FairMarketValue DESC", returnGeometry: "false", returnCentroid: "true", outSR: "4326", resultRecordCount: "2000", f: "json",
   };
   if (spatial) {
     params.geometry = JSON.stringify({ x: spatial.lon, y: spatial.lat, spatialReference: { wkid: 4326 } });
@@ -47,7 +47,7 @@ async function arcgis(where, spatial) {
   const r = await fetch(`${SAV_BASE}/query?${new URLSearchParams(params)}`);
   if (!r.ok) return [];
   const j = await r.json().catch(() => ({}));
-  return (j.features || []).map((f) => f.attributes || {});
+  return (j.features || []).map((f) => ({ ...(f.attributes || {}), __c: f.centroid || null })); // centroid → row lat/lon for the map
 }
 
 export async function search(q) {
@@ -101,6 +101,7 @@ export async function search(q) {
       mailing: addr([r.Mailing_Address, r.Mailing_City, r.Mailing_State, r.Mailing_Zip]),
       mailing_city: clean(r.Mailing_City), mailing_state: mState, mailing_zip: clean(r.Mailing_Zip), absentee,
       address: property, city: cityName, pin: clean(r.PIN),
+      lat: r.__c && Number.isFinite(r.__c.y) ? r.__c.y : null, lon: r.__c && Number.isFinite(r.__c.x) ? r.__c.x : null,
       use: clean(r.Property_Use), commercial_cat: clean(r.Commercial_Cat) || null,
       market_value: toNum(r.FairMarketValue), assessed_value: toNum(r.FairMarketValue),
       land_value: toNum(r.FMV_Land), improvement_value: toNum(r.FMV_Building), total_assessment: toNum(r.Total_Assessment),

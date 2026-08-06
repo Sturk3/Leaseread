@@ -50,7 +50,7 @@ const EXCLUDE_USE = ["HOSPITAL", "METRO", "SCHOOL", "COLLEGE", "UNIVERSITY", "CH
 async function arcgis(where, spatial) {
   const params = {
     where: where || "1=1", outFields: "APN,ParID,Owner,OwnAddr1,OwnAddr2,OwnCity,OwnState,OwnZip,PropAddr,PropCity,PropZip,LUCode,LUDesc,Zoning,LandAppr,ImprAppr,TotlAppr,TotlAssd,Acres,StatedArea,Front,Side,SalePrice,OwnDate,Council",
-    orderByFields: "TotlAppr DESC", returnGeometry: "false", resultRecordCount: "2000", f: "json",
+    orderByFields: "TotlAppr DESC", returnGeometry: "false", returnCentroid: "true", outSR: "4326", resultRecordCount: "2000", f: "json",
   };
   if (spatial) {
     params.geometry = JSON.stringify({ x: spatial.lon, y: spatial.lat, spatialReference: { wkid: 4326 } });
@@ -62,7 +62,7 @@ async function arcgis(where, spatial) {
   const r = await fetch(`${NASH_BASE}/query?${new URLSearchParams(params)}`);
   if (!r.ok) return [];
   const j = await r.json().catch(() => ({}));
-  return (j.features || []).map((f) => f.attributes || {});
+  return (j.features || []).map((f) => ({ ...(f.attributes || {}), __c: f.centroid || null })); // centroid → row lat/lon for the map
 }
 
 // Generic ArcGIS-Hub query → attribute rows; never throws (a dead layer just yields no enrichment).
@@ -193,6 +193,7 @@ export async function search(q) {
       mailing: addr([r.OwnAddr1, r.OwnAddr2, r.OwnCity, r.OwnState, r.OwnZip]),
       mailing_city: clean(r.OwnCity), mailing_state: mState, mailing_zip: clean(r.OwnZip), absentee,
       address: property, city: clean(r.PropCity) || "Nashville", apn: clean(r.APN),
+      lat: r.__c && Number.isFinite(r.__c.y) ? r.__c.y : null, lon: r.__c && Number.isFinite(r.__c.x) ? r.__c.x : null,
       use: clean(r.LUDesc), use_code: clean(r.LUCode), zone: clean(r.Zoning),
       appraised_value: toNum(r.TotlAppr), land_value: toNum(r.LandAppr), improvement_value: toNum(r.ImprAppr),
       assessed_value: toNum(r.TotlAssd), acres, council_district: clean(r.Council),

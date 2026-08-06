@@ -31,7 +31,7 @@ async function arcgis(where, spatial) {
   const params = {
     where: where || "1=1",
     outFields: OUT_FIELDS,
-    orderByFields: "actualvalu DESC", returnGeometry: "false", resultRecordCount: "2000", f: "json",
+    orderByFields: "actualvalu DESC", returnGeometry: "false", returnCentroid: "true", outSR: "4326", resultRecordCount: "2000", f: "json",
   };
   if (spatial) {
     params.geometry = JSON.stringify({ x: spatial.lon, y: spatial.lat, spatialReference: { wkid: 4326 } });
@@ -43,7 +43,7 @@ async function arcgis(where, spatial) {
   const r = await fetch(`${WY_BASE}/query?${new URLSearchParams(params)}`);
   if (!r.ok) return [];
   const j = await r.json().catch(() => ({}));
-  return (j.features || []).map((f) => f.attributes || {});
+  return (j.features || []).map((f) => ({ ...(f.attributes || {}), __c: f.centroid || null })); // centroid → row lat/lon for the map
 }
 
 export async function search(q) {
@@ -89,6 +89,7 @@ export async function search(q) {
       mailing_city: clean(r.mailcity), mailing_state: mState, mailing_zip: clean(r.mailzipcod), absentee,
       address: property, city: mCity && TETON_CITIES.has(mCity) ? mCity.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) : "Jackson",
       parcel: clean(r.parcelnb), account: clean(r.accountno) || null,
+      lat: r.__c && Number.isFinite(r.__c.y) ? r.__c.y : null, lon: r.__c && Number.isFinite(r.__c.x) ? r.__c.x : null,
       market_value: value, assessed_value: toNum(r.assessedva),
       acres, tax_district: clean(r.DEFAULTTAX) || null, tax_year: clean(r.taxyear) || null,
       legal: clean(r.legal) || null,

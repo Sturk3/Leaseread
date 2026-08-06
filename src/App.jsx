@@ -1335,7 +1335,7 @@ function AgentChat({ pw, config, onSourced, goSourcing, seed, onMapRows }) {
           // behind it (full rows → real dossiers on pin click + sheet export).
           if (md && onMapRows) {
             const raw = out.forModel.leads || out.forModel.properties || out.forModel.rows || [];
-            if (raw.length) onMapRows(raw);
+            if (raw.length) onMapRows(raw, tu.name);
           }
           if (out.ui && out.ui.rows && out.ui.rows.length) { if (onSourced) onSourced(out.ui); setLog((l) => [...l, { kind: "sourced", count: out.ui.rows.length }]); }
           let payload = JSON.stringify(out.forModel);
@@ -3625,6 +3625,52 @@ function SheetExportModal({ rows, pw, onClose }) {
   );
 }
 
+// ── Multi-market map support ─────────────────────────────────────────────────
+// Markets whose engines return per-parcel coordinates, with the geographic box that
+// routes a map click to the right engine. CT/MA/Hamptons/SF stay list-only (their
+// public records carry no per-row coords) — clicks there get an honest message.
+const MAP_MARKETS = {
+  nyc: { uni: "nyc", label: "NYC", bounds: [40.48, -74.28, 40.95, -73.65], center: [40.7243, -73.9987], zoom: 15, chip: "NYC" },
+  charleston: { uni: "sc", label: "Charleston, SC", bounds: [32.6, -80.3, 33.1, -79.7], center: [32.7876, -79.9403], zoom: 15, chip: "CHS" },
+  nashville: { uni: "tn", label: "Nashville, TN", bounds: [35.95, -87.1, 36.35, -86.4], center: [36.1627, -86.7816], zoom: 14, chip: "BNA" },
+  savannah: { uni: "savannah", label: "Savannah, GA", bounds: [31.9, -81.35, 32.2, -80.84], center: [32.0809, -81.0912], zoom: 15, chip: "SAV" },
+  teton: { uni: "teton", label: "Jackson Hole, WY", bounds: [43.2, -111.2, 44.2, -110.1], center: [43.4799, -110.7624], zoom: 15, chip: "JXN" },
+};
+function marketForPoint(lat, lon) {
+  for (const [k, m] of Object.entries(MAP_MARKETS)) {
+    const [s, w, n, e] = m.bounds;
+    if (lat >= s && lat <= n && lon >= w && lon <= e) return k;
+  }
+  return null;
+}
+// Scout tool name → which market its result rows came from.
+const TOOL_MARKET = {
+  search_properties: "nyc", retail_availability: "nyc",
+  search_charleston_properties: "charleston", search_nashville_properties: "nashville",
+  search_savannah_properties: "savannah", search_teton_properties: "teton",
+};
+// Normalize an assessor-market row to the shape the pins, dossier (AssessorMarketDetail),
+// skip trace, and sheet export all expect. NYC leads pass through untouched.
+function normalizeMarketRow(p, apiMarket) {
+  if (!apiMarket || apiMarket === "nyc") return p;
+  const m = MAP_MARKETS[apiMarket];
+  const label = apiMarket === "charleston" ? `${p.town || "Charleston"}, SC` : apiMarket === "savannah" ? `${p.city || "Savannah"}, GA` : apiMarket === "teton" ? `${p.city || "Jackson"}, WY` : m ? m.label : apiMarket;
+  const saleYear = Number(p.sale_year) || (p.sale_date ? Number(String(p.sale_date).slice(0, 4)) : null);
+  return {
+    ...p,
+    market: m ? m.uni : apiMarket, marketLabel: label, borough: label,
+    name: p.owner || "", owner: p.owner || "",
+    entity_type: ENTITY_RE.test(p.owner || "") ? "company" : "person",
+    contact_address: mailingStreet(p.mailing || ""),
+    city: p.mailing_city || "", state: p.mailing_state || "", zip: p.mailing_zip || zipFromMailing(p.mailing || ""),
+    last_sale_date: p.last_sale_date || p.sale_date || (saleYear ? String(saleYear) : ""),
+    last_sale_price: p.last_sale_price ?? p.sale_price ?? null,
+    years_owned: p.years_owned ?? (saleYear ? new Date().getFullYear() - saleYear : null),
+    bldg_sqft: p.bldg_sqft ?? p.building_sqft ?? null,
+    raw: p,
+  };
+}
+
 // Top-hit NYC geocode for typed commands (the autocomplete path stays for plain addresses).
 async function geocodeNycTop(text) {
   try {
@@ -3692,38 +3738,55 @@ function MapView({ pw, config, onSourced, goSourcing }) {
   // Scout → map bridge: whenever the drawer's Scout runs a search, its result rows land
   // as pins on the map behind it (full rows, so pin clicks open real dossiers, and the
   // ↓ SHEET export covers them too).
-  const showScoutRows = (rawRows) => {
+  const showScoutRows = (rawRows, toolName) => {
+    const apiMarket = TOOL_MARKET[toolName] || "nyc";
     const leads = (rawRows || [])
+      .map((r) => normalizeMarketRow(r, apiMarket))
       .map((r) => ({ ...r, lat: Number(r.lat ?? r.latitude), lon: Number(r.lon ?? r.longitude), name: r.name || r.owner || r.ownership_entity || "" }))
       .filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
-    if (!leads.length) return;
+    if (!leads.length) {
+      if ((rawRows || []).length) setUnderstood(`✦ Scout found ${rawRows.length} result${rawRows.length === 1 ? "" : "s"}, but this market's records carry no coordinates — see the list in Scout's reply.`);
+      return;
+    }
     setRows(leads); setCount(leads.length); setErr("");
-    setUnderstood(`✦ Scout's results are pinned on the map — ${leads.length} propert${leads.length === 1 ? "y" : "ies"}. Click a pin for its dossier; ↓ SHEET exports them with owner info.`);
+    setUnderstood(`✦ Scout's results are pinned on the map — ${leads.length} propert${leads.length === 1 ? "y" : "ies"}${apiMarket !== "nyc" ? ` (${MAP_MARKETS[apiMarket]?.label || apiMarket})` : ""}. Click a pin for its dossier; ↓ SHEET exports them with owner info.`);
     renderPins(leads, { fit: true });
   };
 
   const loadAt = async (lat, lon, opts = {}) => {
+    // Route the click to whichever MARKET the point falls in (NYC / Charleston /
+    // Nashville / Savannah / Jackson Hole). Outside every coord-capable market → honest no.
+    const mk = marketForPoint(lat, lon);
+    if (!mk) { setErr("Click-to-lookup covers NYC, Charleston, Nashville, Savannah & Jackson Hole. For other areas, ask Scout — its results still pin when the records have coordinates."); return; }
     setBusy(true); setErr("");
     const o = opts.overrides || {};
     const vac = o.vacantOnly != null ? o.vacantOnly : vacantRef.current;
     let rad = o.radius != null ? o.radius : (opts.single ? 0 : radiusRef.current);
     if (vac && !rad) rad = 0.25; // "vacant storefronts HERE" needs an area to scan
     try {
-      const d = await postJSON("/api/search", {
-        password: pw, market: "nyc", sources: ["pluto"],
-        assetType: o.assetType || typeRef.current, centerLat: lat, centerLon: lon,
-        radiusMiles: rad || "",
-        ...(vac ? { vacantOnly: true } : {}),
-        ...(o.minSqft ? { minSqft: o.minSqft } : {}),
-        ...(o.minRetailSqft ? { minRetailSqft: o.minRetailSqft } : {}),
-        ...(o.devOnly ? { devOnly: true } : {}),
-        ...(o.minUnits ? { minUnits: o.minUnits } : {}),
-        ...(o.builtBefore ? { builtBefore: o.builtBefore } : {}),
-        ...(o.builtAfter ? { builtAfter: o.builtAfter } : {}),
-        ...(opts.bbl ? { pickedBbl: opts.bbl } : {}),
-      });
+      const body = mk === "nyc"
+        ? {
+            password: pw, market: "nyc", sources: ["pluto"],
+            assetType: o.assetType || typeRef.current, centerLat: lat, centerLon: lon,
+            radiusMiles: rad || "",
+            ...(vac ? { vacantOnly: true } : {}),
+            ...(o.minSqft ? { minSqft: o.minSqft } : {}),
+            ...(o.minRetailSqft ? { minRetailSqft: o.minRetailSqft } : {}),
+            ...(o.devOnly ? { devOnly: true } : {}),
+            ...(o.minUnits ? { minUnits: o.minUnits } : {}),
+            ...(o.builtBefore ? { builtBefore: o.builtBefore } : {}),
+            ...(o.builtAfter ? { builtAfter: o.builtAfter } : {}),
+            ...(opts.bbl ? { pickedBbl: opts.bbl } : {}),
+          }
+        : {
+            // Assessor markets: point-in-polygon (radius 0 = the one parcel under the click).
+            password: pw, market: mk, centerLat: lat, centerLon: lon, radiusMiles: rad || "",
+            propertyType: "any",
+            ...(o.minSqft ? { minValue: "" } : {}),
+          };
+      const d = await postJSON("/api/search", body);
       if (d.error) { setErr(d.error); return; }
-      let leads = (d.leads || []).filter((r) => r.lat && r.lon);
+      let leads = (d.leads || d.properties || []).map((r) => normalizeMarketRow(r, mk)).filter((r) => r.lat && r.lon);
       // Spoken owner-signal filters — these fields ride on every lead already.
       if (o.absenteeOnly) leads = leads.filter((r) => r.absentee || r.pinned);
       if (o.taxLienOnly) leads = leads.filter((r) => r.tax_lien || r.pinned);
@@ -3819,6 +3882,14 @@ function MapView({ pw, config, onSourced, goSourcing }) {
         <div ref={boxRef} style={{ position: "absolute", inset: 0, zIndex: 0 }} />
         {/* Floating status over the map — Scout (right panel) is the only search input. */}
         <div style={{ position: "absolute", left: 12, top: 12, zIndex: 1050, display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start", maxWidth: "52%" }}>
+          <div style={{ display: "flex", gap: 5 }}>
+            {Object.entries(MAP_MARKETS).map(([k, m]) => (
+              <button key={k} onClick={() => mapRef.current && mapRef.current.setView(m.center, m.zoom)} className="mono lift" title={`Fly to ${m.label}`}
+                style={{ cursor: "pointer", fontSize: 9.5, padding: "4px 9px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.muted, letterSpacing: "0.08em" }}>
+                {m.chip}
+              </button>
+            ))}
+          </div>
           {busy && <span className="mono" style={{ fontSize: 11, color: C.gold, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>▸ working…</span>}
           {understood && <span className="mono" style={{ fontSize: 11, color: C.green, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>{understood}</span>}
           {err && <span style={{ fontSize: 11.5, color: C.red, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>{err}</span>}
@@ -3839,7 +3910,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
           <div style={{ display: sel ? "none" : "block" }}>
             <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.18em", margin: "14px 0 0" }}>✦ SCOUT — SEARCH ANYTHING</div>
             <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6, lineHeight: 1.6 }}>
-              Ask in plain English — “find all the vacant storefronts within .25 mi of 103 Prince St”, “absentee retail owners on Madison held 15+ years”, “who’s behind 92 Prince LLC and how do I reach them”. Results pin on the map; click a pin for its full dossier; ↓ SHEET exports everything with owner info. Or just click any building — that part needs no AI at all.
+              Ask in plain English, in ANY market — “find all the vacant storefronts within .25 mi of 103 Prince St”, “absentee owners on King Street Charleston held 15+ years”, “commercial parcels on Broadway in Nashville”, “who’s behind 92 Prince LLC”. Results pin on the map (fly between markets with the chips top-left); click a pin for its full dossier; ↓ SHEET exports everything with owner info. Or just click any building in NYC, Charleston, Nashville, Savannah, or Jackson Hole — that part needs no AI at all. (CT / MA / Hamptons records carry no coordinates, so those results stay in the chat list.)
             </div>
             <AgentChat pw={pw} config={config} seed={scoutSeed} onSourced={onSourced} goSourcing={goSourcing} onMapRows={showScoutRows} />
           </div>
@@ -3853,7 +3924,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
                 {sel.name || ""}{sel.borough ? ` · ${sel.borough}` : ""}
                 {sel.storefront_vacant && <span className="mono" style={{ marginLeft: 8, fontSize: 9.5, color: "#e0524d", border: "1px solid #e0524d", borderRadius: 4, padding: "1px 6px" }}>🚪 REPORTED VACANT{sel.vacancy_year ? ` ’${String(sel.vacancy_year).slice(2)}` : ""}</span>}
               </div>
-              <PropertyDetail r={sel} pw={pw} />
+              {sel.market && sel.market !== "nyc" ? <AssessorMarketDetail r={sel} pw={pw} /> : <PropertyDetail r={sel} pw={pw} />}
             </>
           )}
         </div>

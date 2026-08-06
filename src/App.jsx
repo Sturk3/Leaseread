@@ -3649,6 +3649,7 @@ function SheetExportModal({ rows, pw, onClose }) {
       setStatus((s) => ({ ...s, [i]: "tracing…" }));
       try {
         const d = await postJSON("/api/skiptrace", { password: pw, name: r.name, entity_type: r.entity_type, contact_address: r.contact_address, city: r.city, state: r.state, zip: r.zip, address: r.address, borough: r.borough });
+        if (d.paused) { setStatus((s) => ({ ...s, [i]: "⏸ tracing paused" })); setTracing(false); return; }
         if (d.noKey) { setStatus((s) => ({ ...s, [i]: "trace not configured" })); continue; }
         _skipCache.set(skipKey(r), { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched, tracedAddress: d.tracedAddress, entityLowConfidence: d.entityLowConfidence, ownerMatch: d.ownerMatch || null, weakMatch: d.weakMatch, ownerName: d.ownerName });
         if (d.matched) bumpSkipSpend(d.cost || 0);
@@ -6816,6 +6817,7 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
         contact_address: r.contact_address, city: r.city, state: r.state, zip: r.zip,
         address: r.address, borough: r.borough,
       });
+      if (d.paused) { setErr(d.error || "Skip tracing is paused."); setSkipState("error"); return; }
       if (d.noKey) { setSkip(d); setSkipState("nokey"); return; }
       const result = { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched, tracedAddress: d.tracedAddress, entityLowConfidence: d.entityLowConfidence, ownerMatch: d.ownerMatch || null, weakMatch: d.weakMatch, ownerName: d.ownerName, poBox: d.poBox };
       _skipCache.set(skipKey(r), result);
@@ -7088,6 +7090,7 @@ function PersonFinder({ pw }) {
     setGo(t); setRes(null); setErr2(""); setState2("loading");
     try {
       const d = await postJSON("/api/skiptrace", { password: pw, person_search: true, name: t.name, city: t.city, state: t.st });
+      if (d.paused) { setErr2(d.error || "Skip tracing is paused."); setState2("error"); return; }
       if (d.noKey) { setState2("nokey"); return; }
       if (d.error) { setErr2(d.error); setState2("error"); return; }
       setRes(d); setState2("done");

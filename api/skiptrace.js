@@ -339,6 +339,20 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
 
+    // ── PAUSE SWITCH ─────────────────────────────────────────────────────────
+    // SKIPTRACE_PAUSED=1 in Vercel env disables EVERY paid trace path (Scout's
+    // reveal_contact, dossier reveals, the bulk TRACE CHECKED, person search) —
+    // server-side, so no browser can spend a credit regardless of what it clicks.
+    // Debug probes still answer so the config stays inspectable. Unset (or set to
+    // 0) + redeploy to resume. Optional SKIPTRACE_PAUSED_NOTE customizes the text.
+    if (String(process.env.SKIPTRACE_PAUSED || "") === "1" && !(req.body && req.body.debug)) {
+      return res.status(200).json({
+        paused: true,
+        error: process.env.SKIPTRACE_PAUSED_NOTE || "Skip tracing is PAUSED by the account owner (conserving provider credits). No lookup was run and nothing was charged.",
+        matched: false, persons: [], phones: [], emails: [], cost: 0,
+      });
+    }
+
     // ── PERSON SEARCH lane (Whitepages-grade, API-native) ────────────────────
     // Endato / EnformionGO PersonSearch: look up a specific PERSON by name (+ city/state)
     // and get their phones, emails, addresses AND relatives/associates in one call — the

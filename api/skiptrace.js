@@ -176,7 +176,7 @@ function personEmails(p) {
 // typically { name/first/last, relationship?, age?, and sometimes their own phones/emails }.
 // Tolerant like the rest of this file: pull them wherever they appear, and it's a no-op
 // when the provider (e.g. Tracerfy's base /trace/lookup) doesn't return any.
-const RELATIVE_KEYS = ["relatives", "relative", "associates", "associate", "related_persons", "relatedPersons", "possible_relatives", "possibleRelatives", "associated_people", "associatedPeople", "associatedPersons", "household", "household_members", "familyMembers", "family_members"];
+const RELATIVE_KEYS = ["relatives", "relative", "associates", "associate", "related_persons", "relatedPersons", "possible_relatives", "possibleRelatives", "associated_people", "associatedPeople", "associatedPersons", "household", "household_members", "familyMembers", "family_members", "relativesSummary", "associatesSummary"];
 function personRelatives(p) {
   const out = [], seen = new Set();
   for (const k of RELATIVE_KEYS) {
@@ -337,6 +337,44 @@ export default async function handler(req, res) {
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
+    }
+
+    // ── PERSON SEARCH lane (Whitepages-grade, API-native) ────────────────────
+    // Endato / EnformionGO PersonSearch: look up a specific PERSON by name (+ city/state)
+    // and get their phones, emails, addresses AND relatives/associates in one call — the
+    // person-first workflow the address-anchored tracers can't do. Self-serve keys at
+    // endato.com → set ENDATO_AP_NAME + ENDATO_AP_PASSWORD in Vercel (ENDATO_BASE
+    // overrides the host — CONFIRM on first real call; devapi is their documented start).
+    if (req.body.person_search) {
+      const apName = process.env.ENDATO_AP_NAME, apPass = process.env.ENDATO_AP_PASSWORD;
+      if (req.body.debug) return res.status(200).json({ ok: true, lane: "endato-person", keyConfigured: !!(apName && apPass), keyEnv: "ENDATO_AP_NAME + ENDATO_AP_PASSWORD", build: "person-v1" });
+      if (!apName || !apPass) return res.status(200).json({ noKey: true, provider: "Endato (EnformionGO) person search", keyEnv: "ENDATO_AP_NAME + ENDATO_AP_PASSWORD" });
+      if (!name) return res.status(400).json({ error: "Need a person's name." });
+      const nm = splitName(name);
+      const base = process.env.ENDATO_BASE || "https://devapi.endato.com";
+      const bodyOut = {
+        ...(nm.first ? { FirstName: nm.first } : {}), ...(nm.last ? { LastName: nm.last } : {}),
+        ...(clean(city) || clean(state) ? { Addresses: [{ AddressLine2: [clean(city), clean(state)].filter(Boolean).join(", ") }] } : {}),
+        Page: 1, ResultsPerPage: 5,
+      };
+      const rr = await fetch(base + "/PersonSearch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "galaxy-ap-name": apName, "galaxy-ap-password": apPass, "galaxy-search-type": "Person" },
+        body: JSON.stringify(bodyOut),
+      });
+      const text = await rr.text();
+      if (!rr.ok) return res.status(502).json({ error: `Endato ${rr.status}: ${text.slice(0, 200)}` });
+      let raw;
+      try { raw = JSON.parse(text); } catch { return res.status(502).json({ error: "Endato returned non-JSON", snippet: text.slice(0, 200) }); }
+      // The tolerant person/phone/relative extractors handle Endato's shape too.
+      const persons = extractPersons(raw, name);
+      const flat = normalizeContacts(raw);
+      const matched = persons.length > 0 || flat.phones.length > 0;
+      return res.status(200).json({
+        provider: "Endato person search", personSearch: true,
+        persons, ...flat, ownerName: clean(name), matched,
+        cost: matched ? Number(process.env.ENDATO_COST) || 0.25 : 0,
+      });
     }
 
     // Default lane is Tracerfy (self-serve pay-on-hit; user's choice to start). Override

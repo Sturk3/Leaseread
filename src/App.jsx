@@ -6993,39 +6993,74 @@ function PersonFinder({ pw }) {
   const enc = encodeURIComponent;
   const slug = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const inp = { background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8, color: C.ivory, fontSize: 12.5, padding: "9px 11px" };
+  const [res, setRes] = useState(null);       // API person-search result
+  const [state2, setState2] = useState("idle"); // idle | loading | done | nokey | error
+  const [err2, setErr2] = useState("");
+  const runSearch = async (t) => {
+    setGo(t); setRes(null); setErr2(""); setState2("loading");
+    try {
+      const d = await postJSON("/api/skiptrace", { password: pw, person_search: true, name: t.name, city: t.city, state: t.st });
+      if (d.noKey) { setState2("nokey"); return; }
+      if (d.error) { setErr2(d.error); setState2("error"); return; }
+      setRes(d); setState2("done");
+      if (d.matched) setSpendSafe(d.cost);
+    } catch (e) { setErr2(e.message || "Search failed."); setState2("error"); }
+  };
+  const setSpendSafe = (c) => { try { bumpSkipSpend(Number(c) || 0); } catch { /* counter only */ } };
   const links = go ? [
-    ["👨‍👩‍👧 TruePeopleSearch — free, shows RELATIVES", `https://www.truepeoplesearch.com/results?name=${enc(go.name)}${go.city || go.st ? `&citystatezip=${enc([go.city, go.st].filter(Boolean).join(" "))}` : ""}`],
-    ["FastPeopleSearch — free", `https://www.fastpeoplesearch.com/name/${slug(go.name)}${go.city ? `_${slug(go.city + " " + go.st)}` : ""}`],
+    ["TruePeopleSearch (free backup)", `https://www.truepeoplesearch.com/results?name=${enc(go.name)}${go.city || go.st ? `&citystatezip=${enc([go.city, go.st].filter(Boolean).join(" "))}` : ""}`],
+    ["FastPeopleSearch", `https://www.fastpeoplesearch.com/name/${slug(go.name)}${go.city ? `_${slug(go.city + " " + go.st)}` : ""}`],
     ["Whitepages", `https://www.whitepages.com/name/${slug(go.name)}${go.city ? `/${slug(go.city + " " + go.st)}` : ""}`],
   ] : [];
   return (
     <div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Person's name — e.g. an unmasked LLC principal" style={{ ...inp, flex: "1 1 240px" }}
-          onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) setGo({ name: name.trim(), city: city.trim(), st: st.trim() }); }} />
+          onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) runSearch({ name: name.trim(), city: city.trim(), st: st.trim() }); }} />
         <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="City (optional)" style={{ ...inp, width: 150 }} />
         <input value={st} onChange={(e) => setSt(e.target.value)} placeholder="ST" maxLength={2} style={{ ...inp, width: 56 }} />
-        <button onClick={() => name.trim() && setGo({ name: name.trim(), city: city.trim(), st: st.trim() })} className="mono lift"
-          style={{ cursor: "pointer", fontSize: 11.5, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>FIND PERSON</button>
+        <button onClick={() => name.trim() && runSearch({ name: name.trim(), city: city.trim(), st: st.trim() })} className="mono lift"
+          style={{ cursor: "pointer", fontSize: 11.5, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>
+          {state2 === "loading" ? "▸ SEARCHING…" : "FIND PERSON"}
+        </button>
       </div>
+      {state2 === "nokey" && (
+        <div style={{ marginTop: 10, fontSize: 11.5, color: "#e0a050", lineHeight: 1.6, padding: "9px 12px", background: "#e0a05012", border: "1px solid #e0a05044", borderRadius: 8 }}>
+          <strong style={{ color: C.ivory }}>Person-search provider not connected yet.</strong> This lane uses Endato (EnformionGO) — a Whitepages-grade people API that returns phones, emails, addresses AND relatives/associates in one call (~$0.25/search).
+          Setup: sign up at <a href="https://go.enformion.com/sign-up/usa/" target="_blank" rel="noreferrer" style={{ color: C.gold }}>go.enformion.com</a> (free trial) → copy your AP name + password → add <span className="mono">ENDATO_AP_NAME</span> and <span className="mono">ENDATO_AP_PASSWORD</span> in Vercel → redeploy. Until then, the free lookups below cover you manually.
+        </div>
+      )}
+      {state2 === "error" && <div style={{ marginTop: 10, fontSize: 11.5, color: C.red }}>{err2}</div>}
+      {state2 === "done" && res && (
+        <div style={{ marginTop: 12 }}>
+          {(res.persons || []).length ? (res.persons || []).map((p, i) => (
+            <div key={i} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: `1px solid ${C.line}` }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.ivory, marginBottom: 3 }}>
+                {p.name || "Unnamed"}
+                {p.matchScore >= 80 && <span className="mono" style={{ fontSize: 9, color: C.green, marginLeft: 6, border: `1px solid ${C.green}`, borderRadius: 4, padding: "0 5px" }}>✓ NAME MATCH</span>}
+                {p.matchScore < 80 && p.matchScore >= 25 && <span className="mono" style={{ fontSize: 9, color: "#e0a050", marginLeft: 6, border: "1px solid #e0a050", borderRadius: 4, padding: "0 5px" }}>~ SIMILAR NAME</span>}
+              </div>
+              <ContactList phones={p.phones} emails={p.emails} />
+              <RelativeList relatives={p.relatives} loc={{ city: go.city, state: go.st }} />
+            </div>
+          )) : (
+            <div style={{ fontSize: 12, color: C.muted }}>No person record matched{go.city ? ` in ${go.city}` : ""} (no charge). Try without the city, or check the free lookups below.</div>
+          )}
+          <div className="mono" style={{ fontSize: 9.5, color: C.muted }}>via {res.provider} · relatives expand under each person · ✓/✗ a number after you dial it</div>
+        </div>
+      )}
       {go && (
         <div style={{ marginTop: 12 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {links.map(([lab, url]) => (
               <a key={lab} href={url} target="_blank" rel="noreferrer" className="mono lift"
-                style={{ fontSize: 11, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.green}55`, background: "transparent", color: C.green, textDecoration: "none" }}>
+                style={{ fontSize: 10.5, padding: "6px 11px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.muted, textDecoration: "none" }}>
                 {lab} ↗
               </a>
             ))}
           </div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>
-            The free sites show relatives/associates instantly (open in a new tab). Or run the AI hunt below — it works deeds, obituaries, filings and LinkedIn with sources, and every person it finds becomes a one-click trace chip.
-          </div>
           <div key={`${go.name}|${go.city}`} style={{ marginTop: 10 }}>
             <OwnerPeople r={{ name: go.name, owner: go.name, address: [go.city, go.st].filter(Boolean).join(", "), city: go.city, state: go.st }} pw={pw} market="nyc" />
-          </div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>
-            Got the person + their city? Run the <strong style={{ color: C.ivory }}>manual trace below</strong> with their name + address for the direct line (~$0.10 on a hit).
           </div>
         </div>
       )}

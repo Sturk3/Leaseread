@@ -3576,12 +3576,18 @@ const SHEET_COLUMNS = [
   { g: "ids", h: "Lon", get: (r) => r.lon },
 ];
 function sheetContactsFor(r) {
+  // Team call verdicts ride into the export: confirmed numbers say so, struck ones warn.
+  const fmt = (p) => {
+    const v = phoneVerdict(p.number);
+    const mark = v && v.text === "good" ? " [TEAM-CONFIRMED]" : v && v.text === "bad" ? " [WRONG # — do not call]" : "";
+    return `${p.number}${p.type ? ` (${p.type}${p.dnc ? ", DNC" : ""})` : p.dnc ? " (DNC)" : ""}${mark}`;
+  };
   const ps = psLookup({ name: r.name, address: r.address, contact_address: r.contact_address });
-  if (ps) return { who: ps.contact || "", phones: (ps.phones || []).map((p) => `${p.number}${p.type ? ` (${p.type}${p.dnc ? ", DNC" : ""})` : p.dnc ? " (DNC)" : ""}`), emails: ps.emails || [], src: "PropertyShark import" };
+  if (ps) return { who: ps.contact || "", phones: (ps.phones || []).map(fmt), emails: ps.emails || [], src: "PropertyShark import" };
   const sk = _skipCache.get(skipKey(r));
   if (sk && sk.matched) {
     const best = (sk.persons || []).find((p) => p.matchesOwner) || (sk.persons || [])[0] || null;
-    const phones = (best ? best.phones : sk.phones || []).map((p) => `${p.number}${p.type ? ` (${p.type}${p.dnc ? ", DNC" : ""})` : p.dnc ? " (DNC)" : ""}`);
+    const phones = (best ? best.phones : sk.phones || []).map(fmt);
     return { who: best ? best.name : "", phones, emails: best ? best.emails : sk.emails || [], src: `skip trace (${sk.provider || ""})` };
   }
   return { who: "", phones: [], emails: [], src: "" };
@@ -3706,6 +3712,23 @@ const MAP_MARKETS = {
   savannah: { uni: "savannah", label: "Savannah, GA", bounds: [31.9, -81.35, 32.2, -80.84], center: [32.0809, -81.0912], zoom: 15, chip: "SAV" },
   teton: { uni: "teton", label: "Jackson Hole, WY", bounds: [43.2, -111.2, 44.2, -110.1], center: [43.4799, -110.7624], zoom: 15, chip: "JXN" },
 };
+// Draw-your-hunting-ground geometry: ray-cast point-in-polygon + haversine miles.
+function pointInPoly(pt, poly) { // pt = [lat, lon]; poly = [[lat, lon], ...]
+  const x = pt[1], y = pt[0];
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][1], yi = poly[i][0], xj = poly[j][1], yj = poly[j][0];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+const havMi = (a, b) => {
+  const R = 3958.8, toR = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * toR, dLon = (b[1] - a[1]) * toR;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * toR) * Math.cos(b[0] * toR) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+};
+
 function marketForPoint(lat, lon) {
   for (const [k, m] of Object.entries(MAP_MARKETS)) {
     const [s, w, n, e] = m.bounds;
@@ -3784,6 +3807,13 @@ function MapView({ pw, config, onSourced, goSourcing }) {
   const [sheetOpen, setSheetOpen] = useState(false); // the pick-your-list export modal
   const rowsRef = useRef(rows); rowsRef.current = rows;
   const tempLayerRef = useRef(null); // highlight pin for look-what-I-clicked (never wipes results)
+  // ▧ DRAW AREA — Terrakotta-style hunting ground: click vertices, FINISH, everything
+  // inside the polygon loads (radius search on the centroid, then point-in-polygon cut).
+  const [drawing, setDrawing] = useState(false);
+  const drawingRef = useRef(false); drawingRef.current = drawing;
+  const drawPtsRef = useRef([]);
+  const drawLayerRef = useRef(null);
+  const [drawN, setDrawN] = useState(0);
 
   // Shared pin renderer — used by map commands AND by Scout's results (drawer → map).
   const renderPins = (leads, opts = {}) => {
@@ -3878,6 +3908,8 @@ function MapView({ pw, config, onSourced, goSourcing }) {
       if (o.absenteeOnly) leads = leads.filter((r) => r.absentee || r.pinned);
       if (o.taxLienOnly) leads = leads.filter((r) => r.tax_lien || r.pinned);
       if (o.minYears) leads = leads.filter((r) => (Number(r.years_owned) || 0) >= o.minYears || r.pinned);
+      // Drawn hunting ground: cut the radius result down to exactly the polygon.
+      if (opts.polygon) leads = leads.filter((r) => pointInPoly([r.lat, r.lon], opts.polygon));
       // A plain map click while a RESULT SET is showing must NOT wipe the results —
       // open the clicked lot's dossier with a gold highlight ring and keep every pin,
       // the count, and the SHEET export exactly as they were.
@@ -3950,12 +3982,52 @@ function MapView({ pw, config, onSourced, goSourcing }) {
     }).addTo(m);
     layerRef.current = L.layerGroup().addTo(m);
     tempLayerRef.current = L.layerGroup().addTo(m);
-    m.on("click", (e) => loadAtRef.current(e.latlng.lat, e.latlng.lng, { single: true }));
+    drawLayerRef.current = L.layerGroup().addTo(m);
+    m.on("click", (e) => {
+      if (drawingRef.current) {
+        // Drawing mode: clicks are polygon vertices, not lookups.
+        const pts = drawPtsRef.current;
+        pts.push([e.latlng.lat, e.latlng.lng]);
+        const dl = drawLayerRef.current;
+        dl.clearLayers();
+        for (const p of pts) L.circleMarker(p, { radius: 4, weight: 2, color: "#f2c14e", fillColor: "#f2c14e", fillOpacity: 1, bubblingMouseEvents: false }).addTo(dl);
+        if (pts.length > 1) L.polyline(pts, { color: "#f2c14e", weight: 2, dashArray: "6 4" }).addTo(dl);
+        drawingRef.current && (drawPtsRef.current = pts);
+        setDrawN(pts.length);
+        return;
+      }
+      loadAtRef.current(e.latlng.lat, e.latlng.lng, { single: true });
+    });
     mapRef.current = m;
     setTimeout(() => m.invalidateSize(), 60); // full-screen flex container settles after first paint
     psEnsureSynced(pw); // pull the team's contact file + research memory on app open
     return () => { m.remove(); mapRef.current = null; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startDraw = () => {
+    drawPtsRef.current = [];
+    if (drawLayerRef.current) drawLayerRef.current.clearLayers();
+    setDrawN(0); setDrawing(true); setErr("");
+    setUnderstood("▧ Drawing: click the map to outline your area (3+ corners), then FINISH.");
+  };
+  const cancelDraw = () => {
+    drawPtsRef.current = [];
+    if (drawLayerRef.current) drawLayerRef.current.clearLayers();
+    setDrawN(0); setDrawing(false); setUnderstood("");
+  };
+  const finishDraw = () => {
+    const pts = drawPtsRef.current.slice();
+    if (pts.length < 3) { cancelDraw(); return; }
+    const cLat = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+    const cLon = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+    let radMi = Math.max(...pts.map((p) => havMi([cLat, cLon], p))) * 1.08 + 0.01;
+    if (radMi > 1.5) { setErr("That area is very large — keep a drawn area under ~1.5 mi across (tighter areas return faster, better lists)."); cancelDraw(); return; }
+    const dl = drawLayerRef.current;
+    if (dl) { dl.clearLayers(); L.polygon(pts, { color: "#f2c14e", weight: 2, dashArray: "6 4", fillOpacity: 0.04, bubblingMouseEvents: false }).addTo(dl); }
+    setDrawing(false); setDrawN(0);
+    setUnderstood(`▧ Loading everything inside your drawn area…`);
+    loadAt(cLat, cLon, { overrides: { radius: radMi }, polygon: pts });
+  };
 
   const onPick = (p) => {
     setLoc(p.label || "");
@@ -3970,13 +4042,28 @@ function MapView({ pw, config, onSourced, goSourcing }) {
         <div ref={boxRef} style={{ position: "absolute", inset: 0, zIndex: 0 }} />
         {/* Floating status over the map — Scout (right panel) is the only search input. */}
         <div style={{ position: "absolute", left: 12, top: 12, zIndex: 1050, display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start", maxWidth: "52%" }}>
-          <div style={{ display: "flex", gap: 5 }}>
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
             {Object.entries(MAP_MARKETS).map(([k, m]) => (
               <button key={k} onClick={() => mapRef.current && mapRef.current.setView(m.center, m.zoom)} className="mono lift" title={`Fly to ${m.label}`}
                 style={{ cursor: "pointer", fontSize: 9.5, padding: "4px 9px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.muted, letterSpacing: "0.08em" }}>
                 {m.chip}
               </button>
             ))}
+            {!drawing ? (
+              <button onClick={startDraw} className="mono lift" title="Outline a hunting ground: click corners on the map, then FINISH — everything inside loads with owners."
+                style={{ cursor: "pointer", fontSize: 9.5, padding: "4px 10px", borderRadius: 6, border: "1px solid #f2c14e88", background: C.ink, color: "#f2c14e", letterSpacing: "0.08em" }}>
+                ▧ DRAW AREA
+              </button>
+            ) : (
+              <>
+                <button onClick={finishDraw} className="mono lift" style={{ cursor: "pointer", fontSize: 9.5, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.green}`, background: C.ink, color: C.green, letterSpacing: "0.08em" }}>
+                  ✓ FINISH ({drawN})
+                </button>
+                <button onClick={cancelDraw} className="mono lift" style={{ cursor: "pointer", fontSize: 9.5, padding: "4px 10px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.ink, color: C.muted }}>
+                  ✕
+                </button>
+              </>
+            )}
           </div>
           {busy && <span className="mono" style={{ fontSize: 11, color: C.gold, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>▸ working…</span>}
           {understood && <span className="mono" style={{ fontSize: 11, color: C.green, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>{understood}</span>}
@@ -6505,20 +6592,57 @@ function bestContact(persons) {
   return { bestPhone, firstEmail, firstEmailName };
 }
 
+// ── Call-outcome feedback (the anti-Terrakotta grading) ──────────────────────
+// Every phone number gets ✓ / ✗ buttons. Verdicts persist under a synthetic
+// PHONE|<digits> id in the AI cache — which means they ride the SAME shared-memory
+// sync as everything else: one teammate confirms a number and it's green for the
+// whole firm forever; one wrong-number strike kills it everywhere. Terrakotta's
+// letter grades are an opaque model; these are your team's actual dials.
+const phoneDigits = (num) => String(num || "").replace(/\D/g, "");
+function phoneVerdict(num) {
+  const e = loadAiCache()[`PHONE|${phoneDigits(num)}`];
+  return e && e.verdict && (e.verdict.text === "good" || e.verdict.text === "bad") ? e.verdict : null;
+}
+function setPhoneVerdict(num, v) {
+  const d = phoneDigits(num);
+  if (d) saveAiAnswer({ address: "PHONE", owner: d }, "verdict", v, "");
+}
+function PhoneVerdictButtons({ number, onChange }) {
+  const v = phoneVerdict(number);
+  const btn = (val, glyph, color, title) => (
+    <button onClick={() => { setPhoneVerdict(number, v && v.text === val ? "cleared" : val); if (onChange) onChange(); }} title={title} className="mono"
+      style={{ cursor: "pointer", fontSize: 10, marginLeft: 4, border: `1px solid ${v && v.text === val ? color : C.line}`, background: v && v.text === val ? `${color}22` : "transparent", color: v && v.text === val ? color : C.muted, borderRadius: 4, padding: "0 5px" }}>
+      {glyph}
+    </button>
+  );
+  return (
+    <>
+      {btn("good", "✓", C.green, "Reached the right person — confirms this number for the whole team")}
+      {btn("bad", "✗", C.red, "Wrong number / dead line — strikes it for the whole team")}
+    </>
+  );
+}
+
 // Render a list of phones + emails (shared by the free and paid lanes).
 function ContactList({ phones = [], emails = [] }) {
+  const [, bump] = useState(0);
   if (!phones.length && !emails.length) return null;
   return (
     <>
       {phones.map((p, i) => {
         const tier = p.grade && p.grade.tier;
         const tcol = tier === "BEST" ? C.green : tier === "GOOD" ? C.gold : C.muted;
+        const v = phoneVerdict(p.number);
+        const confirmed = v && v.text === "good", struck = v && v.text === "bad";
         return (
-          <div key={`p${i}`} style={{ fontSize: 13.5, marginBottom: 3 }}>
-            <a href={`tel:${String(p.number).replace(/[^\d+]/g, "")}`} style={{ color: C.ivory, textDecoration: "none", fontWeight: 600 }}>{p.number}</a>
-            {tier && <span className="mono" title={`callability ${p.grade.score}/100`} style={{ fontSize: 9, color: tcol, marginLeft: 6, border: `1px solid ${tcol}`, borderRadius: 4, padding: "0 5px" }}>{tier}</span>}
+          <div key={`p${i}`} style={{ fontSize: 13.5, marginBottom: 3, opacity: struck ? 0.55 : 1 }}>
+            <a href={`tel:${String(p.number).replace(/[^\d+]/g, "")}`} style={{ color: confirmed ? C.green : C.ivory, textDecoration: struck ? "line-through" : "none", fontWeight: 600 }}>{p.number}</a>
+            {confirmed && <span className="mono" title={`Confirmed by the team ${savedAgo(v.savedAt)}`} style={{ fontSize: 9, color: C.green, marginLeft: 6, border: `1px solid ${C.green}`, borderRadius: 4, padding: "0 5px" }}>✓ CONFIRMED</span>}
+            {struck && <span className="mono" title={`Marked wrong ${savedAgo(v.savedAt)}`} style={{ fontSize: 9, color: C.red, marginLeft: 6, border: `1px solid ${C.red}`, borderRadius: 4, padding: "0 5px" }}>✗ WRONG #</span>}
+            {tier && !confirmed && !struck && <span className="mono" title={`callability ${p.grade.score}/100`} style={{ fontSize: 9, color: tcol, marginLeft: 6, border: `1px solid ${tcol}`, borderRadius: 4, padding: "0 5px" }}>{tier}</span>}
             {p.type && <span className="mono" style={{ fontSize: 10, color: C.muted, marginLeft: 6 }}>{String(p.type).toUpperCase()}</span>}
             {p.dnc && <span className="mono" style={{ fontSize: 9.5, color: C.red, marginLeft: 6, border: `1px solid ${C.red}`, borderRadius: 4, padding: "0 5px" }}>DNC</span>}
+            <PhoneVerdictButtons number={p.number} onChange={() => bump((x) => x + 1)} />
           </div>
         );
       })}

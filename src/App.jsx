@@ -3606,6 +3606,122 @@ function sheetContactsFor(r) {
   }
   return { who: "", phones: [], emails: [], src: "" };
 }
+// A real, presentable .xlsx — the deliverable you hand a partner. Branded title band,
+// styled sticky header, frozen panes + filters, money/number formats, color-coded signal
+// cells, clickable address (Maps) and tel:/mailto: links, plus a COVER sheet with the
+// search summary and counts. ExcelJS is dynamically imported so it only loads on click.
+async function downloadMapSheetXLSX(rows, groups, meta = {}) {
+  const ExcelJS = (await import("exceljs")).default || (await import("exceljs"));
+  const gs = groups && groups.size ? groups : new Set(SHEET_GROUPS.map(([k]) => k));
+  const data = rows.map((r) => ({ ...r, _cx: sheetContactsFor(r) }));
+  const cols = SHEET_COLUMNS.filter((c) => gs.has(c.g));
+  const INK = "FF16142B", GOLD = "FF6A5CF6", LINE = "FFDDDAF2";
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "FRONTAGE"; wb.created = new Date();
+
+  // ── Cover ────────────────────────────────────────────────────────────────
+  const cover = wb.addWorksheet("Summary", { properties: { defaultRowHeight: 18 } });
+  cover.columns = [{ width: 26 }, { width: 78 }];
+  cover.mergeCells("A1:B1");
+  const t = cover.getCell("A1");
+  t.value = "FRONTAGE — SOURCING SHEET";
+  t.font = { name: "Calibri", size: 20, bold: true, color: { argb: "FFFFFFFF" } };
+  t.fill = { type: "pattern", pattern: "solid", fgColor: { argb: INK } };
+  t.alignment = { vertical: "middle", horizontal: "left", indent: 1 };
+  cover.getRow(1).height = 40;
+  const sig = (r) => [r.storefront_vacant && "vacant", r.absentee && "absentee", r.tax_lien && "tax lien", Number(r.years_owned) >= 15 && "15+ yrs held"].filter(Boolean);
+  const facts = [
+    ["Search", String(meta.summary || "Sourcing results").replace(/^[✦▧★]\s*/, "")],
+    ["Exported", new Date().toLocaleString()],
+    ["Properties", data.length],
+    ["With owner of record", data.filter((r) => r.name).length],
+    ["With a contact on file", data.filter((r) => r._cx.phones.length || r._cx.emails.length).length],
+    ["Absentee owners", data.filter((r) => r.absentee).length],
+    ["Held 15+ years", data.filter((r) => Number(r.years_owned) >= 15).length],
+    ["Distress flags (lien / vacant)", data.filter((r) => r.tax_lien || r.storefront_vacant).length],
+  ];
+  facts.forEach(([k, v], i) => {
+    const row = cover.getRow(i + 3);
+    row.getCell(1).value = k;
+    row.getCell(1).font = { bold: true, color: { argb: "FF5A5470" }, size: 11 };
+    row.getCell(2).value = v;
+    row.getCell(2).font = { size: 11, color: { argb: INK } };
+  });
+  const note = cover.getRow(facts.length + 5);
+  note.getCell(1).value = "Sources";
+  note.getCell(1).font = { bold: true, color: { argb: "FF5A5470" }, size: 11 };
+  note.getCell(2).value = "County / city public records (assessor, deeds, permits, violations, vacancy registry). Contacts from the firm's PropertyShark import and paid skip traces; [TEAM-CONFIRMED] = verified on a live call.";
+  note.getCell(2).alignment = { wrapText: true, vertical: "top" };
+  note.height = 46;
+
+  // ── Data ─────────────────────────────────────────────────────────────────
+  const ws = wb.addWorksheet("Properties", {
+    views: [{ state: "frozen", ySplit: 2, xSplit: 1 }],
+    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: "1:2" },
+  });
+  ws.mergeCells(1, 1, 1, cols.length);
+  const band = ws.getCell(1, 1);
+  band.value = `FRONTAGE  ·  ${String(meta.summary || "Sourcing results").replace(/^[✦▧★]\s*/, "")}  ·  ${data.length} properties  ·  ${new Date().toLocaleDateString()}`;
+  band.font = { size: 12, bold: true, color: { argb: "FFFFFFFF" } };
+  band.fill = { type: "pattern", pattern: "solid", fgColor: { argb: INK } };
+  band.alignment = { vertical: "middle", indent: 1 };
+  ws.getRow(1).height = 26;
+
+  const head = ws.getRow(2);
+  cols.forEach((c, i) => {
+    const cell = head.getCell(i + 1);
+    cell.value = c.h;
+    cell.font = { bold: true, size: 10.5, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GOLD } };
+    cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: 1 };
+    cell.border = { bottom: { style: "thin", color: { argb: LINE } } };
+  });
+  head.height = 30;
+
+  const widthFor = (h) => (/Address|Mailing street|Why|Owner$/.test(h) ? 34 : /Owner|Contact person|Email/.test(h) ? 26 : /Phone/.test(h) ? 20 : /source|Signals/i.test(h) ? 30 : 14);
+  ws.columns = cols.map((c) => ({ width: widthFor(c.h) }));
+
+  const money = '"$"#,##0';
+  data.forEach((r, ri) => {
+    const row = ws.getRow(ri + 3);
+    cols.forEach((c, ci) => {
+      const cell = row.getCell(ci + 1);
+      let v = c.get(r);
+      if (v == null || v === "") v = "";
+      // Numbers stay numeric so Excel can sort/sum them.
+      if (/price/i.test(c.h) && v !== "") { cell.value = Number(v) || 0; cell.numFmt = money; }
+      else if (/SF|Years owned|portfolio|Block|Lot/i.test(c.h) && v !== "" && !isNaN(Number(v))) { cell.value = Number(v); cell.numFmt = "#,##0"; }
+      else cell.value = String(v);
+      cell.font = { size: 10.5, color: { argb: INK } };
+      cell.alignment = { vertical: "top", wrapText: /Address|Why|Mailing|Signals|source/i.test(c.h), indent: 1 };
+      cell.border = { bottom: { style: "hair", color: { argb: LINE } } };
+      // Zebra striping for readability across wide rows.
+      if (ri % 2 === 1) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF7F6FD" } };
+      // Signal colouring — the eye should land on the motivated owners.
+      if (c.h === "Address" && r.lat && r.lon) { cell.value = { text: String(v), hyperlink: `https://www.google.com/maps/search/?api=1&query=${r.lat},${r.lon}` }; cell.font = { size: 10.5, color: { argb: "FF3B5BDB" }, underline: true }; }
+      if (/^Phone/.test(c.h) && v) {
+        const digits = String(v).replace(/[^\d+]/g, "");
+        if (digits.length >= 10) { cell.value = { text: String(v), hyperlink: `tel:${digits}` }; cell.font = { size: 10.5, color: { argb: "FF3B5BDB" }, underline: true }; }
+        if (/TEAM-CONFIRMED/.test(String(v))) cell.font = { size: 10.5, bold: true, color: { argb: "FF1E7F4E" } };
+        if (/WRONG #/.test(String(v))) cell.font = { size: 10.5, color: { argb: "FFB3261E" }, strike: true };
+      }
+      if (/^Email/.test(c.h) && v) { cell.value = { text: String(v), hyperlink: `mailto:${v}` }; cell.font = { size: 10.5, color: { argb: "FF3B5BDB" }, underline: true }; }
+      if (c.h === "Absentee" && v) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3D6" } }; cell.font = { size: 10.5, bold: true, color: { argb: "FF8A5A00" } }; }
+      if (c.h === "Tax lien" && v) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDE0DE" } }; cell.font = { size: 10.5, bold: true, color: { argb: "FFB3261E" } }; }
+      if (c.h === "Vacant storefront" && v) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDE0DE" } }; cell.font = { size: 10.5, bold: true, color: { argb: "FFB3261E" } }; }
+      if (c.h === "Years owned" && Number(v) >= 15) { cell.font = { size: 10.5, bold: true, color: { argb: "FF1E7F4E" } }; }
+    });
+  });
+  ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: cols.length } };
+
+  const buf = await wb.xlsx.writeBuffer();
+  const url = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = `FRONTAGE_sourcing_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function mapSheetCSV(rows, groups) {
   const gs = groups && groups.size ? groups : new Set(SHEET_GROUPS.map(([k]) => k));
   rows = rows.map((r) => ({ ...r, _cx: sheetContactsFor(r) }));
@@ -3617,7 +3733,8 @@ function mapSheetCSV(rows, groups) {
 // Pre-export picker: choose WHICH pinned properties make the sheet, optionally run a
 // paid skip trace on just the checked ones (cost confirm first, owner-deduped via the
 // session cache, misses free), then export the CSV of exactly what's checked.
-function SheetExportModal({ rows, pw, onClose }) {
+function SheetExportModal({ rows, pw, onClose, meta }) {
+  const [xlsxBusy, setXlsxBusy] = useState(false);
   const [sel, setSelSet] = useState(() => new Set(rows.map((_, i) => i)));
   const [status, setStatus] = useState({});
   const [tracing, setTracing] = useState(false);
@@ -3705,11 +3822,22 @@ function SheetExportModal({ rows, pw, onClose }) {
             style={{ cursor: tracing || !traceTargets.length ? "default" : "pointer", fontSize: 11.5, padding: "9px 15px", borderRadius: 8, border: `1px solid ${C.gold}`, background: "transparent", color: C.gold, opacity: tracing || !traceTargets.length ? 0.5 : 1 }}>
             {tracing ? "▸ tracing…" : `🔎 TRACE CHECKED (${traceTargets.length} × ~$0.10)`}
           </button>
-          <button onClick={() => { if (selRows.length && cols.size) downloadBlob(mapSheetCSV(selRows, cols), `sourcing_sheet_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv"); }} disabled={!selRows.length || !cols.size} className="mono lift"
-            style={{ cursor: selRows.length && cols.size ? "pointer" : "default", fontSize: 11.5, padding: "9px 15px", borderRadius: 8, border: `1px solid ${C.green}`, background: "transparent", color: C.green, opacity: selRows.length && cols.size ? 1 : 0.5 }}>
-            ↓ EXPORT CSV ({selRows.length} rows · {SHEET_COLUMNS.filter((c) => cols.has(c.g)).length} cols)
+          <button onClick={async () => {
+              if (!selRows.length || !cols.size || xlsxBusy) return;
+              setXlsxBusy(true);
+              try { await downloadMapSheetXLSX(selRows, cols, { summary: meta }); } catch (e) { alert("Excel export failed: " + (e.message || e)); }
+              setXlsxBusy(false);
+            }} disabled={!selRows.length || !cols.size || xlsxBusy} className="mono lift"
+            title="Formatted Excel workbook — branded cover sheet with the search summary, styled sticky header, filters, money formatting, colour-coded signals, clickable addresses and phone numbers."
+            style={{ cursor: selRows.length && cols.size ? "pointer" : "default", fontSize: 11.5, padding: "9px 15px", borderRadius: 8, border: `1px solid ${C.green}`, background: `${C.green}18`, color: C.green, opacity: selRows.length && cols.size ? 1 : 0.5 }}>
+            {xlsxBusy ? "▸ BUILDING…" : `↓ EXCEL (${selRows.length} rows · ${SHEET_COLUMNS.filter((c) => cols.has(c.g)).length} cols)`}
           </button>
-          <span style={{ fontSize: 10.5, color: C.muted }}>Opens straight in Excel. Contacts fill from PropertyShark imports + traces.</span>
+          <button onClick={() => { if (selRows.length && cols.size) downloadBlob(mapSheetCSV(selRows, cols), `sourcing_sheet_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv"); }} disabled={!selRows.length || !cols.size} className="mono lift"
+            title="Plain CSV — for importing into another system."
+            style={{ cursor: selRows.length && cols.size ? "pointer" : "default", fontSize: 11, padding: "9px 13px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.muted, opacity: selRows.length && cols.size ? 1 : 0.5 }}>
+            ↓ CSV
+          </button>
+          <span style={{ fontSize: 10.5, color: C.muted }}>Excel = formatted deliverable (cover sheet, filters, colour-coded signals). CSV = raw import.</span>
         </div>
       </div>
     </div>
@@ -4195,7 +4323,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
             </>
           )}
         </div>
-        {sheetOpen && <SheetExportModal rows={rows} pw={pw} onClose={() => setSheetOpen(false)} />}
+        {sheetOpen && <SheetExportModal rows={rows} pw={pw} meta={understood} onClose={() => setSheetOpen(false)} />}
       </div>
     </div>
   );

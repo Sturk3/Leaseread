@@ -3524,6 +3524,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
     const lg = layerRef.current;
     if (!lg) return;
     lg.clearLayers();
+    if (tempLayerRef.current) tempLayerRef.current.clearLayers(); // stale highlight ring goes with the old set
     for (const r of leads) {
       const pin = !!r.pinned, vacHit = !!r.storefront_vacant;
       const cm = L.circleMarker([r.lat, r.lon], {

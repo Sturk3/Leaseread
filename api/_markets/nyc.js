@@ -396,11 +396,21 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
   // O=other public authority, X=fully tax-exempt (universities, churches, hospitals);
   // private lots are 'P' or blank. Co-op / condo ownership corporations are excluded by
   // name (a co-op is owned by its shareholders — there's no single seller to call).
+  // NOTE: ownertype alone is NOT enough — NYU's lots came back with a private code, so
+  // institutions are also excluded by NAME (verified against a live Canal–17th run).
   if (targetsOnly !== false) {
     where.push("(ownertype is null OR ownertype in ('P',' ',''))");
-    for (const bad of ["OWNERS CORP", "TENANTS CORP", "APARTMENT CORP", "HOUSING DEVELOPMENT FUND", "HDFC", "CONDOMINIUM", "CONDO ASSN", "HOMEOWNERS"]) {
-      where.push(`upper(ownername) not like '%${bad}%'`);
-    }
+    const NOT_ACQUIRABLE = [
+      // co-op / condo ownership corps — owned by shareholders, no single seller
+      "OWNERS CORP", "TENANTS CORP", "APARTMENT CORP", "HOUSING DEVELOPMENT FUND", "HDFC", "CONDOMINIUM", "CONDO ASSN", "HOMEOWNERS",
+      // institutions
+      "UNIVERSITY", "COLLEGE", "SCHOOL", "ACADEMY", "TRUSTEES", "CHURCH", "SYNAGOGUE", "ARCHDIOCESE", "DIOCESE",
+      "HOSPITAL", "MEDICAL CENTER", "MUSEUM", "LIBRARY", "YMCA", "YWCA",
+      // public bodies
+      "CITY OF NEW YORK", "NYC ", "HOUSING AUTHORITY", "DEPT OF", "DEPARTMENT OF", "BOARD OF EDUCATION",
+      "STATE OF NEW YORK", "UNITED STATES", "PORT AUTHORITY", "TRANSIT AUTHORITY", "METROPOLITAN TRANSPORTATION",
+    ];
+    for (const bad of NOT_ACQUIRABLE) where.push(`upper(ownername) not like '%${bad}%'`);
   }
   if (minSqft) where.push(`bldgarea>=${Number(minSqft)}`);
   if (maxSqft) where.push(`(bldgarea<=${Number(maxSqft)} AND bldgarea>0)`);

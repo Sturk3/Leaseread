@@ -3516,6 +3516,8 @@ function MapView({ pw, config, onSourced, goSourcing }) {
   const [understood, setUnderstood] = useState("");
   const [sel, setSel] = useState(null);
   const [rows, setRows] = useState([]); // current result set — feeds the ↓ SHEET export
+  const rowsRef = useRef(rows); rowsRef.current = rows;
+  const tempLayerRef = useRef(null); // highlight pin for look-what-I-clicked (never wipes results)
 
   // Shared pin renderer — used by map commands AND by Scout's results (drawer → map).
   const renderPins = (leads, opts = {}) => {
@@ -3578,6 +3580,23 @@ function MapView({ pw, config, onSourced, goSourcing }) {
       if (o.absenteeOnly) leads = leads.filter((r) => r.absentee || r.pinned);
       if (o.taxLienOnly) leads = leads.filter((r) => r.tax_lien || r.pinned);
       if (o.minYears) leads = leads.filter((r) => (Number(r.years_owned) || 0) >= o.minYears || r.pinned);
+      // A plain map click while a RESULT SET is showing must NOT wipe the results —
+      // open the clicked lot's dossier with a gold highlight ring and keep every pin,
+      // the count, and the SHEET export exactly as they were.
+      if (opts.single && rowsRef.current.length > 1) {
+        const clicked = leads.find((r) => r.pinned) || leads[0];
+        if (clicked) {
+          setSel(clicked);
+          const tl = tempLayerRef.current;
+          if (tl) {
+            tl.clearLayers();
+            L.circleMarker([clicked.lat, clicked.lon], { radius: 11, weight: 2, color: "#f2c14e", fill: false, bubblingMouseEvents: false })
+              .bindTooltip(`${clicked.address || "?"}${clicked.name ? ` — ${clicked.name}` : ""}`, { direction: "top" }).addTo(tl);
+          }
+        }
+        return;
+      }
+      if (tempLayerRef.current) tempLayerRef.current.clearLayers();
       setCount(leads.length);
       setRows(leads);
       renderPins(leads);
@@ -3632,6 +3651,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
       attribution: '© OpenStreetMap · © CARTO', maxZoom: 19,
     }).addTo(m);
     layerRef.current = L.layerGroup().addTo(m);
+    tempLayerRef.current = L.layerGroup().addTo(m);
     m.on("click", (e) => loadAtRef.current(e.latlng.lat, e.latlng.lng, { single: true }));
     mapRef.current = m;
     setTimeout(() => m.invalidateSize(), 60); // full-screen flex container settles after first paint

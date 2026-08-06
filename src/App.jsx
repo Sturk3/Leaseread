@@ -878,7 +878,10 @@ function pickLeadFields(r) {
     years_owned: r.years_owned, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price,
     absentee: r.absentee || null, tax_lien: r.tax_lien || false, buildable_sqft: r.buildable_sqft || null,
     ...(r.storefront_vacant ? { storefront_vacant: true, vacancy_year: r.vacancy_year || null } : {}),
-    retail_sqft: r.retail_sqft || null, portfolio_count: r.portfolio_count || null,
+    // Areas: retail AND office AND total building — an office search must be able to show
+    // office SF (leaving these out exported blank columns on a real sheet).
+    retail_sqft: r.retail_sqft || null, office_sqft: r.office_sqft || null, bldg_sqft: r.bldg_sqft || null,
+    portfolio_count: r.portfolio_count || null,
     distance: r.distance ?? null,
   };
 }
@@ -3558,6 +3561,7 @@ const SHEET_GROUPS = [
 const SHEET_COLUMNS = [
   { g: "property", h: "Address", get: (r) => r.address },
   { g: "property", h: "Borough", get: (r) => r.borough },
+  { g: "property", h: "Office SF", get: (r) => r.office_sqft },
   { g: "property", h: "Retail SF", get: (r) => r.retail_sqft },
   { g: "property", h: "Building SF", get: (r) => r.bldg_sqft },
   { g: "owner", h: "Owner", get: (r) => r.name },

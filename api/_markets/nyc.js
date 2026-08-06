@@ -375,7 +375,7 @@ async function geocodeStreetLat(text) {
 
 // PLUTO: find lots by asset type + street, radius, or a STREET BAND ("south of 17th,
 // north of Canal"), with the owner as the lead.
-async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, anchorOnly, minSqft, maxSqft, minOfficeSqft, maxOfficeSqft, southOfStreet, northOfStreet, minRetailSqft, minUnits, builtAfter, builtBefore, limit, appToken }) {
+async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, anchorOnly, minSqft, maxSqft, minOfficeSqft, maxOfficeSqft, southOfStreet, northOfStreet, minRetailSqft, minUnits, builtAfter, builtBefore, targetsOnly, limit, appToken }) {
   // Single-property mode: an address was given with the radius "off" — return ONLY
   // that one lot (ignoring asset/zoning filters), nothing nearby.
   if (anchorOnly) {
@@ -391,6 +391,17 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
   const prefixes = ASSET_TYPES[assetType] || null;
   if (prefixes) where.push("(" + prefixes.map((p) => `starts_with(bldgclass,'${p}')`).join(" OR ") + ")");
   if (street) where.push(streetClause("address", street));
+  // ACQUIRABLE TARGETS ONLY (buy-side default): drop what can't actually be bought as a
+  // building. PLUTO ownertype flags public/tax-exempt ownership — C=city, M=mixed city,
+  // O=other public authority, X=fully tax-exempt (universities, churches, hospitals);
+  // private lots are 'P' or blank. Co-op / condo ownership corporations are excluded by
+  // name (a co-op is owned by its shareholders — there's no single seller to call).
+  if (targetsOnly !== false) {
+    where.push("(ownertype is null OR ownertype in ('P',' ',''))");
+    for (const bad of ["OWNERS CORP", "TENANTS CORP", "APARTMENT CORP", "HOUSING DEVELOPMENT FUND", "HDFC", "CONDOMINIUM", "CONDO ASSN", "HOMEOWNERS"]) {
+      where.push(`upper(ownername) not like '%${bad}%'`);
+    }
+  }
   if (minSqft) where.push(`bldgarea>=${Number(minSqft)}`);
   if (maxSqft) where.push(`(bldgarea<=${Number(maxSqft)} AND bldgarea>0)`);
   // OFFICE-SPACE sizing uses PLUTO's officearea (the office SF on the lot), not total
@@ -723,7 +734,7 @@ async function saveLeads(leads) {
 }
 
 export async function search(q) {
-  const { sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, maxSqft, minOfficeSqft, maxOfficeSqft, southOfStreet, northOfStreet, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, vacantOnly } = q;
+  const { sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, maxSqft, minOfficeSqft, maxOfficeSqft, southOfStreet, northOfStreet, minRetailSqft, minUnits, builtAfter, builtBefore, targetsOnly, devOnly, minBuildable, vacantOnly } = q;
 
   const appToken = null; // NYC account/token disconnected — anonymous requests only
   const wanted = Array.isArray(sources) && sources.length ? sources : ["acris", "dob"];
@@ -758,6 +769,7 @@ export async function search(q) {
       southOfStreet: southOfStreet || undefined, northOfStreet: northOfStreet || undefined,
       minRetailSqft: minRetailSqft || undefined, minUnits: minUnits || undefined,
       builtAfter: builtAfter || undefined, builtBefore: builtBefore || undefined,
+      targetsOnly: targetsOnly === false || targetsOnly === "false" ? false : true,
       limit: lim, appToken,
     };
 

@@ -121,7 +121,12 @@ export default function App() {
 
   // Which tool is showing. Defaults to the Agent tab (the Screener is hidden / folded
   // into Scout, so it must NOT be the default or a reload lands on the tabless OM grader).
-  const [view, setView] = useState("agent");
+  // Map is the front door (2026-08-06): deterministic click-a-building sourcing. The
+  // Agent (Scout) tab is DEACTIVATED like Lease Radar before it — nav entry removed,
+  // component + /api/agent left intact; to re-enable, re-add ["agent","Agent","✦"] to
+  // the nav array below. The dossier's AI features (quick take, outreach, unmask) are
+  // separate endpoints and still live everywhere dossiers render.
+  const [view, setView] = useState("map");
   const [sourcingRows, setSourcingRows] = useState(null); // shared between Scout + the Sourcing tab
 
   function setConfig(updater) {
@@ -332,7 +337,7 @@ export default function App() {
         </div>
         <nav className="rail-nav" style={{ padding: "28px 18px", display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
           <div className="rail-label" style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2.4px", textTransform: "uppercase", color: "#555f76", padding: "4px 14px 12px" }}>Engines</div>
-          {[["agent", "Agent", "✦"], ["map", "Map", "🗺"], ["sourcing", "Sourcing", "◎"], ["corridors", "Corridors", "▚"], ["pipeline", "Pipeline", "★"], ["comps", "Comp Sheet", "≣"], ["skiptrace", "Skip Trace", "🔎"]].map(([v, lab, ic]) => (
+          {[["map", "Map", "🗺"], ["sourcing", "Sourcing", "◎"], ["corridors", "Corridors", "▚"], ["pipeline", "Pipeline", "★"], ["comps", "Comp Sheet", "≣"], ["skiptrace", "Skip Trace", "🔎"]].map(([v, lab, ic]) => (
             <button key={v} onClick={() => setView(v)} className={view === v ? "rail-item active" : "rail-item"}>
               <span className="ic">{ic}</span> {lab}
             </button>
@@ -378,8 +383,8 @@ export default function App() {
             🔑 API KEY{hasOwnKey ? " ✓" : ""}
           </button>
         </header>
-        <div className="main-scroll" style={{ flex: 1, overflowY: "auto", padding: "0 40px 60px" }}>
-          <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+        <div className="main-scroll" style={{ flex: 1, overflowY: "auto", padding: view === "map" ? "0 18px 14px" : "0 40px 60px" }}>
+          <div style={{ maxWidth: view === "map" ? "none" : 1040, margin: "0 auto" }}>
 
         {showKeys && <ApiKeysPanel onSaved={() => setHasOwnKey(!!userKeys().anthropic)} onClose={() => setShowKeys(false)} />}
 
@@ -397,7 +402,7 @@ export default function App() {
         {view === "radar" && <LeaseRadar pw={pw} />}
 
         {view === "pipeline" && <Pipeline pw={pw} />}
-        {view === "map" && <MapView pw={pw} />}
+        {view === "map" && <MapView pw={pw} config={config} onSourced={(ui) => setSourcingRows(ui.rows)} goSourcing={() => setView("sourcing")} />}
         {view === "skiptrace" && <><PropertySharkImport pw={pw} /><ManualSkipTrace pw={pw} /></>}
 
         {view === "nda" && <NDAReview pw={pw} />}
@@ -1151,10 +1156,12 @@ function sourcingRowsFrom(name, data) {
   return null;
 }
 
-function AgentChat({ pw, config, onSourced, goSourcing }) {
+function AgentChat({ pw, config, onSourced, goSourcing, seed }) {
   const [log, setLog] = useState([]);        // render transcript
   const [convo, setConvo] = useState([]);    // raw Anthropic-format messages
   const [input, setInput] = useState("");
+  // Map drawer hands over a typed question ("seed") when a command turns out to be research.
+  useEffect(() => { if (seed) setInput(seed); }, [seed]);
   const [busy, setBusy] = useState(false);
   const [attachedDoc, setAttachedDoc] = useState(null); // { name, kind:"pdf"|"text", data|text } — an OM/NDA PDF to grade, or a CSV/text list of leads to rank
   const [mode, setModeState] = useState(() => { try { return localStorage.getItem(SCOUT_MODE_KEY) || "deep"; } catch { return "deep"; } });
@@ -3447,6 +3454,25 @@ function parseMapCommand(text) {
     .replace(/[.,;]+\s*$/, "").replace(/\s+/g, " ").trim();
   return out;
 }
+// The exportable sourcing sheet for a map result set — every pinned property with its
+// FULL owner block (name, mailing, tenure, sale, signals), shaped for outreach and
+// skip-trace lists. This is the "make me a sheet from what's on the map" export.
+function mapSheetCSV(rows) {
+  const cols = [
+    ["Address", (r) => r.address], ["Borough", (r) => r.borough],
+    ["Owner", (r) => r.name], ["Owner type", (r) => r.entity_type],
+    ["Mailing street", (r) => r.contact_address], ["Mailing city", (r) => r.city], ["Mailing state", (r) => r.state], ["Mailing zip", (r) => r.zip],
+    ["Years owned", (r) => r.years_owned], ["Last sale date", (r) => r.last_sale_date], ["Last sale price", (r) => r.last_sale_price],
+    ["Absentee", (r) => r.absentee || ""], ["Tax lien", (r) => (r.tax_lien ? "YES" : "")],
+    ["Vacant storefront", (r) => (r.storefront_vacant ? `reported ${r.vacancy_year || ""}` : "")],
+    ["Retail SF", (r) => r.retail_sqft], ["Building SF", (r) => r.bldg_sqft], ["Unused buildable SF", (r) => r.buildable_sqft],
+    ["Owner portfolio (in results)", (r) => r.portfolio_count],
+    ["Block", (r) => r.block], ["Lot", (r) => r.lot], ["Lat", (r) => r.lat], ["Lon", (r) => r.lon],
+  ];
+  const esc = (v) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  return [cols.map((c) => c[0]).join(","), ...rows.map((r) => cols.map((c) => esc(c[1](r))).join(","))].join("\n");
+}
+
 // Top-hit NYC geocode for typed commands (the autocomplete path stays for plain addresses).
 async function geocodeNycTop(text) {
   try {
@@ -3465,8 +3491,10 @@ async function geocodeNycTop(text) {
 // Search an address to fly there; set a radius to pin every PLUTO property around
 // the point (same /api/search engine the Sourcing tab uses). NYC-first (the only
 // market with parcel coords in every row); other markets keep the Sourcing tab.
-function MapView({ pw }) {
+function MapView({ pw, config, onSourced, goSourcing }) {
   const boxRef = useRef(null);
+  const [scoutOpen, setScoutOpen] = useState(false); // ✦ Scout lives IN the map now (drawer)
+  const [scoutSeed, setScoutSeed] = useState("");
   const mapRef = useRef(null);
   const layerRef = useRef(null);
   const [loc, setLoc] = useState("");
@@ -3481,6 +3509,7 @@ function MapView({ pw }) {
   const [count, setCount] = useState(null);
   const [understood, setUnderstood] = useState("");
   const [sel, setSel] = useState(null);
+  const [rows, setRows] = useState([]); // current result set — feeds the ↓ SHEET export
 
   const loadAt = async (lat, lon, opts = {}) => {
     setBusy(true); setErr("");
@@ -3509,6 +3538,7 @@ function MapView({ pw }) {
       if (o.taxLienOnly) leads = leads.filter((r) => r.tax_lien || r.pinned);
       if (o.minYears) leads = leads.filter((r) => (Number(r.years_owned) || 0) >= o.minYears || r.pinned);
       setCount(leads.length);
+      setRows(leads);
       const lg = layerRef.current;
       if (lg) {
         lg.clearLayers();
@@ -3546,6 +3576,14 @@ function MapView({ pw }) {
     setVacantOnly(cmd.vacantOnly);
     let target = null;
     if (cmd.addressText && cmd.addressText.length > 2) target = await geocodeNycTop(cmd.addressText);
+    // Not a sourcing command (no filters parsed, no address found)? That's a RESEARCH
+    // question — hand it to Scout in the drawer instead of pinning garbage.
+    const hasFilters = cmd.vacantOnly || cmd.assetType || cmd.absenteeOnly || cmd.taxLienOnly || cmd.devOnly || cmd.minYears || cmd.minUnits || cmd.minSqft || cmd.minRetailSqft || cmd.radius != null;
+    if (!target && !hasFilters) {
+      setScoutSeed(text); setScoutOpen(true);
+      setUnderstood(`That reads like a research question — opened ✦ Scout with it. (Map commands look like: "vacant storefronts within .25 mi of 103 Prince St".)`);
+      return;
+    }
     const c = target || (mapRef.current ? { lat: mapRef.current.getCenter().lat, lon: mapRef.current.getCenter().lng, label: "the current map view" } : null);
     if (!c) return;
     const effRad = cmd.radius != null ? cmd.radius : radiusRef.current;
@@ -3569,6 +3607,7 @@ function MapView({ pw }) {
     layerRef.current = L.layerGroup().addTo(m);
     m.on("click", (e) => loadAtRef.current(e.latlng.lat, e.latlng.lng, { single: true }));
     mapRef.current = m;
+    setTimeout(() => m.invalidateSize(), 60); // full-screen flex container settles after first paint
     return () => { m.remove(); mapRef.current = null; };
   }, []);
 
@@ -3580,7 +3619,7 @@ function MapView({ pw }) {
 
   const selStyle = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, color: C.ivory, fontSize: 12, padding: "8px 10px" };
   return (
-    <div style={{ marginTop: 22 }}>
+    <div style={{ marginTop: 10, display: "flex", flexDirection: "column", height: "calc(100vh - 170px)", minHeight: 600 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
         <AddressAutocomplete value={loc} onChange={setLoc} onPick={onPick} onEnter={runCommand} placeholder='Type a command — "vacant storefronts within .25 mi of 103 Prince St", "office near 425 5th Ave" — or an address, or just click the map…' style={{ ...selStyle, flex: "1 1 340px" }} marketHint="nyc" />
         <button onClick={() => runCommand()} className="mono lift" style={{ cursor: "pointer", fontSize: 11.5, padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>GO</button>
@@ -3597,8 +3636,19 @@ function MapView({ pw }) {
           <input type="checkbox" checked={vacantOnly} onChange={(e) => setVacantOnly(e.target.checked)} style={{ accentColor: "#e0524d" }} />
           🚪 vacant storefronts
         </label>
+        <button onClick={() => setScoutOpen((v) => !v)} className="mono lift" title="Open Scout — the AI researcher — in a drawer over the map. For questions the records can't answer alone: who's behind an LLC, portfolios, contacts, news."
+          style={{ cursor: "pointer", fontSize: 11.5, padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.gold}${scoutOpen ? "" : "55"}`, background: scoutOpen ? C.goldSoft : "transparent", color: C.gold }}>
+          ✦ SCOUT
+        </button>
         {busy && <span className="mono" style={{ fontSize: 11, color: C.gold }}>▸ loading…</span>}
         {!busy && count != null && <span className="mono" style={{ fontSize: 11, color: C.muted }}>{count} propert{count === 1 ? "y" : "ies"} on map</span>}
+        {rows.length > 0 && (
+          <button onClick={() => downloadBlob(mapSheetCSV(rows), `sourcing_sheet_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono lift"
+            title="Export everything currently pinned as a CSV sourcing sheet — address, owner, mailing address, tenure, last sale, and every signal — ready for outreach or a skip-trace list."
+            style={{ cursor: "pointer", fontSize: 11.5, padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.green}`, background: "transparent", color: C.green }}>
+            ↓ SHEET ({rows.length})
+          </button>
+        )}
       </div>
       {(understood || err) && (
         <div style={{ marginBottom: 8, fontSize: 11.5 }}>
@@ -3606,9 +3656,19 @@ function MapView({ pw }) {
           {err && <span style={{ color: C.red, marginLeft: understood ? 10 : 0 }}>{err}</span>}
         </div>
       )}
-      <div style={{ display: "flex", gap: 14, alignItems: "stretch", flexWrap: "wrap" }}>
-        <div ref={boxRef} style={{ flex: "1 1 520px", minHeight: 620, borderRadius: 12, border: `1px solid ${C.line}`, overflow: "hidden", zIndex: 0 }} />
-        <div style={{ flex: "1 1 380px", maxWidth: 560, maxHeight: 620, overflowY: "auto", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: "4px 16px 16px" }}>
+      <div style={{ position: "relative", flex: 1, minHeight: 500, borderRadius: 12, border: `1px solid ${C.line}`, overflow: "hidden" }}>
+        <div ref={boxRef} style={{ position: "absolute", inset: 0, zIndex: 0 }} />
+        {scoutOpen && (
+          <div style={{ position: "absolute", left: 12, top: 12, bottom: 12, width: 520, maxWidth: "88%", zIndex: 1100, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 12, padding: "2px 16px 12px", overflowY: "auto", boxShadow: "0 14px 44px rgba(0,0,0,.5)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+              <span className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.18em" }}>✦ SCOUT — RESEARCH & QUESTIONS</span>
+              <button onClick={() => setScoutOpen(false)} className="mono" style={{ cursor: "pointer", border: "none", background: "transparent", color: C.muted, fontSize: 15 }}>✕</button>
+            </div>
+            <AgentChat pw={pw} config={config} seed={scoutSeed} onSourced={onSourced} goSourcing={goSourcing} />
+          </div>
+        )}
+        {(sel || !scoutOpen) && (
+        <div style={{ position: "absolute", right: 12, top: 12, bottom: 12, width: 430, maxWidth: "88%", zIndex: 1050, overflowY: "auto", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: "4px 16px 16px", boxShadow: "0 14px 44px rgba(0,0,0,.45)" }}>
           {sel ? (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0 2px" }}>
@@ -3633,10 +3693,11 @@ function MapView({ pw }) {
                 “retail with tax liens within .1 mi of Spring & Broadway”<br />
                 “development sites with air rights within 2 blocks of 72 Greene St”
               </div>
-              <div style={{ marginTop: 10 }}>Commands run straight against the public records — parsed word-for-word, no AI in the data path, so what you asked is exactly what gets pinned. 🚪 red pins = storefronts their owners reported VACANT to the City (LL157 registry).</div>
+              <div style={{ marginTop: 10 }}>Commands run straight against the public records — parsed word-for-word, no AI in the data path, so what you asked is exactly what gets pinned. 🚪 red pins = storefronts their owners reported VACANT to the City (LL157 registry). For research questions ("who's behind this LLC?"), hit <span className="mono" style={{ color: C.gold }}>✦ SCOUT</span> in the toolbar.</div>
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );

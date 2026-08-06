@@ -200,6 +200,7 @@ async function resolveUniverse(corridor, boroName, boroCode, cov) {
   // overlay/zoning + the registry as independent ways in.
   const universe = [];
   const det = cov.universe.retail_detected;
+  const isOffice = String(corridor.asset_class || "retail").toLowerCase() === "office";
   for (const [bbl, u] of byBbl) {
     const r = u.row;
     const cls = clean(r.bldgclass).toUpperCase();
@@ -208,19 +209,32 @@ async function resolveUniverse(corridor, boroName, boroCode, cov) {
     const zone = clean(r.zonedist1).toUpperCase();
     const overlays = [clean(r.overlay1), clean(r.overlay2)].map((o) => o.toUpperCase());
     const commercialZoned = zone.startsWith("C") || overlays.some((o) => o.startsWith("C1") || o.startsWith("C2"));
-    if (cls.startsWith("K")) { u.detected.add("store-class"); det.store_class++; }
-    if (retailArea > 0) { u.detected.add("retail-floor-area"); det.retail_area++; }
-    if (comArea > 0 && commercialZoned && !cls.startsWith("K")) { u.detected.add("commercial-overlay-mixed-use"); det.overlay_mixed_use++; }
-    if (storefrontByBbl.has(bbl)) { u.detected.add("storefront-registry"); det.storefront_registry++; }
+    // ASSET CLASS — a corridor declares retail (default) or office; the universe test
+    // changes accordingly. Office: PLUTO 'O' building classes (office buildings) and
+    // any lot carrying office floor area; loft/mixed 'L'/'RO' classes count when they
+    // actually have office SF. Retail keeps the original store-class / retail-area /
+    // commercial-overlay / storefront-registry logic.
+    if (isOffice) {
+      const officeArea = toNum(r.officearea) || 0;
+      if (cls.startsWith("O")) { u.detected.add("office-class"); det.store_class++; }
+      if (officeArea > 0) { u.detected.add("office-floor-area"); det.retail_area++; }
+      if (officeArea > 0 && (cls.startsWith("L") || cls.startsWith("R"))) { u.detected.add("loft-mixed-office"); det.overlay_mixed_use++; }
+    } else {
+      if (cls.startsWith("K")) { u.detected.add("store-class"); det.store_class++; }
+      if (retailArea > 0) { u.detected.add("retail-floor-area"); det.retail_area++; }
+      if (comArea > 0 && commercialZoned && !cls.startsWith("K")) { u.detected.add("commercial-overlay-mixed-use"); det.overlay_mixed_use++; }
+      if (storefrontByBbl.has(bbl)) { u.detected.add("storefront-registry"); det.storefront_registry++; }
+    }
     if (u.detected.size) universe.push({ bbl, ...u });
   }
 
   // Deterministic cap so a mis-drawn corridor can't blow the serverless budget:
   // best tiers first, biggest retail area first, bbl as the stable tiebreak.
   const MAX_UNIVERSE = 450;
+  const areaOf = (row) => (isOffice ? toNum(row.officearea) : toNum(row.retailarea)) || 0;
   universe.sort((a, b) =>
     TIER_RANK[b.tier] - TIER_RANK[a.tier] ||
-    (toNum(b.row.retailarea) || 0) - (toNum(a.row.retailarea) || 0) ||
+    areaOf(b.row) - areaOf(a.row) ||
     a.bbl.localeCompare(b.bbl));
   if (universe.length > MAX_UNIVERSE) {
     cov.notes.push(`universe trimmed ${universe.length} → ${MAX_UNIVERSE} (tier, then retail SF)`);

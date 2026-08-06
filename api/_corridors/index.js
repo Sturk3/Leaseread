@@ -42,6 +42,10 @@
 
 import downtownNycTrophyRetail from "./downtown-nyc-trophy-retail.js";
 import kingStreetCharleston from "./king-street-charleston.js";
+import fifthMadisonTrophyRetail from "./fifth-madison-trophy-retail.js";
+import meatpackingWestVillageRetail from "./meatpacking-west-village-retail.js";
+import sohoNohoOffice from "./soho-noho-office.js";
+import flatironUnionSquareOffice from "./flatiron-union-square-office.js";
 
 const TIERS = new Set(["flagship", "luxury", "boutique"]);
 const SIDES = new Set(["both", "north", "south", "east", "west"]);
@@ -73,7 +77,11 @@ function validateCorridor(c) {
 
 // King Street first — it's the primary focus and screens in ~3s (the NYC SoHo pass is
 // slower), so it's the right default to auto-load on the Corridors page.
-const CORRIDORS = [kingStreetCharleston, downtownNycTrophyRetail].map(validateCorridor);
+const CORRIDORS = [
+  kingStreetCharleston,
+  downtownNycTrophyRetail, fifthMadisonTrophyRetail, meatpackingWestVillageRetail, // retail
+  sohoNohoOffice, flatironUnionSquareOffice,                                        // office
+].map(validateCorridor);
 {
   const ids = new Set();
   for (const c of CORRIDORS) {

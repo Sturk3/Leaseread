@@ -530,6 +530,21 @@ const TOOLS = [
     },
   },
   {
+    name: "saved_research",
+    description:
+      "FREE instant recall from the firm's saved research memory — everything the team has already learned: prior AI research " +
+      "briefs (with save dates), paid skip-trace results, and imported PropertyShark contacts for a property/owner. ALWAYS " +
+      "check this FIRST before web_research or reveal_contact: a memory hit answers instantly at $0. If the memory is stale " +
+      "or thin, go live afterwards — your new findings are saved automatically, so the firm gets smarter with every question.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Owner / entity / person name to recall." },
+        address: { type: "string", description: "Property address to recall." },
+      },
+    },
+  },
+  {
     name: "reveal_contact",
     description:
       "PAID skip trace (~$0.10 per match, billed only on a hit) — returns phone numbers + emails for a NAMED PERSON at an " +
@@ -598,6 +613,7 @@ CORRIDOR AVAILABILITY SCREENS (retail_availability — you are the ONLY way to r
 - Surface every institutional contact you find WITH its source. Be clear these are published business numbers; a private owner's personal cell is not on the open web and needs reveal_contact (paid skip trace).
 
 FINDING PHONE NUMBERS (work this chain END-TO-END whenever the user wants to reach an owner — asking "get me their number / how do I contact them" is your green light for the whole chain, including the paid steps; the app still shows a confirm before each paid trace)
+0. saved_research FIRST — the firm may already hold the number or the unmask from earlier work ($0, instant).
 1. Establish the owner of record from the free records first (search_properties / the market search + property_intel).
 2. If the owner is a PERSON: reveal_contact with their name + MAILING address. Done — lead with the BEST-graded mobile numbers.
 3. If the owner is an LLC / company (the usual case): DO NOT trace the LLC — unmask the human first. NYC: property_intel's named HPD officers + hidden_portfolio. CT/CA/TN/SC: the state entity lookup for principals/registered agent. Anywhere: web_research on the entity for principals. THEN reveal_contact on the NAMED PRINCIPAL — their name + the mailing address from the deed, or the city/state where research places them.
@@ -614,6 +630,10 @@ DOCUMENT REVIEW (offering memos & NDAs)
 - If the user attaches an offering memorandum PDF (or pastes one) and wants it underwritten/graded, call grade_offering_memo. It scores the deal against the firm's saved buy-box and returns extracted financials, the tenant roster, per-criterion scores, and a Pursue/Watch/Pass recommendation. Lead with the recommendation and the few drivers that moved it; flag any missing/low-confidence figures.
 - If the user attaches/pastes an NDA and wants it reviewed/redlined, call review_nda. It flags each clause Keep/Revise/Cut/Flag against the firm's NDA playbook with suggested language + missing protections. Lead with the overall risk read and the clauses that need attention. (It's a drafting aid — remind them counsel should confirm.)
 - A PDF attachment could be either — pick the tool from what the user asks for.
+
+THE FIRM'S MEMORY (you LEARN — use it)
+- saved_research is FREE and instant: the firm's accumulated research on any owner/property — prior briefs, paid trace results, PropertyShark contacts. Check it FIRST whenever a question involves a specific owner or property. A hit may fully answer the question at $0; cite how old the saved research is (savedAt).
+- Everything you find is saved automatically. When you re-research a target, the engine builds ON TOP of the saved brief (it's passed as prior context) — confirm, correct, and extend rather than rediscover. The more the team asks, the smarter you get.
 
 RESEARCH SPEND (accuracy comes first — the team would rather pay for a right answer than save on a wrong one)
 - The FREE structured tools (search_properties, property_intel, transaction_history, portfolios, foot_traffic, sales_comps, the CT/MA/Hamptons/SF/Charleston searches + sf_property_intel + charleston_property_intel) cost NOTHING. They are now very rich — sf_property_intel alone returns ~11 layers — so they answer most questions on their own. ALWAYS exhaust them first; detail is free here, so go deep.

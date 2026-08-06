@@ -1249,6 +1249,27 @@ function AgentChat({ pw, config, onSourced, goSourcing, seed, onMapRows }) {
       const data = await postJSON("/api/nda", body);
       return { forModel: data, uiSummary: (attachedDoc && attachedDoc.kind === "pdf") ? `reviewed ${attachedDoc.name}` : "reviewed NDA" };
     }
+    // THE FIRM'S MEMORY — Scout's free recall tool. Runs entirely in the browser against
+    // the synced research memory: saved AI briefs, paid trace results, PropertyShark
+    // contacts. No server call, no cost — this is how Scout "learns" from past work.
+    if (name === "saved_research") {
+      await psEnsureSynced(pw); // make sure the team's shared memory is hydrated first
+      const target = { address: inputArgs.address || "", owner: inputArgs.name || "", name: inputArgs.name || "" };
+      const saved = {};
+      const entry = loadAiCache()[aiCacheId(target)] || null;
+      if (entry) for (const [k, v] of Object.entries(entry)) saved[k] = { savedAt: v.savedAt, mode: v.mode || "", text: String(v.text || "").slice(0, 5000) };
+      const ps = psLookup({ name: inputArgs.name, address: inputArgs.address });
+      let trace = null;
+      const nameKey = String(inputArgs.name || "").toUpperCase().trim();
+      if (nameKey) { for (const [k, v] of _skipCache.entries()) { if (String(k).startsWith(nameKey + "|")) { trace = v; break; } } }
+      const found = Object.keys(saved).length > 0 || ps || trace;
+      return {
+        forModel: found
+          ? { saved_answers: saved, propertyshark_contact: ps ? psAsSkipResult(ps) : null, prior_skip_trace: trace, note: "From the firm's saved research memory ($0). savedAt is epoch ms — tell the user how old the research is; refresh with live tools if stale." }
+          : { empty: true, note: "Nothing saved yet for this target. Go live (records/web_research/reveal_contact) — your findings will be remembered automatically for next time." },
+        uiSummary: found ? "🧠 memory hit ($0)" : "memory empty",
+      };
+    }
     // Web research/search: honor Quick (knowledge, free-ish) vs Deep (live web, paid) and
     // the monthly spend cap. Over cap, deep auto-downgrades to knowledge so nothing breaks.
     if (name === "web_research" || name === "web_search" || name === "brand_radar" || name === "ca_entity_lookup" || name === "tn_entity_lookup" || name === "sc_entity_lookup") {
@@ -1264,9 +1285,16 @@ function AgentChat({ pw, config, onSourced, goSourcing, seed, onMapRows }) {
       if (deep && webCallsRef.current >= webBudget) {
         return { forModel: { note: `Live-web budget for this run is used up (${webBudget} calls). Answer NOW with what you already have; offer the user a follow-up or Deep Research for more.` }, uiSummary: "web budget reached" };
       }
-      const data = await postJSON(TOOL_ROUTES[name].url, { password: pw, ...TOOL_ROUTES[name].body(inputArgs), mode: deep ? "web" : "knowledge" });
+      // LEARNING LOOP: a saved brief for this target rides along as `prior` — the research
+      // engine builds ON TOP of it (confirm / correct / extend) instead of starting cold.
+      const priorEntry = name === "web_research" ? getAiAnswer({ address: inputArgs.address, owner: inputArgs.name || "" }, "research") : null;
+      const data = await postJSON(TOOL_ROUTES[name].url, { password: pw, ...TOOL_ROUTES[name].body(inputArgs), mode: deep ? "web" : "knowledge", ...(priorEntry && priorEntry.text ? { prior: String(priorEntry.text).slice(0, 6000) } : {}) });
       if (data && data.usage) setTokens(recordUsage(data.usage, data.model));
       if (deep) { webCallsRef.current += 1; addScoutSpend(WEB_RUN_COST); setSpend(scoutSpend()); }
+      // …and every new brief is remembered (locally + team memory) for next time.
+      if (name === "web_research" && data && data.brief && (inputArgs.address || inputArgs.name)) {
+        saveAiAnswer({ address: inputArgs.address || "", owner: inputArgs.name || "" }, "research", data.brief, deep ? "web" : "knowledge");
+      }
       const out = { forModel: shapeWebResult(data), uiSummary: deep ? "web research" : (overCap ? "quick take (cap reached)" : "quick take") };
       if (!data.error) toolCacheRef.current.set(wKey, out);
       return out;

@@ -1156,7 +1156,7 @@ function sourcingRowsFrom(name, data) {
   return null;
 }
 
-function AgentChat({ pw, config, onSourced, goSourcing, seed }) {
+function AgentChat({ pw, config, onSourced, goSourcing, seed, onMapRows }) {
   const [log, setLog] = useState([]);        // render transcript
   const [convo, setConvo] = useState([]);    // raw Anthropic-format messages
   const [input, setInput] = useState("");
@@ -1331,6 +1331,12 @@ function AgentChat({ pw, config, onSourced, goSourcing, seed }) {
           updateTool(id, "done", out.uiSummary);
           const md = scoutMapData(out.forModel);
           if (md) setLog((l) => [...l, { kind: "map", items: md.items, center: md.center }]);
+          // When Scout lives in the map drawer, its search results also pin on the BIG map
+          // behind it (full rows → real dossiers on pin click + sheet export).
+          if (md && onMapRows) {
+            const raw = out.forModel.leads || out.forModel.properties || out.forModel.rows || [];
+            if (raw.length) onMapRows(raw);
+          }
           if (out.ui && out.ui.rows && out.ui.rows.length) { if (onSourced) onSourced(out.ui); setLog((l) => [...l, { kind: "sourced", count: out.ui.rows.length }]); }
           let payload = JSON.stringify(out.forModel);
           if (payload.length > TOOL_RESULT_CHARS) {
@@ -3511,6 +3517,41 @@ function MapView({ pw, config, onSourced, goSourcing }) {
   const [sel, setSel] = useState(null);
   const [rows, setRows] = useState([]); // current result set — feeds the ↓ SHEET export
 
+  // Shared pin renderer — used by map commands AND by Scout's results (drawer → map).
+  const renderPins = (leads, opts = {}) => {
+    const lg = layerRef.current;
+    if (!lg) return;
+    lg.clearLayers();
+    for (const r of leads) {
+      const pin = !!r.pinned, vacHit = !!r.storefront_vacant;
+      const cm = L.circleMarker([r.lat, r.lon], {
+        radius: pin ? 9 : vacHit ? 7 : 6, weight: 2,
+        color: vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#8b80f9",
+        fillColor: vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#26224a", fillOpacity: 0.9,
+        bubblingMouseEvents: false, // pin click must NOT also fire the map's click (it would re-search at the pin and wipe the result set)
+      });
+      cm.bindTooltip(`${r.address || "?"}${r.name ? ` — ${r.name}` : ""}${vacHit ? ` · 🚪 VACANT (reported ${r.vacancy_year || ""})` : ""}`, { direction: "top" });
+      cm.on("click", () => setSel(r));
+      cm.addTo(lg);
+    }
+    if (opts.fit && leads.length && mapRef.current) {
+      mapRef.current.fitBounds(L.latLngBounds(leads.map((r) => [r.lat, r.lon])).pad(0.2), { maxZoom: 17 });
+    }
+  };
+
+  // Scout → map bridge: whenever the drawer's Scout runs a search, its result rows land
+  // as pins on the map behind it (full rows, so pin clicks open real dossiers, and the
+  // ↓ SHEET export covers them too).
+  const showScoutRows = (rawRows) => {
+    const leads = (rawRows || [])
+      .map((r) => ({ ...r, lat: Number(r.lat ?? r.latitude), lon: Number(r.lon ?? r.longitude), name: r.name || r.owner || r.ownership_entity || "" }))
+      .filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
+    if (!leads.length) return;
+    setRows(leads); setCount(leads.length); setErr("");
+    setUnderstood(`✦ Scout's results are pinned on the map — ${leads.length} propert${leads.length === 1 ? "y" : "ies"}. Click a pin for its dossier; ↓ SHEET exports them with owner info.`);
+    renderPins(leads, { fit: true });
+  };
+
   const loadAt = async (lat, lon, opts = {}) => {
     setBusy(true); setErr("");
     const o = opts.overrides || {};
@@ -3539,22 +3580,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
       if (o.minYears) leads = leads.filter((r) => (Number(r.years_owned) || 0) >= o.minYears || r.pinned);
       setCount(leads.length);
       setRows(leads);
-      const lg = layerRef.current;
-      if (lg) {
-        lg.clearLayers();
-        for (const r of leads) {
-          const pin = !!r.pinned, vacHit = !!r.storefront_vacant;
-          const cm = L.circleMarker([r.lat, r.lon], {
-            radius: pin ? 9 : vacHit ? 7 : 6, weight: 2,
-            color: vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#8b80f9",
-            fillColor: vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#26224a", fillOpacity: 0.9,
-            bubblingMouseEvents: false, // pin click must NOT also fire the map's click (it would re-search at the pin and wipe the result set)
-          });
-          cm.bindTooltip(`${r.address || "?"}${r.name ? ` — ${r.name}` : ""}${vacHit ? ` · 🚪 VACANT (reported ${r.vacancy_year || ""})` : ""}`, { direction: "top" });
-          cm.on("click", () => setSel(r));
-          cm.addTo(lg);
-        }
-      }
+      renderPins(leads);
       // Single-building click → open its dossier immediately; radius → open the anchor.
       const first = leads.find((r) => r.pinned) || leads[0];
       if (first && (opts.single || !rad)) setSel(first);
@@ -3665,7 +3691,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
               <span className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.18em" }}>✦ SCOUT — RESEARCH & QUESTIONS</span>
               <button onClick={() => setScoutOpen(false)} className="mono" style={{ cursor: "pointer", border: "none", background: "transparent", color: C.muted, fontSize: 15 }}>✕</button>
             </div>
-            <AgentChat pw={pw} config={config} seed={scoutSeed} onSourced={onSourced} goSourcing={goSourcing} />
+            <AgentChat pw={pw} config={config} seed={scoutSeed} onSourced={onSourced} goSourcing={goSourcing} onMapRows={showScoutRows} />
           </div>
         )}
         {(sel || !scoutOpen) && (

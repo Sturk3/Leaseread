@@ -63,7 +63,9 @@ export default async function handler(req, res) {
     // Accept any of the common Google names (picks up an older Maps-embed key too).
     const KEY_NAMES = ["GOOGLE_MAPS_API_KEY", "GOOGLE_API_KEY", "GMAPS_API_KEY", "VITE_GMAPS_EMBED_KEY", "GMAPS_EMBED_KEY"];
     const keyName = KEY_NAMES.find((n) => clean(process.env[n]));
-    const key = keyName ? clean(process.env[keyName]) : "";
+    // BYOK: a user-supplied Google key (kept in their browser, sent per-request) wins over
+    // the server env key, so Street View usage bills the user's Google account.
+    const key = clean(b.googleKey) || (keyName ? clean(process.env[keyName]) : "");
     const mapillary = clean(process.env.MAPILLARY_TOKEN) || clean(process.env.MAPILLARY_ACCESS_TOKEN);
     if (b.debug) return res.status(200).json({ ok: true, google: !!key, googleEnv: keyName || null, mapillary: !!mapillary, build: "streetview-v3" });
     if (!key && !mapillary) return res.status(200).json({ noKey: true, keyEnv: "GOOGLE_MAPS_API_KEY", alt: "MAPILLARY_TOKEN" });

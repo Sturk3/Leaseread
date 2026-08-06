@@ -66,7 +66,10 @@ Return JSON with EXACTLY this shape:
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { mode, pdfData, memoText, password, check, config } = req.body || {};
+    const { mode, pdfData, memoText, password, check, config, anthropicKey } = req.body || {};
+    // BYOK: a user-supplied key (kept in their browser, sent per-request) wins over the
+    // server env key, so usage bills the user's Anthropic account, not the site owner's.
+    const AI_KEY = String(anthropicKey || "").trim() || process.env.ANTHROPIC_API_KEY;
 
     // Shared-password gate (enforced before any Anthropic call).
     if (process.env.SITE_PASSWORD) {
@@ -86,20 +89,25 @@ export default async function handler(req, res) {
     }
     content.push({ type: "text", text: "Extract, structure, and score this deal. Return ONLY the JSON object." });
 
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
+    if (!AI_KEY) {
+      return res.status(500).json({ error: "No AI key. Click 🔑 API KEY in the top bar and paste your Anthropic key (console.anthropic.com) — it stays in your browser and usage bills to your account." });
     }
 
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "x-api-key": AI_KEY,
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "server-side-fallback-2026-07-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4096,
+        // Opus 5 for extraction accuracy — this endpoint reads financials out of OMs, where
+        // a wrong number is worse than a slower/costlier call. Thinking is on by default and
+        // counts toward max_tokens, hence the roomier cap (large tenant rosters need it too).
+        model: "claude-opus-5",
+        max_tokens: 16000,
+        fallbacks: "default",
         system: buildSystem(config),
         messages: [{ role: "user", content }],
       }),

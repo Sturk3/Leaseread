@@ -13,29 +13,32 @@
 // back as a tool_result. Claude reasons across the accumulated results — the "research
 // brain" the engines alone don't provide.
 //
-// Cost safety: model defaults to Sonnet (cheap, capable); the PAID skip-trace tool is
-// declared but the system prompt forbids using it without explicit user go-ahead, and
-// the browser still gates it behind a confirm. Key + password stay server-side.
+// Accuracy first: both routine and deep runs use Claude Opus 5 — Anthropic's current best
+// Opus, priced the SAME as the old deep-research model (Opus 4.8: $5/$25 per MTok) and only
+// ~1.7x Sonnet, so the accuracy jump costs little. The PAID skip-trace tool is still gated:
+// the system prompt forbids using it without explicit user go-ahead, and the browser gates
+// it behind a confirm. Key + password stay server-side.
 
-const AGENT_MODEL = process.env.AGENT_MODEL || "claude-sonnet-4-6";
-// Deep Research runs on the strongest model for sharper reasoning/synthesis (opt-in; the
-// token tracker costs it correctly). Routine Scout stays on the cheaper Sonnet.
-const AGENT_MODEL_DEEP = process.env.AGENT_MODEL_DEEP || "claude-opus-4-8";
-// Raised from 8000: adaptive thinking (below) spends tokens that count toward this cap, so a tight
-// ceiling truncated the synthesis turn. 16000 is the skill's non-streaming default; vercel.json gives
-// this function 300s (a long Opus deep-research synthesis turn can exceed 60s). Env-overridable.
-const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 16000;
+const AGENT_MODEL = process.env.AGENT_MODEL || "claude-opus-5";
+// Deep Research: same model, cranked to xhigh effort (below) for the hardest synthesis runs.
+const AGENT_MODEL_DEEP = process.env.AGENT_MODEL_DEEP || "claude-opus-5";
+// Adaptive thinking spends tokens that count toward this cap, and at high/xhigh effort Opus 5
+// thinks more — a tight ceiling truncated synthesis turns. 20000 leaves headroom for thinking +
+// a full report while staying inside vercel.json's 300s budget for this function. Env-overridable.
+const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 20000;
 // Adaptive thinking sharpens the JUDGEMENT part of the answer — ranking targets, weighing motivation
 // signals, deciding which tool to call next — which is exactly where a flat no-thinking proxy was weakest.
 // "adaptive" lets Claude self-moderate (little thinking on routine tool-planning turns, more on
-// synthesis), so it's cost-aware by design, and it auto-enables interleaved thinking across tool calls
-// (the browser loop already echoes the full `content` array back, so thinking blocks are preserved).
-// Set AGENT_THINKING=0 to fall back to no-thinking if latency/cost ever bites.
+// synthesis) and auto-enables interleaved thinking across tool calls (the browser loop already echoes
+// the full `content` array back, so thinking blocks are preserved).
+// NOTE: on Opus 5 thinking is ON by default — AGENT_THINKING=0 merely omits the param, which still
+// runs adaptive thinking. Kept for env compatibility; an explicit {type:"disabled"} would 400 at xhigh.
 const THINKING_ON = process.env.AGENT_THINKING !== "0";
-// Effort governs thinking depth + overall token spend. Deep Research goes hard (high); routine Scout
-// stays balanced (medium) to respect the cost discipline the system prompt preaches.
-const EFFORT_DEEP = process.env.AGENT_EFFORT_DEEP || "high";
-const EFFORT_ROUTINE = process.env.AGENT_EFFORT || "medium";
+// Effort governs thinking depth + overall token spend. Deep Research runs xhigh (the recommended
+// setting for the hardest agentic work on Opus 5); routine Scout runs high (the model default —
+// the accuracy sweet spot) instead of the old cost-trimmed medium.
+const EFFORT_DEEP = process.env.AGENT_EFFORT_DEEP || "xhigh";
+const EFFORT_ROUTINE = process.env.AGENT_EFFORT || "high";
 
 // Tool catalog. Each tool maps 1:1 to an existing FRONTAGE endpoint; the browser owns
 // the name->endpoint routing (see TOOL_ROUTES in src/App.jsx) and injects the password.
@@ -345,6 +348,29 @@ const TOOLS = [
     },
   },
   {
+    name: "search_teton_properties",
+    description:
+      "Source properties in JACKSON HOLE, WY / Teton County (Jackson, Teton Village, Wilson, Moose, Kelly, Moran, Alta, Hoback) " +
+      "from the Wyoming Property Tax Division's statewide parcel roll (compiled from the Teton County Assessor). Returns the " +
+      "OWNER of record (+ co-owner) + mailing address (absentee flagged — key in a resort market where most owners live " +
+      "elsewhere), property address, ACTUAL (market) VALUE + assessed value, gross acreage, tax district, and parcel/account " +
+      "numbers. Wyoming is an open-records state, so owners ARE public (a full sourcing market like NYC/CT/MA/TN/SC/GA). " +
+      "Filter by street, value range, or min acreage, or pass owner for their whole county portfolio. QUIRKS: the roll has NO " +
+      "use/class code (no type filter — refine retail vs residential by street/eye: Town Square/Broadway/Cache St = commercial " +
+      "core), NO year built, and NO sale history. For an owner LLC, follow with web_research — Wyoming hides LLC members, but " +
+      "the registered agent is public (wyobiz.wyo.gov).",
+    input_schema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "Filter to a street or address, e.g. 'BROADWAY' or '45 S Cache St'." },
+        owner: { type: "string", description: "Owner-portfolio mode: every Teton County parcel this owner holds." },
+        minValue: { type: "number", description: "Minimum actual (market) value." },
+        maxValue: { type: "number", description: "Maximum actual (market) value." },
+        minAcres: { type: "number", description: "Minimum gross lot acreage." },
+      },
+    },
+  },
+  {
     name: "search_sf_properties",
     description:
       "Source properties in SAN FRANCISCO from DataSF's assessor roll. Returns property characteristics (use, building/lot SF, " +
@@ -499,18 +525,23 @@ const TOOLS = [
   {
     name: "reveal_contact",
     description:
-      "PAID skip trace (~$0.10 per match, billed only on a hit) — returns the owner's phone numbers + emails. " +
-      "Use this ONLY when the user has explicitly asked to get an owner's contact / phone number for a specific property. " +
-      "Never call it speculatively or in bulk. Prefer the owner's mailing address (from the search result) so an absentee " +
-      "owner resolves to the real person. State clearly in your reply that this is a paid lookup.",
+      "PAID skip trace (~$0.10 per match, billed only on a hit) — returns phone numbers + emails for a NAMED PERSON at an " +
+      "address. Works for the owner of record OR any principal/officer you've unmasked behind an LLC — pass that person's " +
+      "name plus the best address you have for THEM (their mailing address, or the city/state where research places them). " +
+      "CRITICAL: do NOT trace an LLC/company name directly — an entity has no phone and the trace will whiff or return " +
+      "wrong-party numbers; unmask the human first, then trace the human. Use when the user asked to reach/contact/get a " +
+      "number for an owner (that request covers tracing the unmasked principal too, and a follow-up trace when the first " +
+      "path whiffs). Never bulk-trace lists speculatively. Say in your reply that it's a paid lookup. NOTE: if the firm's " +
+      "imported PropertyShark contact file already covers the target, this tool returns those researched contacts instantly " +
+      "for $0 (the result says so) — always worth calling before assuming a number can't be found.",
     input_schema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Owner name of record." },
-        entity_type: { type: "string", enum: ["person", "company"], description: "Whether the owner is a person or an LLC/company." },
-        contact_address: { type: "string", description: "Owner's mailing street address (preferred anchor)." },
+        name: { type: "string", description: "The PERSON to trace — owner of record, or a principal/officer you unmasked. Not an LLC name." },
+        entity_type: { type: "string", enum: ["person", "company"], description: "Whether this name is a person or an LLC/company." },
+        contact_address: { type: "string", description: "This person's mailing street address (best anchor — from the deed/search result, or where research places them)." },
         city: { type: "string" }, state: { type: "string" }, zip: { type: "string" },
-        address: { type: "string", description: "Property address (fallback anchor)." },
+        address: { type: "string", description: "Property address (fallback anchor — may return occupants, not the owner)." },
         borough: { type: "string" },
       },
       required: ["name"],
@@ -543,6 +574,7 @@ CORRIDOR AVAILABILITY SCREENS (retail_availability — you are the ONLY way to r
 - NASHVILLE / DAVIDSON COUNTY, TN: use search_nashville_properties (Metro Nashville parcel data, updated daily). FULL owner market — OWNER of record + mailing (absentee flagged), land use, value, last sale + years owned. TN is open-records so owners are public; treat it like NYC/CT/MA. Then run nashville_property_intel (pass the APN + address) — the TN analog of property_intel/sf_property_intel: it joins BUILDING-EXACT on the parcel number across building permits (commercial new/rehab/DEMOLITION/tenant finish-out/use-&-occupancy/sign + cost + purpose = active repositioning), pending applications, trade permits (live renovation), BEER permits (names the operating bar/restaurant + its owning entity — a real operator/tenant contact lead; lapsed = F&B vacancy), STR permits, 311 codes/condition complaints (distress), zoning OVERLAYS (historic/contextual/corridor = redevelopment constraints), the FEMA FLOOD zone, and the Metro land-use POLICY/transect. For an owner LLC, use tn_entity_lookup to unmask it — TN SOS registered agent + principals (the Nashville analog of the NY/CT/CA entity lookup; metered web lookup, since TN gates its registry). (The parcel data has acreage + FRONTAGE but no building SF.)
 - CHARLESTON, SC / CHARLESTON COUNTY (downtown Charleston, Mount Pleasant, North Charleston, Kiawah/Seabrook/Isle of Palms/Folly Beach, Johns/James/Daniel Island): use search_charleston_properties (Charleston County assessor parcels). FULL owner market — OWNER of record + mailing (absentee flagged), assessor use class, deeded acreage, last SALE price + year (→ years owned), deed book/page, plus City of Charleston construction-permit activity (2010–present) on the top results. SC is open-records so owners are public; treat it like NYC/CT/MA/TN. IMPORTANT quirks: the county publishes NO assessed value and NO building SF — $ figures are last SALE prices, so a minValue filter drops long-held parcels (leave it empty when hunting long-tenure owners, and rank by acreage/class/tenure instead); Mt Pleasant / N. Charleston parcels may show a legal description instead of a street address. Then run charleston_property_intel (pass the PID + address) — the SC analog of nashville_property_intel: city construction-permit detail, hotel entitlement on the parcel, zoning + Old & Historic District + Old City height district (BAR review/height caps = THE peninsula constraint), short-term-rental + accommodations overlays, FEMA flood zone + street-flooding history (Charleston's chronic-flooding diligence question), and nearby crime. For an owner LLC, use sc_entity_lookup to unmask it — SC SOS registered agent + any listed principals (the SC analog of the NY/CT/CA/TN entity lookup; a metered web lookup, since South Carolina captcha-gates its registry).
 - SAVANNAH, GA / CHATHAM COUNTY (Savannah, Pooler, Tybee Island, Garden City, Port Wentworth, Thunderbolt): use search_savannah_properties (SAGIS / Chatham County Board of Assessors parcels). FULL owner market — OWNER of record (+ co-owner) + mailing (absentee flagged), GA use class, FAIR-MARKET VALUE (land/building split), acreage, YEAR BUILT, last SALE price + year (→ years owned), and street FRONTAGE. Georgia is open-records so owners are public; treat it like NYC/CT/MA/TN/SC. Filter by type, street, value range, min acreage, sold-since year, or pass owner for their whole county portfolio. QUIRK: GA's use class doesn't separate retail from other commercial (both class C), so a retail/commercial filter returns all commercial — refine by eye. For an owner LLC, unmask via web_research on the Georgia Secretary of State corporations registry (ecorp.sos.ga.gov) for the registered agent + officers. (No dedicated Savannah intel connector yet — use web_research for permits/liens/deeper diligence.)
+- JACKSON HOLE, WY / TETON COUNTY (Jackson, Teton Village, Wilson, Moose, Kelly, Moran, Alta, Hoback): use search_teton_properties (Wyoming Property Tax Division statewide parcel roll, compiled from the Teton County Assessor). FULL owner market — OWNER of record (+ co-owner) + mailing (absentee flagged — most Jackson Hole owners live out of state, so absentee is the norm, not a distress signal by itself), ACTUAL (market) value + assessed value, gross acreage, tax district, parcel/account numbers. Wyoming is open-records so owners are public; treat it like NYC/CT/MA/TN/SC/GA. Filter by street, value range, min acreage, or pass owner for their whole county portfolio. QUIRKS: the roll has NO use/class code (no type filter — the commercial core is the Town Square blocks: Broadway, Cache St, Center St, Glenwood, Millward, plus Teton Village's Granite Loop/Village Dr — refine by street/eye), NO year built, and NO sale history (for deeds/sales point the user to the Teton County Clerk, tetoncountywy.gov). For an owner LLC, unmask via web_research — WYOMING HIDES LLC MEMBERS (it's a famous anonymity haven; many national holding LLCs are registered here), but the REGISTERED AGENT is public at wyobiz.wyo.gov, and mirrors (Bizapedia, OpenCorporates us_wy, OpenGovUS) often list more. (No dedicated Teton intel connector yet — use web_research for permits/zoning/deeper diligence: Town of Jackson + Teton County planning portals.)
 - SAN FRANCISCO: use search_sf_properties (DataSF assessor roll) for property characteristics + assessed value + block/lot, then sf_property_intel (block+lot+address) for permits, DBI complaints, the active business operator (a real contact lead), eviction notices (Ellis Act / owner move-in / demolition / capital improvement = landlord clearing the building = strong motivation), fire violations, and 311. IMPORTANT: California open data has NO owner-of-record name, so SF is a characteristics+distress market — get the actual OWNER via web_research (from the address), and use the operating business's legal name as a contact lead. Eviction addresses are masked to the block (street/corridor signal, not building-exact). Once you have the owning LLC's name, use ca_entity_lookup to unmask it — the CA SOS registry agent for service of process + principals (the CA analog of the NY/CT entity lookup; it's a metered web lookup because California gates its registry).
 - ANY OTHER US MARKET (no structured connector — most of the country): you can still source there. NEVER say a market is unsupported. For a specific address, web_research works the whole chain from the address alone — it identifies the owner of record, unmasks the parent/firm + principals, maps the portfolio, and pulls published contacts. For a "find me owners in <city>" ask where there's no structured feed, use web_research / web_search to surface candidates (recent trades, known local owners/landlords, brokers), and be upfront: outside NYC/CT/the Hamptons you don't have a parcel database to filter on, so results come from the live web and you can't guarantee completeness — but you can absolutely work any specific property or owner they name. Offer to go deep on the ones that look best.
 
@@ -550,6 +582,14 @@ CORRIDOR AVAILABILITY SCREENS (retail_availability — you are the ONLY way to r
 - NYC address: get the owner of record cheaply first via search_properties (free public records), then web_research to unmask the parent/management firm + principals, map the portfolio, and pull publicly-listed institutional contacts (main/leasing/acquisitions lines and emails) from the company's own website. Add owner_portfolio / hidden_portfolio to widen the holdings picture.
 - Non-NYC address: web_research alone works the whole chain — it will identify the owner FROM the address, then portfolio + contacts.
 - Surface every institutional contact you find WITH its source. Be clear these are published business numbers; a private owner's personal cell is not on the open web and needs reveal_contact (paid skip trace).
+
+FINDING PHONE NUMBERS (work this chain END-TO-END whenever the user wants to reach an owner — asking "get me their number / how do I contact them" is your green light for the whole chain, including the paid steps; the app still shows a confirm before each paid trace)
+1. Establish the owner of record from the free records first (search_properties / the market search + property_intel).
+2. If the owner is a PERSON: reveal_contact with their name + MAILING address. Done — lead with the BEST-graded mobile numbers.
+3. If the owner is an LLC / company (the usual case): DO NOT trace the LLC — unmask the human first. NYC: property_intel's named HPD officers + hidden_portfolio. CT/CA/TN/SC: the state entity lookup for principals/registered agent. Anywhere: web_research on the entity for principals. THEN reveal_contact on the NAMED PRINCIPAL — their name + the mailing address from the deed, or the city/state where research places them.
+4. In PARALLEL, pull published business lines via web_research (main/leasing/acquisitions numbers + emails from the company's own site, each with its source) — for institutional owners these are often the right door anyway.
+5. If the first trace whiffs, try the next principal or the other address anchor — a miss is free, a wrong number costs a wasted call. Read the match grades the trace returns: present BEST/GOOD numbers whose name-match to the target is strong; if every match is weak, SAY SO ("likely occupants, not the owner") instead of presenting a confident wrong number.
+6. Always tell the user which number belongs to WHOM, its type (mobile/landline), the match confidence, and any DNC flag.
 
 HOW TO REASON ABOUT MOTIVATION (the firm's wedge = finding off-market motivated owners)
 - Strong seller signals: long hold (15+ years owned), absentee / out-of-state owner, tax lien or ECB penalties owed, maturing/old mortgage, underbuilt lot with air rights, storefront vacancy. Call these out explicitly when you see them.
@@ -561,11 +601,11 @@ DOCUMENT REVIEW (offering memos & NDAs)
 - If the user attaches/pastes an NDA and wants it reviewed/redlined, call review_nda. It flags each clause Keep/Revise/Cut/Flag against the firm's NDA playbook with suggested language + missing protections. Lead with the overall risk read and the clauses that need attention. (It's a drafting aid — remind them counsel should confirm.)
 - A PDF attachment could be either — pick the tool from what the user asks for.
 
-COST DISCIPLINE (important — the team is cost-conscious; this is where the money actually goes)
+RESEARCH SPEND (accuracy comes first — the team would rather pay for a right answer than save on a wrong one)
 - The FREE structured tools (search_properties, property_intel, transaction_history, portfolios, foot_traffic, sales_comps, the CT/MA/Hamptons/SF/Charleston searches + sf_property_intel + charleston_property_intel) cost NOTHING. They are now very rich — sf_property_intel alone returns ~11 layers — so they answer most questions on their own. ALWAYS exhaust them first; detail is free here, so go deep.
-- web_research / web_search / ca_entity_lookup / brand_radar hit the live web and cost real money (~$0.10–0.20 each) — this is the ONLY expensive part of an answer. Reach for them only when the free structured data genuinely can't answer (owner-behind-an-LLC, a private/CA owner's contact, news/distress narrative, non-NYC markets). Make AT MOST ONE focused web call, batch everything you need into that single query, and NEVER repeat a call you've already made this conversation. A thorough, detailed answer should come mostly from the free engines — depth does not require spending.
-- reveal_contact is a PAID skip trace (~$0.10 per match). Call it ONLY when the user explicitly asks for an owner's phone/contact for a specific property, one at a time — never speculatively. Say plainly it's a paid lookup. For institutional owners prefer web_research first.
-- Don't pad: answer in as few tool calls as the task honestly needs.
+- web_research / web_search / ca_entity_lookup / brand_radar hit the live web (~$0.10–0.20 each — cheap relative to a missed deal). Use them WHENEVER they would make the answer more accurate or more complete: unmasking the entity behind an LLC, finding principals and contacts, pulling news/financing/distress narrative, covering non-NYC markets, or verifying anything you're unsure of. SEVERAL focused web calls in one answer are fine — batch related questions into a single query where natural, and don't repeat a call you've already made this conversation. What you must NOT do is skip a web check that would have changed the answer just to save a dime.
+- reveal_contact is a PAID skip trace (~$0.10 per match, misses free). Use it when the user asked to reach/contact an owner — that one ask covers the whole chain (unmask the LLC, then trace the named principal, retry on a whiff). Never bulk-trace a list speculatively. Say plainly it's a paid lookup. Follow the FINDING PHONE NUMBERS playbook above.
+- Don't pad: extra tool calls should add information, not repetition — but when in doubt between checking and guessing, CHECK.
 
 ANSWER WITH DEPTH (the user wants thorough, decision-grade answers — and you already paid to fetch the data, so USE ALL OF IT)
 - Never drop signals you gathered. If you pulled intel, surface every relevant field — distress flags, contacts, permits, transit, environmental, retrofit status — don't summarize 11 signals down to 3.
@@ -582,7 +622,7 @@ You are now operating as a DEEP RESEARCHER. The user wants a thorough, comprehen
 
 1) PLAN FIRST. Open with a brief research plan: restate the objective in one line, then list the threads you'll pursue (e.g. ownership & entity, principals & portfolio, distress/motivation, contacts, comps & market, risks/diligence). A few bullets, then start working.
 2) INVESTIGATE EXHAUSTIVELY. Work every thread methodically and EXHAUST the FREE structured engines first — they're unlimited, so go deep. Chase the full chain: property → owner of record → the entity → its principals (property_intel officers / ca_entity_lookup / ct_entity_lookup) → their other holdings (owner_portfolio + hidden_portfolio) → EVERY distress/intent signal (intel, transaction_history for debt + recorded leases, evictions, soft-story, environmental, vacancy, air rights) → comps → market context. Follow the leads the data opens up; never stop at the first result.
-3) USE THE WEB PURPOSEFULLY (still cost-aware). In deep mode you MAY make SEVERAL focused web calls (web_research / ca_entity_lookup / web_search) where the free data genuinely can't answer — to unmask an LLC, find principals/contacts, or pull news/distress narrative — but make each count and NEVER repeat one you've already run.
+3) USE THE WEB FREELY. In deep mode make AS MANY focused web calls (web_research / ca_entity_lookup / web_search) as the investigation needs — unmask every LLC, chase every principal and contact, pull the news/financing/distress narrative, and verify anything uncertain. Make each call count and never repeat one you've already run, but never leave a thread unpulled to save cost.
 4) SELF-CHECK before writing the report (do this EVERY time): re-read your draft findings against the tool results you actually received. For every claim you're about to make, confirm a tool result or a cited web source supports it — if not, either go verify it with another tool/search or label it explicitly as "unverified / assumption", and drop anything you can't stand behind. Briefly note what you could not confirm.
 5) DELIVER A FULL CITED REPORT, structured:
    • **Bottom line** — the verdict / recommendation in 2-3 sentences.
@@ -600,7 +640,10 @@ You are now operating as a DEEP RESEARCHER. The user wants a thorough, comprehen
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, messages, check, debug, deepResearch } = req.body || {};
+    const { password, messages, check, debug, deepResearch, anthropicKey } = req.body || {};
+    // BYOK: a key pasted by the user (sent per-request, stored only in their browser)
+    // wins over the server's env key — so usage bills the USER's Anthropic account.
+    const AI_KEY = String(anthropicKey || "").trim() || process.env.ANTHROPIC_API_KEY;
 
     if (process.env.SITE_PASSWORD) {
       if (password !== process.env.SITE_PASSWORD) {
@@ -615,8 +658,8 @@ export default async function handler(req, res) {
     if (!Array.isArray(messages) || !messages.length) {
       return res.status(400).json({ error: "messages array required" });
     }
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
+    if (!AI_KEY) {
+      return res.status(500).json({ error: "No AI key. Click 🔑 API KEY in the top bar and paste your Anthropic key (console.anthropic.com) — it stays in your browser and usage bills to your account." });
     }
 
     // PROMPT CACHING — the big cost lever for a multi-turn agent loop. The (large, static)
@@ -637,14 +680,20 @@ export default async function handler(req, res) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "x-api-key": AI_KEY,
         "anthropic-version": "2023-06-01",
+        // Server-side refusal fallback: if Opus 5's safety classifiers decline a request
+        // (rare false positives happen on owner/contact research), Anthropic re-runs it on
+        // the recommended fallback model in the same call instead of returning nothing.
+        "anthropic-beta": "server-side-fallback-2026-07-01",
       },
       body: JSON.stringify({
         model: deepResearch ? AGENT_MODEL_DEEP : AGENT_MODEL,
         max_tokens: MAX_TOKENS,
-        // Adaptive thinking + effort. NOTE for future edits: with thinking on, temperature/top_p/top_k
-        // are not allowed (they 400 on Opus 4.8 / Sonnet 4.6) — none are set, keep it that way.
+        fallbacks: "default",
+        // Adaptive thinking + effort. NOTE for future edits: temperature/top_p/top_k are
+        // removed on Opus 5 (they 400) — none are set, keep it that way. Omitting `thinking`
+        // on Opus 5 still runs adaptive thinking (it's on by default).
         ...(THINKING_ON ? { thinking: { type: "adaptive" } } : {}),
         output_config: { effort: deepResearch ? EFFORT_DEEP : EFFORT_ROUTINE },
         system: [{ type: "text", text: buildSystem(deepResearch), cache_control: { type: "ephemeral" } }],

@@ -114,6 +114,8 @@ export default function App() {
   const [config, setConfigState] = useState(loadActive);
   const [presets, setPresetsState] = useState(loadPresets);
   const [showSettings, setShowSettings] = useState(false);
+  const [showKeys, setShowKeys] = useState(false);
+  const [hasOwnKey, setHasOwnKey] = useState(() => !!userKeys().anthropic);
 
   // Which tool is showing. Defaults to the Agent tab (the Screener is hidden / folded
   // into Scout, so it must NOT be the default or a reload lands on the tabless OM grader).
@@ -368,9 +370,16 @@ export default function App() {
               ⚙ GRADING CRITERIA
             </button>
           )}
+          <button onClick={() => setShowKeys((s) => !s)} className="mono lift"
+            title="Bring your own API key — AI usage bills to YOUR account, stored only in this browser"
+            style={{ cursor: "pointer", fontSize: 11, padding: "7px 13px", borderRadius: 7, border: `1px solid ${showKeys ? C.gold : C.line}`, background: showKeys ? C.goldSoft : C.panel, color: showKeys ? C.gold : hasOwnKey ? "#7fd6a0" : C.ivory, letterSpacing: "0.5px" }}>
+            🔑 API KEY{hasOwnKey ? " ✓" : ""}
+          </button>
         </header>
         <div className="main-scroll" style={{ flex: 1, overflowY: "auto", padding: "0 40px 60px" }}>
           <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+
+        {showKeys && <ApiKeysPanel onSaved={() => setHasOwnKey(!!userKeys().anthropic)} onClose={() => setShowKeys(false)} />}
 
         {view === "agent" && <>
           {showSettings && <Settings config={config} setConfig={setConfig} presets={presets} setPresets={setPresets} onClose={() => setShowSettings(false)} />}
@@ -386,7 +395,7 @@ export default function App() {
         {view === "radar" && <LeaseRadar pw={pw} />}
 
         {view === "pipeline" && <Pipeline pw={pw} />}
-        {view === "skiptrace" && <ManualSkipTrace pw={pw} />}
+        {view === "skiptrace" && <><PropertySharkImport /><ManualSkipTrace pw={pw} /></>}
 
         {view === "nda" && <NDAReview pw={pw} />}
 
@@ -444,6 +453,53 @@ export default function App() {
           </div>
         </div>
       </main>
+    </div>
+  );
+}
+
+// BYOK panel — paste-your-own-keys so every AI call bills the visitor, not the site
+// owner. Keys never leave this browser except inside each request to OUR endpoints.
+function ApiKeysPanel({ onSaved, onClose }) {
+  const k = userKeys();
+  const [anthropic, setAnthropic] = useState(k.anthropic || "");
+  const [google, setGoogle] = useState(k.google || "");
+  const [flash, setFlash] = useState("");
+  function save() {
+    const next = {};
+    if (anthropic.trim()) next.anthropic = anthropic.trim();
+    if (google.trim()) next.google = google.trim();
+    saveUserKeys(next);
+    onSaved?.();
+    setFlash(next.anthropic ? "Saved — AI usage now bills to your key." : "Cleared — back to the site's shared key (if the server has one).");
+    setTimeout(() => setFlash(""), 2500);
+  }
+  const inputStyle = { width: "100%", boxSizing: "border-box", padding: "9px 12px", borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.ivory, fontSize: 13, fontFamily: "monospace" };
+  return (
+    <div style={{ marginTop: 22, background: C.panel, border: `1px solid ${C.gold}`, borderRadius: 12, padding: 18 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 6 }}>
+        <div className="mono" style={{ fontSize: 11, letterSpacing: "1.5px", color: C.gold }}>🔑 YOUR API KEYS</div>
+        <button onClick={onClose} className="mono" style={{ marginLeft: "auto", cursor: "pointer", fontSize: 11, border: "none", background: "transparent", color: C.muted }}>✕ CLOSE</button>
+      </div>
+      <p style={{ fontSize: 12.5, color: C.muted, margin: "0 0 14px", lineHeight: 1.6 }}>
+        Bring your own keys and all AI usage (Scout, research, memos, outreach, OM &amp; NDA grading) bills <strong style={{ color: C.ivory }}>your</strong> account.
+        Keys are stored only in this browser — never saved on the server. Get an Anthropic key at <span style={{ color: C.ivory }}>console.anthropic.com</span>;
+        the Google key (optional, for storefront photos) at <span style={{ color: C.ivory }}>console.cloud.google.com</span> with "Street View Static API" enabled.
+      </p>
+      <div style={{ display: "grid", gap: 10 }}>
+        <label style={{ display: "grid", gap: 5 }}>
+          <span className="mono" style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted }}>ANTHROPIC API KEY (AI — required for AI features)</span>
+          <input type="password" value={anthropic} onChange={(e) => setAnthropic(e.target.value)} placeholder="sk-ant-…" autoComplete="off" style={inputStyle} />
+        </label>
+        <label style={{ display: "grid", gap: 5 }}>
+          <span className="mono" style={{ fontSize: 10, letterSpacing: "1.5px", color: C.muted }}>GOOGLE MAPS API KEY (optional — storefront photos)</span>
+          <input type="password" value={google} onChange={(e) => setGoogle(e.target.value)} placeholder="AIza…" autoComplete="off" style={inputStyle} />
+        </label>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
+        <button onClick={save} className="mono lift" style={{ cursor: "pointer", fontSize: 11, padding: "8px 16px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, letterSpacing: "0.5px" }}>SAVE KEYS</button>
+        <button onClick={() => { setAnthropic(""); setGoogle(""); saveUserKeys({}); onSaved?.(); setFlash("Keys removed from this browser."); setTimeout(() => setFlash(""), 2500); }} className="mono" style={{ cursor: "pointer", fontSize: 11, padding: "8px 12px", borderRadius: 7, border: `1px solid ${C.line}`, background: "transparent", color: C.muted }}>REMOVE</button>
+        {flash && <span style={{ fontSize: 12, color: "#7fd6a0" }}>{flash}</span>}
+      </div>
     </div>
   );
 }
@@ -724,8 +780,20 @@ function Gauge({ score, color }) {
 // a non-JSON error page ("An error occurred…") — calling res.json() on that throws a
 // cryptic "Unexpected token" error (and used to blank the screen). This reads the body
 // as text and turns any non-JSON / error response into a clear, actionable message.
+// ── BYOK (bring your own key) ────────────────────────────────────────────────────────
+// Users paste their OWN Anthropic / Google keys (🔑 API KEY in the top bar). Keys live
+// ONLY in this browser's localStorage and ride along in each POST body; every endpoint
+// prefers a user key over the server's env key — so usage bills the user, not the owner.
+const USER_KEYS_LS = "fr_user_keys_v1";
+function userKeys() { try { return JSON.parse(localStorage.getItem(USER_KEYS_LS) || "{}") || {}; } catch { return {}; } }
+function saveUserKeys(next) { try { localStorage.setItem(USER_KEYS_LS, JSON.stringify(next)); } catch { /* quota */ } }
+function keyFields() {
+  const k = userKeys();
+  return { ...(k.anthropic ? { anthropicKey: k.anthropic } : {}), ...(k.google ? { googleKey: k.google } : {}) };
+}
+
 async function postJSON(url, body) {
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...keyFields(), ...body }) });
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); }
@@ -777,6 +845,7 @@ const TOOL_ROUTES = {
   search_nashville_properties: { url: "/api/search", label: "Searching Nashville", body: (a) => ({ market: "nashville", propertyType: a.propertyType, address: a.address, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
   search_charleston_properties: { url: "/api/search", label: "Searching Charleston", body: (a) => ({ market: "charleston", propertyType: a.propertyType, address: a.address, owner: a.owner, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
   search_savannah_properties: { url: "/api/search", label: "Searching Savannah", body: (a) => ({ market: "savannah", propertyType: a.propertyType, address: a.address, owner: a.owner, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres, sinceYear: a.sinceYear }) },
+  search_teton_properties: { url: "/api/search", label: "Searching Jackson Hole", body: (a) => ({ market: "teton", address: a.address, owner: a.owner, minValue: a.minValue, maxValue: a.maxValue, minAcres: a.minAcres }) },
   nashville_property_intel: { url: "/api/nashvilleintel", label: "Pulling Nashville records", body: (a) => ({ apn: a.apn, address: a.address }) },
   charleston_property_intel: { url: "/api/charlestonintel", label: "Pulling Charleston records", body: (a) => ({ pid: a.pid, address: a.address }) },
   search_sf_properties: { url: "/api/search", label: "Searching San Francisco", body: (a) => ({ market: "sf", neighborhood: a.neighborhood, address: a.address, propertyType: a.propertyType, minValue: a.minValue, maxValue: a.maxValue, minSqft: a.minSqft }) },
@@ -853,13 +922,14 @@ function webResearchMode() {
 // Real Anthropic usage (not an estimate): every AI response carries a `usage` object
 // (input / output / cache-read / cache-write tokens, + web_search_requests). We tally it
 // per calendar month in localStorage and price it. Built to extend per-user when the team
-// hub lands (today it's per-browser). Pricing = Claude Sonnet 4.6 (the agent + research
+// hub lands (today it's per-browser). Pricing = Claude Opus 5 (the agent + research
 // default), USD per 1M tokens; web search is $/request.
 const TOKEN_KEY = "fr_token_usage_v1";
-// Per-model pricing ($/1M tokens) so Opus Deep Research is costed correctly, not at Sonnet
-// rates. Cache read = 0.1x input, cache write (5m) = 1.25x input. Web search = $/request.
+// Per-model pricing ($/1M tokens). Opus row = Opus 5 / Opus 4.8 rates ($5/$25 — the old
+// $15/$75 was Opus 4.1-era and over-reported 3x). Cache read = 0.1x input, cache write
+// (5m) = 1.25x input. Web search = $/request.
 const MODEL_PRICE = {
-  opus: { in: 15, out: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  opus: { in: 5, out: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   sonnet: { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 },
   haiku: { in: 1, out: 5, cacheRead: 0.1, cacheWrite: 1.25 },
 };
@@ -931,6 +1001,10 @@ function shapeResult(name, data) {
   if (name === "search_savannah_properties") {
     const props = (data.properties || []).slice(0, 30);
     return { forModel: { count: data.count, county: data.county, note: data.note, properties: props }, uiSummary: `${data.count || 0} in Savannah` };
+  }
+  if (name === "search_teton_properties") {
+    const props = (data.properties || []).slice(0, 30);
+    return { forModel: { count: data.count, county: data.county, note: data.note, properties: props }, uiSummary: `${data.count || 0} in Jackson Hole` };
   }
   if (name === "search_sf_properties") {
     const props = (data.properties || []).slice(0, 30);
@@ -1062,6 +1136,7 @@ function sourcingRowsFrom(name, data) {
   if (name === "search_nashville_properties") return { market: "tn", center: null, rows: (data.properties || []).map(nashRow) };
   if (name === "search_charleston_properties") return { market: "sc", center: null, rows: (data.properties || []).map(scRow) };
   if (name === "search_savannah_properties") return { market: "savannah", center: null, rows: (data.properties || []).map(savRow) };
+  if (name === "search_teton_properties") return { market: "teton", center: null, rows: (data.properties || []).map(tetonRow) };
   if (name === "search_ct_properties") return { market: "ct", center: null, rows: (data.properties || []).map(ctRow) };
   if (name === "search_hamptons_properties") return { market: "ny", center: null, rows: (data.properties || []).map(nyRow) };
   return null;
@@ -1167,6 +1242,15 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
     const route = TOOL_ROUTES[name];
     if (!route || !route.url) return { forModel: { error: `Unknown tool ${name}` }, uiSummary: "unknown tool" };
     if (route.paid) {
+      // PropertyShark pairing: if the firm's imported contact file already covers this
+      // owner/property, serve it FREE — never pay to re-find a number you already own.
+      const ps = psLookup(inputArgs);
+      if (ps) {
+        return {
+          forModel: { ...psAsSkipResult(ps), note: "Served from the firm's imported PropertyShark contact file ($0) — researched real-owner contacts, no trace was run." },
+          uiSummary: "PropertyShark contact ($0)",
+        };
+      }
       const ok = typeof window !== "undefined" && window.confirm(`This runs a PAID skip trace (~$0.10, billed only on a match) for ${inputArgs.name || "this owner"}. Proceed?`);
       if (!ok) return { forModel: { declined: true, note: "User declined the paid skip trace." }, uiSummary: "declined" };
       const data = await postJSON(route.url, { password: pw, ...route.body(inputArgs) });
@@ -1340,7 +1424,7 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
         </span>
         {spend >= cap && <span style={{ color: C.red }}>cap reached — deep web paused, using Quick</span>}
         <span style={{ color: C.muted, borderLeft: `1px solid ${C.line}`, paddingLeft: 12 }}
-          title={`Actual API usage this month: ${fmtTok(tokens.in)} input · ${fmtTok(tokens.out)} output · ${fmtTok(tokens.cacheRead)} cache-read · ${fmtTok(tokens.cacheWrite)} cache-write${tokens.webSearch ? ` · ${tokens.webSearch} web searches` : ""}, across ${tokens.calls} AI calls. Cost is an estimate at Claude Sonnet 4.6 rates.`}>
+          title={`Actual API usage this month: ${fmtTok(tokens.in)} input · ${fmtTok(tokens.out)} output · ${fmtTok(tokens.cacheRead)} cache-read · ${fmtTok(tokens.cacheWrite)} cache-write${tokens.webSearch ? ` · ${tokens.webSearch} web searches` : ""}, across ${tokens.calls} AI calls. Cost is estimated at each call's own model rates (Claude Opus 5 for the agent + research).`}>
           Tokens / mo: <strong style={{ color: C.ivory }}>{fmtTok(tokens.in + tokens.out + tokens.cacheRead + tokens.cacheWrite)}</strong> · est <strong style={{ color: C.ivory }}>${(tokens.cost || 0).toFixed(2)}</strong>
         </span>
       </div>
@@ -2562,6 +2646,10 @@ const NYC_BORO_SET = { manhattan: "Manhattan", brooklyn: "Brooklyn", queens: "Qu
 const NASHVILLE_SET = new Set(["nashville", "davidson", "davidson county", "nashville tn", "nashville, tn", "metro nashville"]);
 const CHARLESTON_SET = new Set(["charleston", "charelston", "charlston", "charleston sc", "charleston, sc", "charleston county", "mount pleasant", "mt pleasant", "north charleston", "daniel island", "james island", "johns island", "west ashley", "sullivans island", "sullivan's island", "isle of palms", "folly beach", "kiawah", "kiawah island", "seabrook island", "awendaw", "mcclellanville", "ravenel", "hollywood sc", "wadmalaw island"]);
 const SAVANNAH_SET = new Set(["savannah", "savannah ga", "savannah, ga", "chatham", "chatham county", "pooler", "tybee", "tybee island", "port wentworth", "garden city", "thunderbolt", "bloomingdale", "georgetown ga"]);
+// Jackson Hole / Teton County, WY. Bare "jackson" routes here (the famous market); guard the
+// other Jacksons (MS/TN/MI) in marketFromText. Bare "wilson"/"moose"/"kelly"/"alta" are too
+// ambiguous alone — they need a WY marker, handled in marketFromText.
+const TETON_SET = new Set(["jackson", "jackson hole", "jackson wy", "jackson, wy", "jackson wyoming", "teton", "teton county", "teton village", "wilson wy", "wilson, wy", "moose wy", "moran", "hoback", "hoback junction", "alta wy", "kelly wy"]);
 const HAMLET_TOWN = { montauk: "East Hampton", amagansett: "East Hampton", wainscott: "East Hampton", springs: "East Hampton", "sag harbor": "East Hampton", bridgehampton: "Southampton", "water mill": "Southampton", sagaponack: "Southampton", westhampton: "Southampton", "westhampton beach": "Southampton", quogue: "Southampton", noyac: "Southampton", "north haven": "Southampton" };
 const UNIFIED_TYPES = [["any", "Any type"], ["retail", "Retail"], ["commercial", "Commercial / office"], ["multifamily", "Multifamily"], ["residential", "Residential"], ["industrial", "Industrial"], ["vacant", "Vacant / dev site"]];
 const TYPE_MAP_BY_MARKET = {
@@ -2572,6 +2660,8 @@ const TYPE_MAP_BY_MARKET = {
   sc: { retail: "retail", commercial: "commercial", multifamily: "apartments", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
   // GA use class doesn't separate retail/office from commercial (all class C), so they all map to commercial.
   savannah: { retail: "commercial", commercial: "commercial", multifamily: "multifamily", residential: "residential", industrial: "industrial", vacant: "vacant", any: "any" },
+  // WY's statewide roll carries no use/class code at all — every type maps to "any" (refine by eye).
+  teton: { retail: "any", commercial: "any", multifamily: "any", residential: "any", industrial: "any", vacant: "any", any: "any" },
 };
 const mapType = (t, m) => (TYPE_MAP_BY_MARKET[m] || {})[t] || "any";
 const titleCase = (s) => String(s || "").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
@@ -2594,6 +2684,15 @@ function marketFromText(raw) {
   if (/\bsavannah\b|\bchatham\b|\bpooler\b|\btybee\b|\bport wentworth\b|\bthunderbolt\b|\bgarden city ga\b/.test(k) && !/,\s*tn\b|\btennessee\b/.test(k)) {
     const street = String(raw).replace(/,?\s*(savannah|chatham county|chatham|pooler|tybee island|tybee|port wentworth|garden city|thunderbolt|bloomingdale|georgetown|georgia|ga|usa|united states).*$/i, "").replace(/[, ]+$/, "").trim();
     return { market: "savannah", town: "Savannah", address: street.length >= 3 && /\d/.test(street) ? street : "" };
+  }
+  // Jackson Hole / Teton County, WY. "jackson hole"/"teton village"/"moran"/"hoback" are
+  // unambiguous; "jackson"/"wilson"/"moose"/"kelly"/"alta" need a WY marker (guards Jackson
+  // MS/TN/MI, Wilson NC, etc.). Excludes "teton" alone here — Teton County ID (Driggs) exists —
+  // but the WY marker or "teton county"/"teton village" resolves it.
+  if (/\bjackson hole\b|\bteton county\b|\bteton village\b|\bmoran\b|\bhoback\b/.test(k)
+    || (/\bjackson\b|\bwilson\b|\bmoose\b|\bkelly\b|\balta\b|\bteton\b/.test(k) && /,\s*wy\b|\bwyoming\b|\bwy\s+\d{5}\b/.test(k))) {
+    const street = String(raw).replace(/,?\s*(jackson hole|jackson|teton county|teton village|teton|wilson|moose|kelly|moran|alta|hoback junction|hoback|wyoming|wy|usa|united states).*$/i, "").replace(/[, ]+$/, "").trim();
+    return { market: "teton", town: "Jackson", address: street.length >= 3 && /\d/.test(street) ? street : "" };
   }
   for (const t of CT_TOWN_SET) if (k.includes(t)) return { market: "ct", town: titleCase(t), address: firstAddrSeg(raw) };
   for (const t of HAMPTON_SET) if (k.includes(t)) return { market: "ny", town: HAMLET_TOWN[t] || titleCase(t), address: firstAddrSeg(raw) };
@@ -2657,6 +2756,7 @@ function unifiedDetect(loc, coords) {
   if (NASHVILLE_SET.has(k)) return { market: "tn", town: "Nashville" };
   if (CHARLESTON_SET.has(k)) return { market: "sc", town: "Charleston" };
   if (SAVANNAH_SET.has(k)) return { market: "savannah", town: "Savannah" };
+  if (TETON_SET.has(k)) return { market: "teton", town: "Jackson" };
   // Free text naming a non-NYC market (e.g. "123 Broadway, Nashville") routes there, not to NYC.
   if (mt) return { ...mt, kind: "address-text" };
   // A typed address naming a non-NY US state (e.g. "500 Main St, Austin, TX") -> nationwide web research.
@@ -2679,10 +2779,14 @@ const nashRow = (p) => ({ market: "tn", marketLabel: "Nashville, TN", owner: p.o
 const scRow = (p) => ({ market: "sc", marketLabel: `${p.town || "Charleston"}, SC`, owner: p.owner, address: p.address, use: p.use, value: p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` (${p.sale_year} sale)` : " (sale)"}` : "", absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
 // Savannah / Chatham County (GA) — fair-market value is published, so that's the value column.
 const savRow = (p) => ({ market: "savannah", marketLabel: `${p.city || "Savannah"}, GA`, owner: p.owner, address: p.address, use: p.use, value: p.market_value ? fmtAmount(p.market_value) : "", absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
+// Jackson Hole / Teton County (WY) — actual (market) value is published; the roll has no use class.
+const tetonRow = (p) => ({ market: "teton", marketLabel: `${p.city || "Jackson"}, WY`, owner: p.owner, address: p.address, use: p.use || "", value: p.market_value ? fmtAmount(p.market_value) : "", absentee: p.absentee, mailing: p.mailing, mapsUrl: p.maps_url, raw: p });
 
 function AssessorDetail({ p, market }) {
-  const ny = market === "ny", tn = market === "tn", sc = market === "sc", sav = market === "savannah";
-  const grid = sav
+  const ny = market === "ny", tn = market === "tn", sc = market === "sc", sav = market === "savannah", wy = market === "teton";
+  const grid = wy
+    ? [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Actual (market) value", p.market_value ? fmtAmount(p.market_value) : null], ["Assessed value", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Acres", p.acres || null], ["Tax district", p.tax_district || null], ["Tax year", p.tax_year || null], ["Legal", p.legal || null], ["Parcel #", p.parcel || null], ["Account #", p.account || null]]
+    : sav
     ? [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["City", p.city], ["Use class", p.use], ["Fair-market value", p.market_value ? fmtAmount(p.market_value) : null], ["Land value", p.land_value ? fmtAmount(p.land_value) : null], ["Building value", p.improvement_value ? fmtAmount(p.improvement_value) : null], ["Acres", p.acres || null], ["Year built", p.year_built || null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : null], ["Years owned", p.years_owned != null ? `~${p.years_owned}` : null], ["PIN", p.pin || null]]
     : sc
     ? [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Town", p.town], ["Use", p.use], ["Acres", p.acres || null], ["Subdivision", p.subdivision || null], ["Tax district", p.tax_district || null], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_year ? ` · ${p.sale_year}` : ""}` : null], ["Years owned", p.years_owned != null ? `~${p.years_owned}` : null], ["Deed book/page", p.deed_book_page || null], ["Permits (city, since 2010)", p.permit_count || null], ["Latest permit", p.latest_permit_year || null], ["Permit valuation", p.permit_valuation ? fmtAmount(p.permit_valuation) : null], ["Permit types", (p.permit_types || []).join(", ") || null], ["PID", p.pid || null]]
@@ -2693,7 +2797,7 @@ function AssessorDetail({ p, market }) {
     : [["Owner", p.owner], ["Co-owner", p.co_owner], ["Mailing", p.mailing], ["Use", p.use], ["Zone", p.zone], ["Assessed", p.assessed_value ? fmtAmount(p.assessed_value) : null], ["Building SF", p.building_sqft ? Number(p.building_sqft).toLocaleString() : null], ["Frontage", p.frontage_ft ? `${p.frontage_ft} ft` : null], ["Year built", p.year_built || null], ["Condition", p.condition], ["Grade", p.grade], ["Last sale", p.sale_price ? `${fmtAmount(p.sale_price)}${p.sale_date ? ` · ${p.sale_date}` : ""}` : null]];
   return (
     <div>
-      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "10px 0 8px" }}>{sav ? "GA · CHATHAM COUNTY (SAVANNAH)" : sc ? "SC · CHARLESTON COUNTY" : tn ? "TN · NASHVILLE" : ny ? "NY" : "CT"} ASSESSOR RECORD</div>
+      <div className="mono" style={{ fontSize: 10, color: C.gold, letterSpacing: "0.15em", margin: "10px 0 8px" }}>{wy ? "WY · TETON COUNTY (JACKSON HOLE)" : sav ? "GA · CHATHAM COUNTY (SAVANNAH)" : sc ? "SC · CHARLESTON COUNTY" : tn ? "TN · NASHVILLE" : ny ? "NY" : "CT"} ASSESSOR RECORD</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: "6px 18px", fontSize: 12.5 }}>
         {grid.filter(([, v]) => v != null && v !== "" && v !== 0).map(([k, v]) => (<div key={k}><span style={{ color: C.muted }}>{k}: </span><span style={{ color: C.ivory }}>{v}</span></div>))}
       </div>
@@ -2904,6 +3008,7 @@ const PORTFOLIO_MARKETS = {
   tn: { market: "nashville", place: "Nashville", county: "Davidson County", value: (p) => p.appraised_value || p.assessed_value },
   sc: { market: "charleston", place: "Charleston", county: "Charleston County", value: (p) => p.sale_price },
   savannah: { market: "savannah", place: "Savannah", county: "Chatham County", value: (p) => p.market_value },
+  teton: { market: "teton", place: "Jackson Hole", county: "Teton County", value: (p) => p.market_value },
 };
 function OwnerPortfolio({ owner, pw, st }) {
   const cfg = PORTFOLIO_MARKETS[st];
@@ -3046,6 +3151,189 @@ function ScEntityFinder({ owner, pw }) {
 
 const zipFromMailing = (m) => { const x = String(m || "").match(/(\d{5})(-\d{4})?\s*$/); return x ? x[1] : ""; };
 
+// Extract the STREET line from a raw mailing string for skip tracing. A naive
+// split(",")[0] breaks on care-of mailing lines — "C/O SL GREEN REALTY, 420 LEXINGTON
+// AVE STE 300" would anchor the trace on the care-of NAME, not an address (the classic
+// wrong-address trace that returns strangers). Skip C/O / ATTN segments and pick the
+// first segment that actually looks like a street; the server normalizes further.
+function mailingStreet(mailing) {
+  const segs = String(mailing || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const isCO = (s) => /^(C\/O|C\.O\.|ATTN|ATTENTION|%)/i.test(s);
+  const looksStreet = (s) => /^\d+\s+\S/.test(s) || /^P\.?\s?O\.?\s*BOX/i.test(s) || /^(ONE|TWO|THREE)\s+\S/i.test(s);
+  return (
+    segs.find((s) => !isCO(s) && looksStreet(s)) ||
+    segs.find((s) => !isCO(s)) ||
+    (segs[0] ? segs[0].replace(/^(C\/O|C\.O\.|ATTN:?|ATTENTION:?|%)\s*/i, "") : "")
+  );
+}
+
+// ── PropertyShark pairing ────────────────────────────────────────────────────
+// PropertyShark has no contact API — its researched NYC real-owner numbers leave the
+// platform only via CSV export (Platinum: 500 owner-list exports/mo). This block is the
+// "link": import that export once and every number lives here permanently (localStorage),
+// matched to properties by address / owner. BOTH reveal paths (Scout's reveal_contact
+// tool and the dossier's reveal button) check this file FIRST — a number the firm
+// already owns is served for $0 before any paid skip trace fires.
+const PS_KEY = "fr_propertyshark_contacts_v1";
+const psNorm = (s) =>
+  String(s || "").toUpperCase()
+    .replace(/[.,#]/g, " ")
+    .replace(/\b(SUITE|STE|FL|FLOOR|APT|UNIT|RM|ROOM)\b.*$/, "")
+    // NYC writes the same street three ways — "Fifth Avenue", "5th Ave", PLUTO's "5 AVENUE".
+    // Collapse word- and digit-ordinals to the bare number so all three match.
+    .replace(/\bFIRST\b/g, "1").replace(/\bSECOND\b/g, "2").replace(/\bTHIRD\b/g, "3").replace(/\bFOURTH\b/g, "4")
+    .replace(/\bFIFTH\b/g, "5").replace(/\bSIXTH\b/g, "6").replace(/\bSEVENTH\b/g, "7").replace(/\bEIGHTH\b/g, "8")
+    .replace(/\bNINTH\b/g, "9").replace(/\bTENTH\b/g, "10").replace(/\bELEVENTH\b/g, "11").replace(/\bTWELFTH\b/g, "12")
+    .replace(/\b(\d+)(ST|ND|RD|TH)\b/g, "$1")
+    .replace(/\bSTREET\b/g, "ST").replace(/\bAVENUE\b/g, "AVE").replace(/\bBOULEVARD\b/g, "BLVD")
+    .replace(/\bROAD\b/g, "RD").replace(/\bPLACE\b/g, "PL").replace(/\bDRIVE\b/g, "DR").replace(/\bLANE\b/g, "LN")
+    .replace(/\bEAST\b/g, "E").replace(/\bWEST\b/g, "W").replace(/\bNORTH\b/g, "N").replace(/\bSOUTH\b/g, "S")
+    .replace(/\s+/g, " ").trim();
+function psStore() { try { const o = JSON.parse(localStorage.getItem(PS_KEY) || "null"); return o && Array.isArray(o.rows) ? o : { rows: [], imported: null }; } catch { return { rows: [], imported: null }; } }
+function psSave(store) { try { localStorage.setItem(PS_KEY, JSON.stringify(store)); } catch {} }
+
+// Minimal CSV parser (quoted fields, escaped quotes, CR/LF) — enough for the exports.
+function parseCSV(text) {
+  const rows = []; let row = [], field = "", q = false;
+  const s = String(text || "");
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) { if (c === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += c; }
+    else if (c === '"') q = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && s[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.some((x) => x.trim() !== "")) rows.push(row);
+      row = [];
+    } else field += c;
+  }
+  row.push(field);
+  if (row.some((x) => x.trim() !== "")) rows.push(row);
+  return rows;
+}
+
+// Header-tolerant mapping: finds the address / owner / real-owner-contact / phone /
+// email / DNC columns whatever PropertyShark names them, so a format tweak on their
+// side doesn't break the import.
+function parsePropertySharkCSV(text) {
+  const grid = parseCSV(text);
+  if (grid.length < 2) return { rows: [], error: "No data rows found — include the header row from the CSV." };
+  const hdr = grid[0].map((h) => String(h || "").toLowerCase().trim());
+  const findCol = (res) => hdr.findIndex((h) => res.some((re) => re.test(h)));
+  const addrCol = findCol([/property.*(address|street)/, /situs/, /^address/]);
+  const contactCol = findCol([/real.*owner/, /true.*owner/, /contact.*name/, /principal/]);
+  const ownerCol = findCol([/owner.*name/, /^owner/, /entity|llc/]);
+  const dncCol = findCol([/\bdnc\b|do.?not.?call/]);
+  const phoneCols = hdr.map((h, i) => (/phone|tel|mobile|cell|landline/.test(h) && !/\bdnc\b/.test(h) ? i : -1)).filter((i) => i >= 0);
+  const emailCols = hdr.map((h, i) => (/e-?mail/.test(h) ? i : -1)).filter((i) => i >= 0);
+  if (addrCol < 0 && ownerCol < 0 && contactCol < 0) return { rows: [], error: "Couldn't find an address or owner column in the header row." };
+  if (!phoneCols.length && !emailCols.length) return { rows: [], error: "No phone or email columns found in the header row." };
+  const out = [];
+  for (const r of grid.slice(1)) {
+    const dncAll = dncCol >= 0 && /^(true|yes|y|1)$/i.test(String(r[dncCol] || "").trim());
+    const seen = new Set(); const phones = [];
+    for (const i of phoneCols) {
+      const val = String(r[i] || "").trim();
+      const digits = val.replace(/\D/g, "");
+      if (digits.length < 10 || seen.has(digits)) continue;
+      seen.add(digits);
+      phones.push({ number: val, type: /mobile|cell/.test(hdr[i]) ? "mobile" : /land/.test(hdr[i]) ? "landline" : "", dnc: dncAll });
+    }
+    const emails = [];
+    for (const i of emailCols) { const v = String(r[i] || "").trim().toLowerCase(); if (/.+@.+\..+/.test(v) && !emails.includes(v)) emails.push(v); }
+    if (!phones.length && !emails.length) continue;
+    const address = addrCol >= 0 ? String(r[addrCol] || "").trim() : "";
+    const owner = ownerCol >= 0 ? String(r[ownerCol] || "").trim() : "";
+    const contact = contactCol >= 0 ? String(r[contactCol] || "").trim() : "";
+    out.push({ address, owner, contact, phones, emails, addrKey: psNorm(mailingStreet(address) || address), ownerKey: psNorm(owner), contactKey: psNorm(contact) });
+  }
+  return { rows: out };
+}
+
+// Match an owner/property against the imported file: property address first (the
+// strongest key), then the owner entity or researched-contact name.
+function psLookup({ name, address, contact_address } = {}) {
+  const { rows } = psStore();
+  if (!rows.length) return null;
+  const a = psNorm(mailingStreet(address) || address), ca = psNorm(mailingStreet(contact_address) || contact_address), n = psNorm(name);
+  return (
+    rows.find((r) => r.addrKey && ((a && r.addrKey === a) || (ca && r.addrKey === ca))) ||
+    rows.find((r) => n && ((r.ownerKey && r.ownerKey === n) || (r.contactKey && r.contactKey === n))) ||
+    null
+  );
+}
+
+// Shape a PropertyShark row like a skip-trace result so every existing renderer
+// (dossier reveal, Scout's tool result) displays it with zero special-casing.
+function psAsSkipResult(hit) {
+  const phones = hit.phones.map((p, i) => ({
+    number: p.number, type: p.type || "", dnc: !!p.dnc, rank: i + 1, reachable: false,
+    grade: { score: p.dnc ? 30 : Math.max(60, 88 - i * 4), tier: p.dnc ? "LOW" : "BEST" },
+  }));
+  const who = hit.contact || hit.owner;
+  return {
+    provider: "PropertyShark (imported — $0)", business: false, tracedAddress: "PropertyShark import",
+    persons: [{ name: who, isEntity: false, matchesOwner: true, matchScore: 100, matchLabel: "researched", matchReasons: ["PropertyShark researched owner"], phones, emails: hit.emails, relatives: [] }],
+    phones, emails: hit.emails, entityLowConfidence: false,
+    ownerMatch: { name: who, score: 100, label: "researched", reasons: ["PropertyShark import"] },
+    weakMatch: false, ownerName: hit.owner || who, matched: phones.length > 0 || hit.emails.length > 0, cost: 0,
+  };
+}
+
+// The import panel (Skip Trace tab): paste or upload the PropertyShark owner-list CSV.
+// Re-imports merge by address+owner, so monthly exports accumulate instead of duplicating.
+function PropertySharkImport() {
+  const [store, setStore] = useState(psStore());
+  const [text, setText] = useState("");
+  const [msg, setMsg] = useState("");
+  const doImport = (raw) => {
+    const { rows, error } = parsePropertySharkCSV(raw);
+    if (error) { setMsg(`⚠ ${error}`); return; }
+    const cur = psStore();
+    const byKey = new Map(cur.rows.map((r) => [`${r.addrKey}|${r.ownerKey}`, r]));
+    for (const r of rows) byKey.set(`${r.addrKey}|${r.ownerKey}`, r);
+    const next = { rows: [...byKey.values()], imported: new Date().toISOString().slice(0, 10) };
+    psSave(next); setStore(next); setText("");
+    setMsg(`✓ Imported ${rows.length} contact rows — ${next.rows.length} total on file. Reveals now check this file first ($0 on a match).`);
+  };
+  const onFile = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => doImport(String(rd.result || ""));
+    rd.readAsText(f);
+    e.target.value = "";
+  };
+  const clearAll = () => {
+    if (typeof window !== "undefined" && !window.confirm(`Delete all ${store.rows.length} imported PropertyShark contacts from this browser?`)) return;
+    const next = { rows: [], imported: null };
+    psSave(next); setStore(next); setMsg("Cleared.");
+  };
+  return (
+    <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
+      <div className="mono" style={{ fontSize: 12, color: C.gold, letterSpacing: 1 }}>🦈 PROPERTYSHARK — LINKED CONTACT FILE</div>
+      <div style={{ fontSize: 11.5, color: C.muted, margin: "6px 0 10px", lineHeight: 1.5 }}>
+        PropertyShark has no contact API, so the link is its CSV export: in PropertyShark (Platinum), export a <strong style={{ color: C.ivory }}>real-owner list</strong> (up to 500/mo) and drop it here.
+        Contacts are stored in this browser permanently and matched by property address / owner — every reveal (Scout included) serves them <strong style={{ color: C.green }}>free</strong> before any paid skip trace runs.
+        {store.rows.length ? <> · <strong style={{ color: C.ivory }}>{store.rows.length} contacts on file</strong>{store.imported ? ` (last import ${store.imported})` : ""}</> : null}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste the PropertyShark CSV here (with its header row)…" rows={3}
+          style={{ flex: "1 1 320px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, color: C.ivory, fontSize: 11.5, padding: "8px 10px", fontFamily: "inherit" }} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <button className="mono lift" onClick={() => text.trim() && doImport(text)} style={{ ...ACTION_PILL, padding: "7px 13px" }}>IMPORT PASTED CSV</button>
+          <label className="mono lift" style={{ ...ACTION_PILL, padding: "7px 13px", cursor: "pointer", textAlign: "center" }}>
+            UPLOAD .CSV FILE<input type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: "none" }} />
+          </label>
+          {store.rows.length > 0 && <button className="mono lift" onClick={clearAll} style={{ ...ACTION_PILL, padding: "7px 13px", color: C.muted }}>CLEAR FILE</button>}
+        </div>
+      </div>
+      {msg && <div style={{ fontSize: 11.5, color: msg.startsWith("⚠") ? "#e0a050" : C.green, marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
+
 // Map a corridor screen row → the assessor/lead row shape the detail chain expects.
 function corridorToRow(row) {
   const saleYr = row.last_sale_date ? String(row.last_sale_date).slice(0, 4) : null;
@@ -3102,7 +3390,7 @@ function CorridorRowDetail({ row, pw }) {
   const isCo = ENTITY_RE.test(r.owner || "");
   const contactR = {
     name: r.owner || "", entity_type: isCo ? "company" : "person",
-    contact_address: (r.mailing || "").split(",")[0].trim(),
+    contact_address: mailingStreet(r.mailing),
     city: r.market === "nyc" ? "New York" : "Charleston", state: r.market === "nyc" ? "NY" : "SC",
     zip: r.raw.mailing_zip || zipFromMailing(r.mailing), address: r.address, borough: row.borough || "",
     last_sale_price: row.last_sale_price || null, last_sale_date: row.last_sale_date || null,
@@ -3383,11 +3671,11 @@ function outreachCtx(r, extra = {}) {
 function AssessorMarketDetail({ r, pw, outreachExtra = {} }) {
   const raw = r.raw || {};
   const isCo = ENTITY_RE.test(r.owner || "");
-  const mState = raw.mailing_state || (r.market === "ct" ? "CT" : r.market === "tn" ? "TN" : r.market === "sc" ? "SC" : r.market === "savannah" ? "GA" : "NY");
+  const mState = raw.mailing_state || (r.market === "ct" ? "CT" : r.market === "tn" ? "TN" : r.market === "sc" ? "SC" : r.market === "savannah" ? "GA" : r.market === "teton" ? "WY" : "NY");
   // One owner object shared by the AI brief and the skip trace (street = mailing before the first comma).
   const contactR = {
     name: r.owner || "", entity_type: isCo ? "company" : "person",
-    contact_address: (r.mailing || "").split(",")[0].trim(), city: raw.mailing_city || raw.town || (r.market === "tn" ? "Nashville" : r.market === "sc" ? "Charleston" : r.market === "savannah" ? "Savannah" : ""),
+    contact_address: mailingStreet(r.mailing), city: raw.mailing_city || raw.town || (r.market === "tn" ? "Nashville" : r.market === "sc" ? "Charleston" : r.market === "savannah" ? "Savannah" : r.market === "teton" ? "Jackson" : ""),
     state: mState, zip: raw.mailing_zip || "", address: r.address, borough: r.marketLabel,
     last_sale_price: raw.sale_price || null, last_sale_date: raw.sale_date || (raw.sale_year ? String(raw.sale_year) : ""), years_owned: raw.years_owned ?? null,
   };
@@ -3400,7 +3688,7 @@ function AssessorMarketDetail({ r, pw, outreachExtra = {} }) {
       {r.market === "sc" && r.owner && ENTITY_RE.test(r.owner) && <ScEntityFinder owner={r.owner} pw={pw} />}
       {r.market === "tn" && <NashvilleIntelPanel apn={raw.apn} address={r.address} pw={pw} />}
       {r.market === "sc" && <CharlestonIntelPanel pid={raw.pid} address={r.address} pw={pw} />}
-      {(r.market === "tn" || r.market === "sc" || r.market === "savannah") && r.owner && <OwnerPortfolio owner={r.owner} pw={pw} st={r.market} />}
+      {(r.market === "tn" || r.market === "sc" || r.market === "savannah" || r.market === "teton") && r.owner && <OwnerPortfolio owner={r.owner} pw={pw} st={r.market} />}
       <OutreachStudio ctx={outreachCtx(r, outreachExtra)} pw={pw} />
       <ResearchBrief r={contactR} pw={pw} />
       <ContactReveal r={contactR} pw={pw} />
@@ -3600,19 +3888,20 @@ function UnifiedSourcing({ pw, rows, setRows }) {
       else if (market === "tn") det = { market: "tn", town: "Nashville", address: hasNum ? addr : "", kind: "address-text" };
       else if (market === "sc") det = { market: "sc", town: "Charleston", address: hasNum ? addr : "", kind: "address-text" };
       else if (market === "savannah") det = { market: "savannah", town: "Savannah", address: hasNum ? addr : "", kind: "address-text" };
+      else if (market === "teton") det = { market: "teton", town: "Jackson", address: hasNum ? addr : "", kind: "address-text" };
       else if (market === "ct") det = { market: "ct", town: CT_TOWN_SET.has(raw.toLowerCase()) ? titleCase(raw) : "Greenwich", address: hasNum ? addr : "", kind: "address-text" };
       else if (market === "ny") det = { market: "ny", town: HAMPTON_SET.has(raw.toLowerCase()) ? (HAMLET_TOWN[raw.toLowerCase()] || titleCase(raw)) : "East Hampton", address: hasNum ? addr : "", kind: "address-text" };
     }
-    if (!det.market) { setError("Try a NYC borough or address (Manhattan · 120 5th Ave…), a CT town (Greenwich, Darien…), a Hamptons town (East Hampton, Southampton…), Nashville, Charleston SC, or Savannah GA."); return; }
+    if (!det.market) { setError("Try a NYC borough or address (Manhattan · 120 5th Ave…), a CT town (Greenwich, Darien…), a Hamptons town (East Hampton, Southampton…), Nashville, Charleston SC, Savannah GA, or Jackson Hole WY."); return; }
     // Radius needs an ANCHOR point. Only an NYC address (picked or typed → geocoded) and a
     // picked Nashville address have one; a borough or a CT/Hamptons town does not, so radius
     // is silently ignored there — tell the user instead of looking broken.
     const radiusActive = !!radius && Number(radius) > 0;
     // A specific building was looked up (so "just it" returns one property, and radius is moot).
     const anchored = det.kind === "address" || det.kind === "address-text"
-      || !!(det.address && det.address.trim()) || ((det.market === "tn" || det.market === "sc" || det.market === "savannah") && !!coords);
-    // Radius only does a real area search in the coordinate markets (NYC + picked Nashville/Charleston/Savannah).
-    const usesRadius = radiusActive && anchored && (det.market === "nyc" || ((det.market === "tn" || det.market === "sc" || det.market === "savannah") && !!coords));
+      || !!(det.address && det.address.trim()) || ((det.market === "tn" || det.market === "sc" || det.market === "savannah" || det.market === "teton") && !!coords);
+    // Radius only does a real area search in the coordinate markets (NYC + picked Nashville/Charleston/Savannah/Teton).
+    const usesRadius = radiusActive && anchored && (det.market === "nyc" || ((det.market === "tn" || det.market === "sc" || det.market === "savannah" || det.market === "teton") && !!coords));
     setNotice(radiusActive && !anchored
       ? "Radius needs a specific address — pick one from the dropdown. A borough or town has no center point, so these results cover the whole area."
       : "");
@@ -3745,6 +4034,28 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           const exact = out.filter((r) => houseInAddress(r.address, houseNum, false));
           if (exact.length) out = exact.slice(0, 1);
         }
+      } else if (det.market === "teton") {
+        // Jackson Hole / Teton County, WY — same shape as the Charleston/Savannah flow: address
+        // pin, spatial radius around a picked point, or an attribute browse (WY owner data is
+        // public). The WY roll has no use/class code, so the type filter never applies here.
+        const hasPoint = coords && coords.lat != null && coords.lon != null;
+        const street = (det.address || "").trim();
+        const justIt = !radius || Number(radius) === 0;
+        const houseNum = streetBits(street).num;
+        let d = null;
+        if (justIt && houseNum) {
+          d = await postJSON("/api/search", { password: pw, market: "teton", address: street });
+        } else if (hasPoint && (street || radius)) {
+          d = await postJSON("/api/search", { password: pw, market: "teton", centerLat: coords.lat, centerLon: coords.lon, radiusMiles: radius || "", minValue });
+        }
+        if (!d || !(d.properties || []).length) {
+          d = await postJSON("/api/search", { password: pw, market: "teton", minValue, ...(street ? { address: street } : {}) });
+        }
+        out = (d.properties || []).map(tetonRow);
+        if (justIt && houseNum) {
+          const exact = out.filter((r) => houseInAddress(r.address, houseNum, false));
+          if (exact.length) out = exact.slice(0, 1);
+        }
       } else if (det.market === "web") {
         // Any US address outside the free-data markets: one row that offers AI web research
         // (gated behind a click in the dossier — never auto-spends).
@@ -3840,7 +4151,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
                 placeholder="Manhattan · Greenwich · Nashville · Charleston · or any US address (500 Main St, Austin TX)…" style={{ ...fieldStyle, width: "100%" }} />
             </div>
           </label>
-          <label><div className="mono" style={labelStyle}>MARKET</div><select value={market} onChange={(e) => setMarket(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["auto", "Auto-detect"], ["nyc", "New York City"], ["tn", "Nashville · TN"], ["sc", "Charleston · SC"], ["savannah", "Savannah · GA"], ["ct", "Greenwich · CT"], ["ny", "Hamptons · NY"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+          <label><div className="mono" style={labelStyle}>MARKET</div><select value={market} onChange={(e) => setMarket(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["auto", "Auto-detect"], ["nyc", "New York City"], ["tn", "Nashville · TN"], ["sc", "Charleston · SC"], ["savannah", "Savannah · GA"], ["teton", "Jackson Hole · WY"], ["ct", "Greenwich · CT"], ["ny", "Hamptons · NY"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>TYPE</div><select value={type} onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{UNIFIED_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>RADIUS (picked address)</div><select value={radius} onChange={(e) => setRadius(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }}>{[["", "off · just it"], ["0.1", "0.1 mi"], ["0.25", "0.25 mi"], ["0.5", "0.5 mi"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
           <label><div className="mono" style={labelStyle}>MIN VALUE</div><input type="number" value={minValue} onChange={(e) => setMinValue(e.target.value)} style={{ ...fieldStyle, width: "100%", marginTop: 4 }} placeholder="" /></label>
@@ -3849,7 +4160,7 @@ function UnifiedSourcing({ pw, rows, setRows }) {
           <button onClick={run} disabled={loading} className="mono lift" style={{ cursor: loading ? "default" : "pointer", fontSize: 12, padding: "9px 20px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold, opacity: loading ? 0.5 : 1 }}>{loading ? "SEARCHING…" : "◎ SEARCH"}</button>
           {rows && rows.length > 0 && <button onClick={() => downloadBlob(unifiedCSV(rows), `frontage_${(resolved && resolved.market) || "search"}_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ CSV</button>}
           {rows && rows.length > 0 && <button onClick={() => downloadXlsx(`frontage_${(resolved && resolved.market) || "search"}_${new Date().toISOString().slice(0, 10)}.xlsx`, "Leads", UNIFIED_COLS, rows)} className="mono" style={{ cursor: "pointer", fontSize: 12, padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory }}>↓ EXCEL</button>}
-          {resolved && <span style={{ fontSize: 11.5, color: C.muted }}>Market: <strong style={{ color: C.gold }}>{resolved.market === "nyc" ? (resolved.borough || "New York City") : resolved.market === "web" ? "Web research (any US)" : resolved.town + (resolved.market === "ct" ? ", CT" : resolved.market === "tn" ? ", TN" : resolved.market === "sc" ? ", SC" : resolved.market === "savannah" ? ", GA" : ", NY")}</strong></span>}
+          {resolved && <span style={{ fontSize: 11.5, color: C.muted }}>Market: <strong style={{ color: C.gold }}>{resolved.market === "nyc" ? (resolved.borough || "New York City") : resolved.market === "web" ? "Web research (any US)" : resolved.town + (resolved.market === "ct" ? ", CT" : resolved.market === "tn" ? ", TN" : resolved.market === "sc" ? ", SC" : resolved.market === "savannah" ? ", GA" : resolved.market === "teton" ? ", WY" : ", NY")}</strong></span>}
         </div>
         {error && <div style={{ marginTop: 12, fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{error}</div>}
         {notice && <div style={{ marginTop: 12, fontSize: 12, color: C.amber, background: C.goldSoft, border: `1px solid ${C.amber}40`, borderRadius: 8, padding: "9px 12px" }}>{notice}</div>}
@@ -4660,7 +4971,7 @@ function StorefrontPhoto({ r, pw }) {
       try {
         const res = await fetch("/api/streetview", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password, address, lat, lon, heading, size: "640x360" }),
+          body: JSON.stringify({ ...keyFields(), password, address, lat, lon, heading, size: "640x360" }),
         });
         const ct = res.headers.get("content-type") || "";
         if (ct.startsWith("image/")) {
@@ -4773,6 +5084,7 @@ const REGISTRY_HINT = {
   tn: "the Tennessee Secretary of State registry (TNBear / tncab.tnsos.gov) and OpenCorporates",
   ct: "the Connecticut Business Registry (data.ct.gov — CT publicly discloses LLC principals) and OpenCorporates",
   savannah: "the Georgia Secretary of State corporations registry (ecorp.sos.ga.gov — lists the registered agent + officers) and OpenCorporates",
+  teton: "the Wyoming Secretary of State business registry (wyobiz.wyo.gov — Wyoming is an LLC-anonymity haven that HIDES members/managers, but the REGISTERED AGENT + address IS public, and commercial agents like Registered Agents Inc. in Sheridan mean the trail often runs through the agent) plus the crawlable mirrors that surface more: Bizapedia (bizapedia.com/wy), OpenCorporates (opencorporates.com/companies/us_wy), OpenGovUS, and CorporationWiki — also check Teton County deed/quitclaim records and local news (JH News&Guide, Buckrail) which often name the people behind Jackson Hole LLCs",
   nyc: "the New York State DOS business registry (note: NY hides LLC members, listing only the process-service contact) and OpenCorporates",
   ny: "the New York State DOS business registry (note: NY hides LLC members) and OpenCorporates",
 };
@@ -5568,6 +5880,15 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
 
   const runSkip = async () => {
     setSkipState("loading"); setErr("");
+    // PropertyShark pairing: a researched contact already on file is served free —
+    // the paid trace only runs when the imported file has nothing for this owner/property.
+    const ps = psLookup({ name: r.name, address: r.address, contact_address: r.contact_address });
+    if (ps) {
+      const result = psAsSkipResult(ps);
+      _skipCache.set(skipKey(r), result);
+      setSkip(result); setSkipState("done");
+      return;
+    }
     try {
       const d = await postJSON("/api/skiptrace", {
         password: pw, name: r.name, entity_type: r.entity_type,
@@ -6537,7 +6858,7 @@ function NDAReview({ pw }) {
       setProgress("Redlining each clause against your playbook…");
       const res = await fetch("/api/nda", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, pdfData, ndaText, password: pw, config }),
+        body: JSON.stringify({ ...keyFields(), mode, pdfData, ndaText, password: pw, config }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);

@@ -22,6 +22,21 @@
 // of shape so a key rename doesn't break the reveal.
 
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
+
+// Normalize a street line before anchoring a trace on it. County/ACRIS mailing lines
+// often carry care-of / attention prefixes ("C/O SL GREEN REALTY 420 LEXINGTON AVE",
+// "ATTN: TAX DEPT ...") — a trace anchored on that literal string resolves the NAME in
+// the prefix, not the address, and returns confident wrong-party numbers (the "wrong
+// address" problem). Strip the prefix; if a name still precedes the street, anchor from
+// the house number. PO boxes and named buildings ("ONE PENN PLAZA") pass through as-is.
+function normalizeStreet(s) {
+  let v = clean(s).replace(/^(C\/O|C\.O\.|ATTN:?|ATTENTION:?|%)\s+/i, "");
+  if (!/^\d/.test(v) && !/^P\.?\s?O\.?\s*BOX/i.test(v)) {
+    const m = v.match(/\d+\s+\S.*$/); // first house-number onward ("SL GREEN 420 LEX AVE" → "420 LEX AVE")
+    if (m) v = m[0];
+  }
+  return clean(v);
+}
 const isCompany = (name, entityType) =>
   entityType === "company" ||
   /\b(LLC|INC|CORP|CO|COMPANY|LP|LLP|TRUST|ASSOCIATES|REALTY|PARTNERS|HOLDINGS|GROUP|MANAGEMENT|PROPERTIES|HDFC|FUND|BANK)\b/i.test(name || "");
@@ -353,8 +368,11 @@ export default async function handler(req, res) {
     // a coherent unit (its own city/state/zip). Fall back to the property only when no
     // mailing address is known (borough → postal city, state NY).
     const NYC_CITY = { manhattan: "New York", bronx: "Bronx", brooklyn: "Brooklyn", queens: "Queens", "staten island": "Staten Island" };
-    const mailStreet = clean(contact_address);
-    const propStreet = clean(address);
+    const mailStreet = normalizeStreet(contact_address);
+    const propStreet = normalizeStreet(address);
+    // A PO-box mailing can't resolve a person the way a home/office street does — flag it
+    // so the UI/agent can explain a whiff instead of presenting silence as "no owner".
+    const poBox = /^P\.?\s?O\.?\s*BOX/i.test(mailStreet);
     if (!mailStreet && !propStreet) return res.status(400).json({ error: "Need a mailing or property address to trace." });
     const ownerName = clean(name);
 
@@ -419,6 +437,8 @@ export default async function handler(req, res) {
       provider: provider.label,
       business,
       tracedAddress,
+      tracedStreet: tracedAddress === "property" ? propStreet : mailStreet,
+      poBox,
       persons,
       phones,
       emails,

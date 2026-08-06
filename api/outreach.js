@@ -6,11 +6,13 @@
 // no TCPA exposure from automated calling).
 //
 // One short Claude call, no web search — grounded entirely in the facts passed in, so
-// it's fast (~2s) and cheap (~$0.02). Password-gated; key stays server-side.
+// it's fast and cheap (~$0.05–0.10 on Opus 5). Password-gated; key stays server-side.
 //
 //   POST /api/outreach { password, owner, address, ...signals } → { kit: {...} }
 
-const OUTREACH_MODEL = process.env.OUTREACH_MODEL || "claude-sonnet-4-6";
+// Opus 5 — sharper, more specific personalization from the same facts. One kit is a single
+// short call (~$0.05–0.10), so the accuracy upgrade is nearly free at this endpoint's scale.
+const OUTREACH_MODEL = process.env.OUTREACH_MODEL || "claude-opus-5";
 
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
 
@@ -46,7 +48,10 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     if (b.debug) return res.status(200).json({ ok: true, model: OUTREACH_MODEL, build: "outreach-v1" });
-    if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
+    // BYOK: a user-supplied key (kept in their browser, sent per-request) wins over the
+    // server env key, so usage bills the user's Anthropic account, not the site owner's.
+    const AI_KEY = String(b.anthropicKey || "").trim() || process.env.ANTHROPIC_API_KEY;
+    if (!AI_KEY) return res.status(500).json({ error: "No AI key. Click 🔑 API KEY in the top bar and paste your Anthropic key (console.anthropic.com) — it stays in your browser and usage bills to your account." });
 
     const owner = clean(b.owner);
     const address = clean(b.address);
@@ -73,12 +78,16 @@ export default async function handler(req, res) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "x-api-key": AI_KEY,
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "server-side-fallback-2026-07-01",
       },
       body: JSON.stringify({
         model: OUTREACH_MODEL,
-        max_tokens: 1600,
+        // Thinking is on by default on Opus 5 and counts toward max_tokens — the kit itself
+        // is ~600 tokens, the rest is thinking headroom so it never truncates mid-JSON.
+        max_tokens: 6000,
+        fallbacks: "default",
         system: buildSystem(),
         messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
       }),

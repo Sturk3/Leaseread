@@ -4,16 +4,14 @@
 // recent news/distress signals, the asset, and whether it's worth pursuing).
 // Key stays server-side; password-gated like every other endpoint.
 
-// Model for the research brief. Defaults to Sonnet 4.6 (fast; finishes web search well
-// within Vercel Pro's 300s budget). Override RESEARCH_MODEL=claude-opus-4-8 for maximum
-// research depth/quality once on Pro. (Env-configurable so no code change is needed.)
-const RESEARCH_MODEL = process.env.RESEARCH_MODEL || "claude-sonnet-4-6";
-// How many web_search rounds the agent may run. Vercel Hobby (60s) only fits ~1; Vercel
-// Pro (300s) can go deeper for a richer brief — default 8 (the user wants maximum detail),
-// override RESEARCH_MAX_SEARCHES. Only used in WEB mode (knowledge mode runs no searches),
-// so this is inert until the frontend is flipped to mode:"web" (which only makes sense on
-// Pro's higher timeout). If briefs start timing out, drop this back toward 5.
-const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 8;
+// Model for the research brief. Claude Opus 5 — Anthropic's best Opus for research and
+// synthesis, at Opus 4.8's price ($5/$25 per MTok). Accuracy is the priority for these
+// briefs; env-override RESEARCH_MODEL if it ever needs to drop back.
+const RESEARCH_MODEL = process.env.RESEARCH_MODEL || "claude-opus-5";
+// How many web_search rounds the agent may run. Raised 8 → 12 for deeper owner/portfolio/
+// contact digging (accuracy over cost); Vercel Pro's 300s budget still fits this. Override
+// RESEARCH_MAX_SEARCHES; if briefs start timing out, drop back toward 8.
+const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 12;
 
 function buildSystem() {
   return `You are an off-market real estate acquisitions research analyst for a firm that buys trophy / high-street RETAIL property. Its two primary hunting grounds are NEW YORK CITY (Manhattan high-street corridors — Fifth Ave, Madison, SoHo, Meatpacking) and CHARLESTON, SC — above all KING STREET, Charleston's premier retail corridor (Upper/Lower King), plus the surrounding downtown/peninsula. Treat properties on or near these as high priority and lean in hard. You are given a PROPERTY (an address, and often — but not always — its owner of record). Use the web_search tool to find WHO owns it, their PORTFOLIO, and HOW TO REACH them, then write a DEEP, exhaustive intelligence brief.
@@ -23,6 +21,7 @@ WORK THE CHAIN with multiple searches as needed (don't narrate them — output O
 2. UNMASK it: the parent company or management/operating firm behind the LLC, and the actual principals / decision-makers.
 3. PORTFOLIO: pull their other holdings and how active they are (look at the company's own website "portfolio/properties" pages, press, deal news).
 4. CONTACTS: dig the owner's / management company's OFFICIAL WEBSITE and reputable listings for PUBLICLY-LISTED institutional contacts — main/leasing/acquisitions phone lines, info@/leasing@ emails, the contact or team page. These published business numbers are exactly what you should surface; personal cell numbers generally are NOT on the open web (those need skip tracing).
+5. READ THE PAGES: when a search surfaces a promising URL — the company's contact/team/portfolio page, a registry entry, a news piece — use web_fetch to OPEN it and read the full page rather than relying on the snippet. Contact pages especially: fetch them so you capture every phone/email actually published there.
 
 Format in markdown (omit a section only if you truly found nothing):
 - **Owner** — the entity of record and how you determined it (source).
@@ -56,7 +55,7 @@ Keep it under 250 words. Your knowledge has a cutoff and may be out of date — 
 function buildSystemQuery() {
   return `You are a capable research assistant with live web access via the web_search tool. Answer the user's request by searching the web as needed, then synthesize a clear, well-organized answer — exactly like a knowledgeable assistant would.
 
-Run focused searches (don't narrate them), then write ONLY the final answer in clean markdown. Ground factual claims in what you found and cite sources inline (publication/site, with the URL when useful). If results are thin or conflicting, say so. Never fabricate facts, numbers, quotes, or contacts — and when surfacing someone's contact details, include only what literally appeared in a result, with its source; never guess or pattern-construct an email or phone.
+Run focused searches (don't narrate them), and when a result looks load-bearing use web_fetch to open the page and read it in full rather than trusting the snippet. Then write ONLY the final answer in clean markdown. Ground factual claims in what you found and cite sources inline (publication/site, with the URL when useful). If results are thin or conflicting, say so. Never fabricate facts, numbers, quotes, or contacts — and when surfacing someone's contact details, include only what literally appeared in a result, with its source; never guess or pattern-construct an email or phone.
 
 CONTEXT: the user works in commercial real estate (sourcing trophy / high-street retail and reaching property owners), with two primary focuses — NEW YORK CITY high-street corridors and CHARLESTON, SC (above all KING STREET). When a request is in that domain, lean in HARD and be exhaustive: run as many searches as it takes and surface every owner, principal, registered agent, related entity, portfolio property, contact, and signal you actually find — err toward a long, fully-sourced answer over a short one. But you are NOT limited to real estate — answer ANYTHING the user asks, on any topic; for those, match the length to the request (concise when that's all it needs). Detail must always come from real findings, never padding.`;
 }
@@ -68,17 +67,20 @@ function buildSystemQueryKnowledge() {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
-    const { password, query, name, entity_type, address, borough, contact_address, city, state, last_sale_date, last_sale_price, years_owned } = req.body || {};
+    const { password, query, name, entity_type, address, borough, contact_address, city, state, last_sale_date, last_sale_price, years_owned, anthropicKey } = req.body || {};
+    // BYOK: a user-supplied key (kept in their browser, sent per-request) wins over the
+    // server env key, so usage bills the user's Anthropic account, not the site owner's.
+    const AI_KEY = String(anthropicKey || "").trim() || process.env.ANTHROPIC_API_KEY;
 
     if (process.env.SITE_PASSWORD && password !== process.env.SITE_PASSWORD) {
       return res.status(401).json({ error: "Incorrect password." });
     }
     // Zero-cost deploy/version probe (no Anthropic call). liveWeb reflects the env gate.
     if (req.body && req.body.debug) {
-      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, liveWeb: process.env.RESEARCH_LIVE_WEB !== "0", build: "v10-usage" });
+      return res.status(200).json({ ok: true, model: RESEARCH_MODEL, maxSearches: MAX_SEARCHES, liveWeb: process.env.RESEARCH_LIVE_WEB !== "0", build: "v11-opus5" });
     }
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
+    if (!AI_KEY) {
+      return res.status(500).json({ error: "No AI key. Click 🔑 API KEY in the top bar and paste your Anthropic key (console.anthropic.com) — it stays in your browser and usage bills to your account." });
     }
     const freeQuery = typeof query === "string" ? query.trim() : "";
     if (!freeQuery && !name && !address) return res.status(400).json({ error: "Need a query, owner name, or address to research." });
@@ -125,26 +127,39 @@ export default async function handler(req, res) {
 
     // The web_search server tool runs a search loop server-side; if it hits its
     // iteration cap the response comes back as stop_reason "pause_turn" and we
-    // re-send to let it continue. Bounded so a runaway can't burn the budget — raised
-    // to 10 so a deeper multi-search run (MAX_SEARCHES up to 8, on Pro) can finish all
-    // its continuation legs without being cut off mid-brief.
+    // re-send to let it continue. Bounded so a runaway can't burn the budget — 16 legs
+    // so a deeper multi-search run (MAX_SEARCHES up to 12, on Pro) can finish all its
+    // continuation legs without being cut off mid-brief.
     const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, web_search_requests: 0 };
     const sources = []; const seenSrc = new Set(); // verifiable citations from the web-search results
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 16; i++) {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": process.env.ANTHROPIC_API_KEY,
+          "x-api-key": AI_KEY,
           "anthropic-version": "2023-06-01",
+          // Server-side refusal fallback: rare classifier false-positives on owner/contact
+          // research get re-run on the recommended fallback model instead of failing.
+          "anthropic-beta": "server-side-fallback-2026-07-01",
         },
         body: JSON.stringify({
           model: RESEARCH_MODEL,
-          // Roomy ceilings so a deep, fully-sourced brief isn't cut off (the user wants
-          // maximum detail). These are caps, not targets — a thin lookup still returns short.
-          max_tokens: freeQuery ? 8000 : 7000,
+          fallbacks: "default",
+          // Roomy ceiling so a deep, fully-sourced brief isn't cut off. On Opus 5 thinking
+          // is ON by default and counts toward max_tokens, so this includes thinking
+          // headroom. A cap, not a target — a thin lookup still returns short.
+          max_tokens: 16000,
           system: systemPrompt,
-          ...(useWeb ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_SEARCHES }] } : {}),
+          // web_search_20260209: the current tool version with dynamic filtering — Claude
+          // filters search results in code before they hit context, so more of the budget
+          // goes to relevant sources. web_fetch lets it then OPEN the promising results
+          // (a company's contact/team page, a registry entry, a news piece) and read the
+          // full page instead of just the search snippet — the "scrape" upgrade.
+          ...(useWeb ? { tools: [
+            { type: "web_search_20260209", name: "web_search", max_uses: MAX_SEARCHES },
+            { type: "web_fetch_20260209", name: "web_fetch", max_uses: 8, max_content_tokens: 25000 },
+          ] } : {}),
           messages,
         }),
       });
@@ -171,6 +186,11 @@ export default async function handler(req, res) {
             seenSrc.add(url);
             sources.push({ url, title: String(r.title || url).replace(/\s+/g, " ").trim().slice(0, 160) });
           }
+        }
+        // Pages the model opened with web_fetch are sources too (often THE source for contacts).
+        if (block.type === "web_fetch_tool_result" && block.content && block.content.url && !seenSrc.has(block.content.url)) {
+          seenSrc.add(block.content.url);
+          sources.push({ url: block.content.url, title: String((block.content.document && block.content.document.title) || block.content.url).replace(/\s+/g, " ").trim().slice(0, 160) });
         }
       }
       if (data.stop_reason !== "pause_turn") break;

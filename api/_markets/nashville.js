@@ -50,7 +50,9 @@ const EXCLUDE_USE = ["HOSPITAL", "METRO", "SCHOOL", "COLLEGE", "UNIVERSITY", "CH
 async function arcgis(where, spatial) {
   const params = {
     where: where || "1=1", outFields: "APN,ParID,Owner,OwnAddr1,OwnAddr2,OwnCity,OwnState,OwnZip,PropAddr,PropCity,PropZip,LUCode,LUDesc,Zoning,LandAppr,ImprAppr,TotlAppr,TotlAssd,Acres,StatedArea,Front,Side,SalePrice,OwnDate,Council",
-    orderByFields: "TotlAppr DESC", returnGeometry: "false", returnCentroid: "true", outSR: "4326", resultRecordCount: "2000", f: "json",
+    // Metro's parcel layer is an older MapServer that IGNORES returnCentroid — request the
+    // (simplified) polygon geometry instead and compute the centroid from the ring ourselves.
+    orderByFields: "TotlAppr DESC", returnGeometry: "true", maxAllowableOffset: "0.0003", geometryPrecision: "5", outSR: "4326", resultRecordCount: "2000", f: "json",
   };
   if (spatial) {
     params.geometry = JSON.stringify({ x: spatial.lon, y: spatial.lat, spatialReference: { wkid: 4326 } });
@@ -62,7 +64,14 @@ async function arcgis(where, spatial) {
   const r = await fetch(`${NASH_BASE}/query?${new URLSearchParams(params)}`);
   if (!r.ok) return [];
   const j = await r.json().catch(() => ({}));
-  return (j.features || []).map((f) => ({ ...(f.attributes || {}), __c: f.centroid || null })); // centroid → row lat/lon for the map
+  const ringCentroid = (geom) => {
+    const ring = geom && Array.isArray(geom.rings) && geom.rings[0];
+    if (!ring || !ring.length) return null;
+    let x = 0, y = 0;
+    for (const p of ring) { x += p[0]; y += p[1]; }
+    return { x: x / ring.length, y: y / ring.length };
+  };
+  return (j.features || []).map((f) => ({ ...(f.attributes || {}), __c: f.centroid || ringCentroid(f.geometry) })); // centroid → row lat/lon for the map
 }
 
 // Generic ArcGIS-Hub query → attribute rows; never throws (a dead layer just yields no enrichment).

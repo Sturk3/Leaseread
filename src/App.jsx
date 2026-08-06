@@ -1324,7 +1324,13 @@ function AgentChat({ pw, config, onSourced, goSourcing, seed, onMapRows }) {
     if (hit) return { ...hit, uiSummary: `${hit.uiSummary} (cached)` };
     const data = await postJSON(route.url, { password: pw, ...route.body(inputArgs) });
     const out = shapeResult(name, data);
-    if (!data.error) { out.ui = sourcingRowsFrom(name, data); toolCacheRef.current.set(key, out); }
+    if (!data.error) {
+      out.ui = sourcingRowsFrom(name, data);
+      // FULL result set for the map + sheet export. shapeResult caps what the MODEL
+      // reads (token control) — the map and spreadsheet get every row, uncapped.
+      out.mapRows = data.leads || data.properties || data.rows || null;
+      toolCacheRef.current.set(key, out);
+    }
     return out;
   };
 
@@ -1362,7 +1368,9 @@ function AgentChat({ pw, config, onSourced, goSourcing, seed, onMapRows }) {
           // When Scout lives in the map drawer, its search results also pin on the BIG map
           // behind it (full rows → real dossiers on pin click + sheet export).
           if (md && onMapRows) {
-            const raw = out.forModel.leads || out.forModel.properties || out.forModel.rows || [];
+            // Prefer the UNCAPPED rows (out.mapRows) — the whole list Scout found goes on
+            // the map and into the sheet, even when the model's copy was trimmed to 75.
+            const raw = out.mapRows || out.forModel.leads || out.forModel.properties || out.forModel.rows || [];
             if (raw.length) onMapRows(raw, tu.name);
           }
           if (out.ui && out.ui.rows && out.ui.rows.length) { if (onSourced) onSourced(out.ui); setLog((l) => [...l, { kind: "sourced", count: out.ui.rows.length }]); }

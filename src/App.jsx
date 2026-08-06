@@ -1177,6 +1177,10 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
   // shaped result instead of re-hitting the endpoint and burning an agent turn. Keyed by
   // name+args (web tools also key on mode, since deep vs quick yields a different answer).
   const toolCacheRef = useRef(new Map());
+  // HARD per-run web budget. Prompt guidance alone let runs "keep researching" — this is
+  // the code-level backstop: after N live web calls in one run, further web tools return
+  // a "budget used" note instead of running, which forces Scout to answer with what it has.
+  const webCallsRef = useRef(0);
 
   // Accept a PDF (offering memo / NDA to grade) OR a CSV/text list of leads to rank ("who do I
   // call first"). Text files are read as text and injected into Scout's context so it can read and
@@ -1242,9 +1246,16 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
       const wKey = `${name}:${deep ? "web" : "knowledge"}:${JSON.stringify(inputArgs)}`;
       const wHit = toolCacheRef.current.get(wKey);
       if (wHit) return { ...wHit, uiSummary: `${wHit.uiSummary} (cached)` };
+      // Hard per-run web budget: 2 live calls on a routine question, 5 in Deep Research.
+      // Past it, the tool refuses and tells Scout to answer with what it already has —
+      // the code-level end to "it just kept researching".
+      const webBudget = deepResearch ? 5 : 2;
+      if (deep && webCallsRef.current >= webBudget) {
+        return { forModel: { note: `Live-web budget for this run is used up (${webBudget} calls). Answer NOW with what you already have; offer the user a follow-up or Deep Research for more.` }, uiSummary: "web budget reached" };
+      }
       const data = await postJSON(TOOL_ROUTES[name].url, { password: pw, ...TOOL_ROUTES[name].body(inputArgs), mode: deep ? "web" : "knowledge" });
       if (data && data.usage) setTokens(recordUsage(data.usage, data.model));
-      if (deep) { addScoutSpend(WEB_RUN_COST); setSpend(scoutSpend()); }
+      if (deep) { webCallsRef.current += 1; addScoutSpend(WEB_RUN_COST); setSpend(scoutSpend()); }
       const out = { forModel: shapeWebResult(data), uiSummary: deep ? "web research" : (overCap ? "quick take (cap reached)" : "quick take") };
       if (!data.error) toolCacheRef.current.set(wKey, out);
       return out;
@@ -1348,6 +1359,7 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
     setLog((l) => [...l, { kind: "user", text: doc ? `${text}  📎 ${doc.name}` : text }]);
     setBusy(true);
     stopRef.current = false; // fresh run — clear any prior stop
+    webCallsRef.current = 0; // fresh web budget per run
     try { await runLoop(messages, deepResearch); }
     catch (e) { setLog((l) => [...l, { kind: "error", text: e.message }]); }
     finally { setBusy(false); setAttachedDoc(null); }

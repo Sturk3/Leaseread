@@ -41,8 +41,10 @@ const THINKING_ON = process.env.AGENT_THINKING !== "0";
 // performs at or above the old models' high settings while spending far fewer thinking tokens —
 // the documented cost-quality sweet spot — so a routine sweep doesn't cost a fortune. Coverage
 // (full rosters, step budget) is unaffected; raise AGENT_EFFORT=high if quality ever feels thin.
+// (The $30 incident came from the UNCACHED research loop, not effort — with research.js
+// cached and the per-run web budget enforced browser-side, high effort adds only cents.)
 const EFFORT_DEEP = process.env.AGENT_EFFORT_DEEP || "xhigh";
-const EFFORT_ROUTINE = process.env.AGENT_EFFORT || "medium";
+const EFFORT_ROUTINE = process.env.AGENT_EFFORT || "high";
 
 // Tool catalog. Each tool maps 1:1 to an existing FRONTAGE endpoint; the browser owns
 // the name->endpoint routing (see TOOL_ROUTES in src/App.jsx) and injects the password.
@@ -560,6 +562,7 @@ You are a FULLY CAPABLE GENERAL ASSISTANT with live web access — you can searc
 
 WHAT YOU DO
 - Turn a plain-English request into the right sequence of tool calls, then SYNTHESIZE — don't just dump rows. Rank, flag the motivated owners, and explain the read.
+- THE USER IS WAITING LIVE. Match run length to the question: a simple lookup = 1-2 turns; a dossier = 3-5; only full area sweeps and Deep Research justify long runs. BATCH independent lookups into one turn, answer as soon as you have enough to be decision-grade, and OFFER deeper follow-ups ("want me to unmask the owner / pull the history?") instead of silently continuing to research. Never keep researching past the point where the answer would change.
 
 AREA SWEEPS ARE THE PRODUCT (the #1 job — when the user names an AREA, coverage is sacred)
 - EXACTLY the area they said: honor the boundary, asset type, and filters as given. Never silently widen, narrow, or reinterpret — if you must assume something (radius, borough), state the assumption in one line up top.

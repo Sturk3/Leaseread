@@ -6980,9 +6980,67 @@ function SkipTraceForm({ pw, seed }) {
 
 // Manual skip-trace tool — type any name + address and trace it directly (e.g. an LLC
 // principal you unmasked on another site, far better than tracing a building).
+// PERSON FINDER — the "Whitepages workflow" done right: type a specific PERSON (an
+// unmasked principal, an heir, an officer), get (1) free people-search deep links that
+// show relatives instantly, (2) the AI relatives/associates hunt with sources + one-click
+// trace chips, (3) the paid trace below for their direct line. Relatives are the way in
+// when the owner's own number is dead.
+function PersonFinder({ pw }) {
+  const [name, setName] = useState("");
+  const [city, setCity] = useState("");
+  const [st, setSt] = useState("NY");
+  const [go, setGo] = useState(null);
+  const enc = encodeURIComponent;
+  const slug = (s) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const inp = { background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8, color: C.ivory, fontSize: 12.5, padding: "9px 11px" };
+  const links = go ? [
+    ["👨‍👩‍👧 TruePeopleSearch — free, shows RELATIVES", `https://www.truepeoplesearch.com/results?name=${enc(go.name)}${go.city || go.st ? `&citystatezip=${enc([go.city, go.st].filter(Boolean).join(" "))}` : ""}`],
+    ["FastPeopleSearch — free", `https://www.fastpeoplesearch.com/name/${slug(go.name)}${go.city ? `_${slug(go.city + " " + go.st)}` : ""}`],
+    ["Whitepages", `https://www.whitepages.com/name/${slug(go.name)}${go.city ? `/${slug(go.city + " " + go.st)}` : ""}`],
+  ] : [];
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Person's name — e.g. an unmasked LLC principal" style={{ ...inp, flex: "1 1 240px" }}
+          onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) setGo({ name: name.trim(), city: city.trim(), st: st.trim() }); }} />
+        <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="City (optional)" style={{ ...inp, width: 150 }} />
+        <input value={st} onChange={(e) => setSt(e.target.value)} placeholder="ST" maxLength={2} style={{ ...inp, width: 56 }} />
+        <button onClick={() => name.trim() && setGo({ name: name.trim(), city: city.trim(), st: st.trim() })} className="mono lift"
+          style={{ cursor: "pointer", fontSize: 11.5, padding: "9px 16px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>FIND PERSON</button>
+      </div>
+      {go && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {links.map(([lab, url]) => (
+              <a key={lab} href={url} target="_blank" rel="noreferrer" className="mono lift"
+                style={{ fontSize: 11, padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.green}55`, background: "transparent", color: C.green, textDecoration: "none" }}>
+                {lab} ↗
+              </a>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>
+            The free sites show relatives/associates instantly (open in a new tab). Or run the AI hunt below — it works deeds, obituaries, filings and LinkedIn with sources, and every person it finds becomes a one-click trace chip.
+          </div>
+          <div key={`${go.name}|${go.city}`} style={{ marginTop: 10 }}>
+            <OwnerPeople r={{ name: go.name, owner: go.name, address: [go.city, go.st].filter(Boolean).join(", "), city: go.city, state: go.st }} pw={pw} market="nyc" />
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>
+            Got the person + their city? Run the <strong style={{ color: C.ivory }}>manual trace below</strong> with their name + address for the direct line (~$0.10 on a hit).
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ManualSkipTrace({ pw }) {
   return (
     <div style={{ marginTop: 22 }}>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, marginBottom: 14 }}>
+        <div className="mono" style={{ fontSize: 11, color: C.gold, letterSpacing: "0.05em", marginBottom: 4 }}>🔎 PERSON FINDER — a specific person + their relatives</div>
+        <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>The Whitepages workflow: search a person, surface their family and associates, then trace whoever answers the phone. The way in when an owner's own line is dead.</div>
+        <PersonFinder pw={pw} />
+      </div>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
         <div className="mono" style={{ fontSize: 11, color: C.muted, letterSpacing: "0.05em", marginBottom: 12 }}>MANUAL SKIP TRACE — name + address</div>
         <SkipTraceForm pw={pw} />

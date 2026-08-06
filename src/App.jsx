@@ -3464,10 +3464,27 @@ function parseMapCommand(text) {
 // FULL owner block (name, mailing, tenure, sale, signals), shaped for outreach and
 // skip-trace lists. This is the "make me a sheet from what's on the map" export.
 function mapSheetCSV(rows) {
+  // Merge in every CONTACT the app already owns, at $0: the imported PropertyShark
+  // researched contacts (persistent) and any skip-trace results already paid for this
+  // session (the _skipCache — cleared on refresh). No new paid lookups are triggered.
+  const contactsFor = (r) => {
+    const ps = psLookup({ name: r.name, address: r.address, contact_address: r.contact_address });
+    if (ps) return { who: ps.contact || "", phones: (ps.phones || []).map((p) => `${p.number}${p.type ? ` (${p.type}${p.dnc ? ", DNC" : ""})` : p.dnc ? " (DNC)" : ""}`), emails: ps.emails || [], src: "PropertyShark import" };
+    const sk = _skipCache.get(skipKey(r));
+    if (sk && sk.matched) {
+      const best = (sk.persons || []).find((p) => p.matchesOwner) || (sk.persons || [])[0] || null;
+      const phones = (best ? best.phones : sk.phones || []).map((p) => `${p.number}${p.type ? ` (${p.type}${p.dnc ? ", DNC" : ""})` : p.dnc ? " (DNC)" : ""}`);
+      return { who: best ? best.name : "", phones, emails: best ? best.emails : sk.emails || [], src: `skip trace (${sk.provider || ""})` };
+    }
+    return { who: "", phones: [], emails: [], src: "" };
+  };
+  rows = rows.map((r) => ({ ...r, _cx: contactsFor(r) }));
   const cols = [
     ["Address", (r) => r.address], ["Borough", (r) => r.borough],
     ["Owner", (r) => r.name], ["Owner type", (r) => r.entity_type],
     ["Mailing street", (r) => r.contact_address], ["Mailing city", (r) => r.city], ["Mailing state", (r) => r.state], ["Mailing zip", (r) => r.zip],
+    ["Contact person", (r) => r._cx.who], ["Phone 1", (r) => r._cx.phones[0]], ["Phone 2", (r) => r._cx.phones[1]], ["Phone 3", (r) => r._cx.phones[2]],
+    ["Email 1", (r) => r._cx.emails[0]], ["Email 2", (r) => r._cx.emails[1]], ["Contact source", (r) => r._cx.src],
     ["Years owned", (r) => r.years_owned], ["Last sale date", (r) => r.last_sale_date], ["Last sale price", (r) => r.last_sale_price],
     ["Absentee", (r) => r.absentee || ""], ["Tax lien", (r) => (r.tax_lien ? "YES" : "")],
     ["Vacant storefront", (r) => (r.storefront_vacant ? `reported ${r.vacancy_year || ""}` : "")],

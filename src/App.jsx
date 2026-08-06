@@ -6869,14 +6869,36 @@ function phoneVerdict(num) {
   const e = loadAiCache()[`PHONE|${phoneDigits(num)}`];
   return e && e.verdict && (e.verdict.text === "good" || e.verdict.text === "bad") ? e.verdict : null;
 }
-function setPhoneVerdict(num, v) {
+// The verdict's `mode` slot carries WHICH SOURCE produced the number, so the call
+// tracker can score providers against real dials (PropertyShark vs Tracerfy vs Endato).
+function setPhoneVerdict(num, v, source) {
   const d = phoneDigits(num);
-  if (d) saveAiAnswer({ address: "PHONE", owner: d }, "verdict", v, "");
+  if (d) saveAiAnswer({ address: "PHONE", owner: d }, "verdict", v, String(source || "").slice(0, 40));
 }
-function PhoneVerdictButtons({ number, onChange }) {
+// Live provider scoreboard, computed from the team's actual ✓/✗ verdicts.
+function callStats() {
+  const c = loadAiCache();
+  const rows = [];
+  for (const [id, kinds] of Object.entries(c)) {
+    if (!id.startsWith("PHONE|") || !kinds || !kinds.verdict) continue;
+    const t = kinds.verdict.text;
+    if (t !== "good" && t !== "bad") continue;
+    rows.push({ number: id.slice(6), good: t === "good", source: kinds.verdict.mode || "unknown", at: kinds.verdict.savedAt || 0 });
+  }
+  rows.sort((a, b) => b.at - a.at);
+  const bySource = {};
+  for (const r of rows) {
+    const k = r.source || "unknown";
+    bySource[k] = bySource[k] || { good: 0, bad: 0 };
+    bySource[k][r.good ? "good" : "bad"] += 1;
+  }
+  const good = rows.filter((r) => r.good).length;
+  return { rows, total: rows.length, good, bad: rows.length - good, rate: rows.length ? Math.round((good / rows.length) * 100) : null, bySource };
+}
+function PhoneVerdictButtons({ number, source, onChange }) {
   const v = phoneVerdict(number);
   const btn = (val, glyph, color, title) => (
-    <button onClick={() => { setPhoneVerdict(number, v && v.text === val ? "cleared" : val); if (onChange) onChange(); }} title={title} className="mono"
+    <button onClick={() => { setPhoneVerdict(number, v && v.text === val ? "cleared" : val, source); if (onChange) onChange(); }} title={title} className="mono"
       style={{ cursor: "pointer", fontSize: 10, marginLeft: 4, border: `1px solid ${v && v.text === val ? color : C.line}`, background: v && v.text === val ? `${color}22` : "transparent", color: v && v.text === val ? color : C.muted, borderRadius: 4, padding: "0 5px" }}>
       {glyph}
     </button>
@@ -6890,7 +6912,7 @@ function PhoneVerdictButtons({ number, onChange }) {
 }
 
 // Render a list of phones + emails (shared by the free and paid lanes).
-function ContactList({ phones = [], emails = [] }) {
+function ContactList({ phones = [], emails = [], source = "" }) {
   const [, bump] = useState(0);
   if (!phones.length && !emails.length) return null;
   return (
@@ -6908,7 +6930,7 @@ function ContactList({ phones = [], emails = [] }) {
             {tier && !confirmed && !struck && <span className="mono" title={`callability ${p.grade.score}/100`} style={{ fontSize: 9, color: tcol, marginLeft: 6, border: `1px solid ${tcol}`, borderRadius: 4, padding: "0 5px" }}>{tier}</span>}
             {p.type && <span className="mono" style={{ fontSize: 10, color: C.muted, marginLeft: 6 }}>{String(p.type).toUpperCase()}</span>}
             {p.dnc && <span className="mono" style={{ fontSize: 9.5, color: C.red, marginLeft: 6, border: `1px solid ${C.red}`, borderRadius: 4, padding: "0 5px" }}>DNC</span>}
-            <PhoneVerdictButtons number={p.number} onChange={() => bump((x) => x + 1)} />
+            <PhoneVerdictButtons number={p.number} source={source} onChange={() => bump((x) => x + 1)} />
           </div>
         );
       })}
@@ -7134,7 +7156,7 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
                       })()}
                       {p.isEntity && <span className="mono" title="A company name, not an individual — likely the owner's corporate web. Verify." style={{ fontSize: 9, color: C.amber, marginLeft: 6, border: `1px solid ${C.amber}`, borderRadius: 4, padding: "0 5px" }}>ENTITY ⚠</span>}
                     </div>
-                    <ContactList phones={p.phones} emails={p.emails} />
+                    <ContactList phones={p.phones} emails={p.emails} source={skip.provider} />
                     <RelativeList relatives={p.relatives} loc={{ city: r.city, state: r.state }} />
                   </div>
                 );
@@ -7149,7 +7171,7 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
                   </>
                 );
               })() : (
-                <ContactList phones={skip.phones} emails={skip.emails} />
+                <ContactList phones={skip.phones} emails={skip.emails} source={skip.provider} />
               )}
               {skip.persons && skip.persons.length > 0 && skip.persons.every((p) => p.isEntity) && (
                 <div style={{ fontSize: 11, color: C.amber, marginTop: 4, lineHeight: 1.5 }}>
@@ -7305,7 +7327,7 @@ function PersonFinder({ pw }) {
                 {p.matchScore >= 80 && <span className="mono" style={{ fontSize: 9, color: C.green, marginLeft: 6, border: `1px solid ${C.green}`, borderRadius: 4, padding: "0 5px" }}>✓ NAME MATCH</span>}
                 {p.matchScore < 80 && p.matchScore >= 25 && <span className="mono" style={{ fontSize: 9, color: "#e0a050", marginLeft: 6, border: "1px solid #e0a050", borderRadius: 4, padding: "0 5px" }}>~ SIMILAR NAME</span>}
               </div>
-              <ContactList phones={p.phones} emails={p.emails} />
+              <ContactList phones={p.phones} emails={p.emails} source={res.provider} />
               <RelativeList relatives={p.relatives} loc={{ city: go.city, state: go.st }} />
             </div>
           )) : (
@@ -7333,9 +7355,69 @@ function PersonFinder({ pw }) {
   );
 }
 
+// 📞 CALL TRACKER — the live accuracy scoreboard. Every ✓/✗ you hit while dialling
+// lands here: overall hit rate, and a per-source breakdown so you can see which
+// provider's numbers actually connect (PropertyShark vs Tracerfy vs Endato) instead
+// of trusting anyone's marketing. Shared team-wide with the rest of the memory.
+function CallTracker({ pw }) {
+  const [tick, setTick] = useState(0);
+  const [synced, setSynced] = useState(false);
+  useEffect(() => { kbEnsureSynced(pw).then(() => { setSynced(true); setTick((t) => t + 1); }); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { const h = setInterval(() => setTick((t) => t + 1), 4000); return () => clearInterval(h); }, []);
+  const s = useMemo(() => callStats(), [tick, synced]);
+  const box = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, marginBottom: 14 };
+  if (!s.total) {
+    return (
+      <div style={box}>
+        <div className="mono" style={{ fontSize: 11, color: C.gold, letterSpacing: "0.05em", marginBottom: 6 }}>📞 CALL TRACKER — LIVE NUMBER ACCURACY</div>
+        <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.6 }}>
+          No calls logged yet. After you dial a number anywhere in FRONTAGE, hit <span style={{ color: C.green }}>✓</span> if you reached the right person or <span style={{ color: C.red }}>✗</span> if it was wrong — this panel then tracks your real hit rate <strong style={{ color: C.ivory }}>per data source</strong>, so you can see which provider is worth paying for. Verdicts are shared with the team and stick to the number forever.
+        </div>
+      </div>
+    );
+  }
+  const rateCol = (r) => (r >= 60 ? C.green : r >= 35 ? "#e0a050" : C.red);
+  return (
+    <div style={box}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+        <div className="mono" style={{ fontSize: 11, color: C.gold, letterSpacing: "0.05em" }}>📞 CALL TRACKER — LIVE NUMBER ACCURACY</div>
+        <div className="mono" style={{ fontSize: 10, color: C.muted }}>{s.total} dial{s.total === 1 ? "" : "s"} logged</div>
+      </div>
+      <div style={{ display: "flex", gap: 22, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 30, fontWeight: 800, color: rateCol(s.rate), lineHeight: 1 }}>{s.rate}%</div>
+          <div className="mono" style={{ fontSize: 9.5, color: C.muted, letterSpacing: "0.1em", marginTop: 3 }}>REACHED THE RIGHT PERSON</div>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted }}>
+          <span style={{ color: C.green, fontWeight: 700 }}>{s.good}</span> good · <span style={{ color: C.red, fontWeight: 700 }}>{s.bad}</span> wrong
+        </div>
+      </div>
+      <div className="mono" style={{ fontSize: 9.5, color: C.muted, letterSpacing: "0.12em", marginBottom: 6 }}>BY DATA SOURCE</div>
+      {Object.entries(s.bySource).sort((a, b) => (b[1].good + b[1].bad) - (a[1].good + a[1].bad)).map(([src, v]) => {
+        const n = v.good + v.bad, rate = Math.round((v.good / n) * 100);
+        return (
+          <div key={src} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 5 }}>
+            <div style={{ width: 190, fontSize: 11.5, color: C.ivory, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{src}</div>
+            <div style={{ flex: 1, height: 8, background: C.panel2, borderRadius: 4, overflow: "hidden", minWidth: 90 }}>
+              <div style={{ width: `${rate}%`, height: "100%", background: rateCol(rate) }} />
+            </div>
+            <div className="mono" style={{ fontSize: 10.5, color: rateCol(rate), width: 96, textAlign: "right" }}>{rate}% of {n}</div>
+          </div>
+        );
+      })}
+      <div style={{ marginTop: 10, fontSize: 10.5, color: C.muted, lineHeight: 1.5 }}>
+        Recent: {s.rows.slice(0, 6).map((r, i) => (
+          <span key={r.number} style={{ color: r.good ? C.green : C.red }}>{i > 0 ? " · " : ""}{r.good ? "✓" : "✗"} {r.number.replace(/^(\d{3})(\d{3})(\d{4})$/, "($1) $2-$3")}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ManualSkipTrace({ pw }) {
   return (
     <div style={{ marginTop: 22 }}>
+      <CallTracker pw={pw} />
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, marginBottom: 14 }}>
         <div className="mono" style={{ fontSize: 11, color: C.gold, letterSpacing: "0.05em", marginBottom: 4 }}>🔎 PERSON FINDER — a specific person + their relatives</div>
         <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>The Whitepages workflow: search a person, surface their family and associates, then trace whoever answers the phone. The way in when an owner's own line is dead.</div>

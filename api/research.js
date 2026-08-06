@@ -8,10 +8,10 @@
 // synthesis, at Opus 4.8's price ($5/$25 per MTok). Accuracy is the priority for these
 // briefs; env-override RESEARCH_MODEL if it ever needs to drop back.
 const RESEARCH_MODEL = process.env.RESEARCH_MODEL || "claude-opus-5";
-// How many web_search rounds the agent may run. Raised 8 → 12 for deeper owner/portfolio/
-// contact digging (accuracy over cost); Vercel Pro's 300s budget still fits this. Override
-// RESEARCH_MAX_SEARCHES; if briefs start timing out, drop back toward 8.
-const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 12;
+// How many web_search rounds the agent may run. 8 is the cost-sane depth — each search leg
+// grows the context that later legs re-process, so search count compounds spend superlinearly.
+// Override RESEARCH_MAX_SEARCHES to go deeper on demand.
+const MAX_SEARCHES = Number(process.env.RESEARCH_MAX_SEARCHES) || 8;
 
 function buildSystem() {
   return `You are an off-market real estate acquisitions research analyst for a firm that buys trophy / high-street RETAIL property. Its two primary hunting grounds are NEW YORK CITY (Manhattan high-street corridors — Fifth Ave, Madison, SoHo, Meatpacking) and CHARLESTON, SC — above all KING STREET, Charleston's premier retail corridor (Upper/Lower King), plus the surrounding downtown/peninsula. Treat properties on or near these as high priority and lean in hard. You are given a PROPERTY (an address, and often — but not always — its owner of record). Use the web_search tool to find WHO owns it, their PORTFOLIO, and HOW TO REACH them, then write a DEEP, exhaustive intelligence brief.
@@ -127,12 +127,12 @@ export default async function handler(req, res) {
 
     // The web_search server tool runs a search loop server-side; if it hits its
     // iteration cap the response comes back as stop_reason "pause_turn" and we
-    // re-send to let it continue. Bounded so a runaway can't burn the budget — 16 legs
-    // so a deeper multi-search run (MAX_SEARCHES up to 12, on Pro) can finish all its
-    // continuation legs without being cut off mid-brief.
+    // re-send to let it continue. Bounded so a runaway can't burn the budget — 10 legs
+    // covers a full 8-search run; with the top-level cache_control above, each extra
+    // leg costs ~10% of what it used to.
     const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, web_search_requests: 0 };
     const sources = []; const seenSrc = new Set(); // verifiable citations from the web-search results
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 10; i++) {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -146,19 +146,21 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           model: RESEARCH_MODEL,
           fallbacks: "default",
-          // Roomy ceiling so a deep, fully-sourced brief isn't cut off. On Opus 5 thinking
-          // is ON by default and counts toward max_tokens, so this includes thinking
-          // headroom. A cap, not a target — a thin lookup still returns short.
-          max_tokens: 16000,
+          // COST-CRITICAL: top-level prompt caching. The pause_turn loop re-sends the whole
+          // growing context (search results, fetched pages) on EVERY continuation leg — without
+          // caching each leg re-bills all of it at full price, which is what made a single
+          // deep brief cost dollars. With the auto-placed breakpoint, later legs read the
+          // prior legs' context at ~10% price.
+          cache_control: { type: "ephemeral" },
+          // Ceiling includes Opus 5's default-on thinking. A cap, not a target.
+          max_tokens: 8000,
           system: systemPrompt,
-          // web_search_20260209: the current tool version with dynamic filtering — Claude
-          // filters search results in code before they hit context, so more of the budget
-          // goes to relevant sources. web_fetch lets it then OPEN the promising results
-          // (a company's contact/team page, a registry entry, a news piece) and read the
-          // full page instead of just the search snippet — the "scrape" upgrade.
+          // web_search_20260209: dynamic filtering keeps junk results out of context.
+          // web_fetch opens the FEW most promising pages (contact/team/registry) — capped
+          // tight because every fetched page is re-processed by every later leg.
           ...(useWeb ? { tools: [
             { type: "web_search_20260209", name: "web_search", max_uses: MAX_SEARCHES },
-            { type: "web_fetch_20260209", name: "web_fetch", max_uses: 8, max_content_tokens: 25000 },
+            { type: "web_fetch_20260209", name: "web_fetch", max_uses: 4, max_content_tokens: 8000 },
           ] } : {}),
           messages,
         }),

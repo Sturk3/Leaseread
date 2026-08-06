@@ -891,7 +891,8 @@ function addSpend(amount) {
 const SCOUT_SPEND_KEY = "fr_scout_spend_v1", SCOUT_CAP_KEY = "fr_scout_cap_v1", SCOUT_MODE_KEY = "fr_scout_mode_v1";
 // Per deep web-research run. Bumped 0.15 -> 0.30 after depth was raised (up to 8 web
 // searches + longer briefs), so the monthly spend tracker stays roughly honest.
-const WEB_RUN_COST = 0.30;
+const WEB_RUN_COST = 1.25; // real-world avg of an Opus 5 web_research run (post-caching). Was 0.30,
+// which let true spend blow past the monthly cap ~4x before the cap engaged.
 const MAX_AGENT_STEPS = 16; // cap tool steps per request (raised 10 → 16 for area sweeps: a
 // corridor query needs search + per-lot intel/history on the top targets + contact chains, and
 // 10 cut sweeps off mid-enrichment. Free tools dominate, so the extra steps buy coverage cheaply;

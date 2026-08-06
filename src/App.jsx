@@ -3548,6 +3548,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
             radius: pin ? 9 : vacHit ? 7 : 6, weight: 2,
             color: vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#8b80f9",
             fillColor: vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#26224a", fillOpacity: 0.9,
+            bubblingMouseEvents: false, // pin click must NOT also fire the map's click (it would re-search at the pin and wipe the result set)
           });
           cm.bindTooltip(`${r.address || "?"}${r.name ? ` — ${r.name}` : ""}${vacHit ? ` · 🚪 VACANT (reported ${r.vacancy_year || ""})` : ""}`, { direction: "top" });
           cm.on("click", () => setSel(r));

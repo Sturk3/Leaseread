@@ -869,6 +869,7 @@ function pickLeadFields(r) {
     contact_address: r.contact_address, city: r.city, state: r.state, zip: r.zip,
     years_owned: r.years_owned, last_sale_date: r.last_sale_date, last_sale_price: r.last_sale_price,
     absentee: r.absentee || null, tax_lien: r.tax_lien || false, buildable_sqft: r.buildable_sqft || null,
+    ...(r.storefront_vacant ? { storefront_vacant: true, vacancy_year: r.vacancy_year || null } : {}),
     retail_sqft: r.retail_sqft || null, portfolio_count: r.portfolio_count || null,
     distance: r.distance ?? null,
   };
@@ -3411,6 +3412,41 @@ function PropertySharkImport({ pw }) {
   );
 }
 
+// Parse a plain-English map command into deterministic filters — NO AI involved, so
+// there is nothing to hallucinate: "locate all the vacant storefronts within .25 mi of
+// 103 Prince St" → { vacantOnly, assetType, radius, addressText }. Qualifiers like
+// "high end / luxury / trophy / class A" are stripped (the dossiers carry the values
+// that answer that); "X blocks" ≈ 0.05 mi per block.
+function parseMapCommand(text) {
+  let t = String(text || "").trim();
+  const out = { vacantOnly: false, assetType: null, radius: null, minSqft: null, addressText: "" };
+  let m = t.match(/(?:within|in)\s+(?:a\s+)?(\d*\.?\d+)\s*(?:mi|mile|miles)\b/i);
+  if (m) { out.radius = Number(m[1]); t = t.slice(0, m.index) + " " + t.slice(m.index + m[0].length); }
+  else if ((m = t.match(/(?:within|in)\s+(\d+)\s*blocks?\b/i))) { out.radius = Math.min(0.5, Number(m[1]) * 0.05); t = t.slice(0, m.index) + " " + t.slice(m.index + m[0].length); }
+  if ((m = t.match(/(?:over|above|at\s*least|min(?:imum)?)\s*([\d,]+)\s*(?:sf|sq\.?\s*ft|square\s*feet)\b/i))) { out.minSqft = Number(m[1].replace(/,/g, "")); t = t.slice(0, m.index) + " " + t.slice(m.index + m[0].length); }
+  if (/vacant\s*(?:store\s*fronts?|retail|stores?|shops?)/i.test(t)) {
+    out.vacantOnly = true; out.assetType = "retail";
+    t = t.replace(/vacant\s*(?:store\s*fronts?|retail|stores?|shops?)/gi, " ");
+  } else if (/vacant\s+(?:land|lots?)/i.test(t)) { out.assetType = "vacant"; t = t.replace(/vacant\s+(?:land|lots?)/gi, " "); }
+  const assets = [[/\boffices?\b/i, "office"], [/multi\s*family|apartments?\b/i, "multifamily"], [/mixed[\s-]*use/i, "mixed_use"], [/industrial|warehouses?/i, "industrial"], [/hotels?\b/i, "hotel"], [/retail|store\s*fronts?|shops?\b/i, "retail"]];
+  for (const [re, val] of assets) { if (!out.assetType && re.test(t)) { out.assetType = val; t = t.replace(re, " "); break; } }
+  m = t.match(/\b(?:of|near|around|at|on)\s+(.+)$/i);
+  out.addressText = (m ? m[1] : t)
+    .replace(/\b(locate|find|show|give|list|map|pin|pins|me|all|the|every|please|properties|property|buildings?|high[\s-]*end|luxury|trophy|prime|class\s*a)\b/gi, " ")
+    .replace(/[.,;]+\s*$/, "").replace(/\s+/g, " ").trim();
+  return out;
+}
+// Top-hit NYC geocode for typed commands (the autocomplete path stays for plain addresses).
+async function geocodeNycTop(text) {
+  try {
+    const r = await fetch(`https://geosearch.planninglabs.nyc/v2/search?text=${encodeURIComponent(text)}&size=1`);
+    if (!r.ok) return null;
+    const f = ((await r.json()).features || [])[0];
+    if (!f || !f.geometry) return null;
+    return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], label: (f.properties || {}).label || text, bbl: (((f.properties || {}).addendum || {}).pad || {}).bbl || null };
+  } catch { return null; }
+}
+
 // ── MAP VIEW — click a building, get the dossier ─────────────────────────────
 // The CoStar-style front door: a Leaflet map (OSM/CARTO tiles, free, no key) over
 // NYC. Click anywhere → the nearest lot's full dossier opens in the side panel
@@ -3425,20 +3461,29 @@ function MapView({ pw }) {
   const [loc, setLoc] = useState("");
   const [radius, setRadius] = useState(0.1);
   const [type, setType] = useState("retail");
+  const [vacantOnly, setVacantOnly] = useState(false);
   const radiusRef = useRef(radius); radiusRef.current = radius;
   const typeRef = useRef(type); typeRef.current = type;
+  const vacantRef = useRef(vacantOnly); vacantRef.current = vacantOnly;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [count, setCount] = useState(null);
+  const [understood, setUnderstood] = useState("");
   const [sel, setSel] = useState(null);
 
   const loadAt = async (lat, lon, opts = {}) => {
     setBusy(true); setErr("");
+    const o = opts.overrides || {};
+    const vac = o.vacantOnly != null ? o.vacantOnly : vacantRef.current;
+    let rad = o.radius != null ? o.radius : (opts.single ? 0 : radiusRef.current);
+    if (vac && !rad) rad = 0.25; // "vacant storefronts HERE" needs an area to scan
     try {
       const d = await postJSON("/api/search", {
         password: pw, market: "nyc", sources: ["pluto"],
-        assetType: typeRef.current, centerLat: lat, centerLon: lon,
-        radiusMiles: opts.single ? "" : (radiusRef.current || ""),
+        assetType: o.assetType || typeRef.current, centerLat: lat, centerLon: lon,
+        radiusMiles: rad || "",
+        ...(vac ? { vacantOnly: true } : {}),
+        ...(o.minSqft ? { minSqft: o.minSqft } : {}),
         ...(opts.bbl ? { pickedBbl: opts.bbl } : {}),
       });
       if (d.error) { setErr(d.error); return; }
@@ -3448,25 +3493,46 @@ function MapView({ pw }) {
       if (lg) {
         lg.clearLayers();
         for (const r of leads) {
-          const pin = !!r.pinned;
+          const pin = !!r.pinned, vacHit = !!r.storefront_vacant;
           const cm = L.circleMarker([r.lat, r.lon], {
-            radius: pin ? 9 : 6, weight: 2,
-            color: pin ? "#6a5cf6" : "#8b80f9",
-            fillColor: pin ? "#6a5cf6" : "#26224a", fillOpacity: 0.9,
+            radius: pin ? 9 : vacHit ? 7 : 6, weight: 2,
+            color: vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#8b80f9",
+            fillColor: vacHit ? "#e0524d" : pin ? "#6a5cf6" : "#26224a", fillOpacity: 0.9,
           });
-          cm.bindTooltip(`${r.address || "?"}${r.name ? ` — ${r.name}` : ""}`, { direction: "top" });
+          cm.bindTooltip(`${r.address || "?"}${r.name ? ` — ${r.name}` : ""}${vacHit ? ` · 🚪 VACANT (reported ${r.vacancy_year || ""})` : ""}`, { direction: "top" });
           cm.on("click", () => setSel(r));
           cm.addTo(lg);
         }
       }
       // Single-building click → open its dossier immediately; radius → open the anchor.
       const first = leads.find((r) => r.pinned) || leads[0];
-      if (first && (opts.single || !radiusRef.current)) setSel(first);
+      if (first && (opts.single || !rad)) setSel(first);
       else if (opts.openFirst && first) setSel(first);
+      if (vac && !leads.length) setErr("No reported-vacant storefronts in that area (LL157 registry). Try a wider radius — owners under-report.");
     } catch (e) { setErr(e.message || "Lookup failed."); }
     finally { setBusy(false); }
   };
   const loadAtRef = useRef(loadAt); loadAtRef.current = loadAt;
+
+  // Plain-English command: "locate all the vacant storefronts within .25 mi of 103 prince st",
+  // "high end office over 20,000 sf near 5th ave and 57th", … Parsed deterministically
+  // (no AI), filters applied, top geocode hit used as the center. Enter runs it.
+  const runCommand = async (raw) => {
+    const text = String(raw || loc || "").trim();
+    if (!text) return;
+    const cmd = parseMapCommand(text);
+    if (cmd.assetType) setType(cmd.assetType);
+    if (cmd.radius != null) setRadius(cmd.radius);
+    setVacantOnly(cmd.vacantOnly);
+    let target = null;
+    if (cmd.addressText && cmd.addressText.length > 2) target = await geocodeNycTop(cmd.addressText);
+    const c = target || (mapRef.current ? { lat: mapRef.current.getCenter().lat, lon: mapRef.current.getCenter().lng, label: "the current map view" } : null);
+    if (!c) return;
+    const effRad = cmd.radius != null ? cmd.radius : radiusRef.current;
+    setUnderstood(`Understood: ${cmd.vacantOnly ? "vacant storefronts" : (cmd.assetType || typeRef.current).replace("_", " ")}${cmd.minSqft ? ` over ${cmd.minSqft.toLocaleString()} SF` : ""} · ${effRad ? `${effRad} mi around` : "at"} ${c.label}`);
+    if (mapRef.current && target) mapRef.current.setView([c.lat, c.lon], effRad ? 16 : 18);
+    loadAt(c.lat, c.lon, { bbl: target && target.bbl, openFirst: !effRad, overrides: { assetType: cmd.assetType, radius: cmd.radius, vacantOnly: cmd.vacantOnly, minSqft: cmd.minSqft } });
+  };
 
   useEffect(() => {
     if (mapRef.current || !boxRef.current) return;
@@ -3489,8 +3555,9 @@ function MapView({ pw }) {
   const selStyle = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, color: C.ivory, fontSize: 12, padding: "8px 10px" };
   return (
     <div style={{ marginTop: 22 }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
-        <AddressAutocomplete value={loc} onChange={setLoc} onPick={onPick} placeholder="Search an address — or just click any building on the map…" style={{ ...selStyle, flex: "1 1 280px" }} marketHint="nyc" />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+        <AddressAutocomplete value={loc} onChange={setLoc} onPick={onPick} onEnter={runCommand} placeholder='Type a command — "vacant storefronts within .25 mi of 103 Prince St", "office near 425 5th Ave" — or an address, or just click the map…' style={{ ...selStyle, flex: "1 1 340px" }} marketHint="nyc" />
+        <button onClick={() => runCommand()} className="mono lift" style={{ cursor: "pointer", fontSize: 11.5, padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>GO</button>
         <select value={radius} onChange={(e) => setRadius(Number(e.target.value))} className="mono" style={selStyle}>
           <option value={0}>pins: off · just what I click</option>
           <option value={0.05}>pins within 0.05 mi</option>
@@ -3500,10 +3567,19 @@ function MapView({ pw }) {
         <select value={type} onChange={(e) => setType(e.target.value)} className="mono" style={selStyle}>
           {["retail", "any", "office", "multifamily", "mixed_use", "industrial", "hotel", "vacant"].map((t) => <option key={t} value={t}>{t.replace("_", " ")}</option>)}
         </select>
+        <label className="mono" style={{ ...selStyle, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }} title="Only lots whose latest LL157 storefront-registry filing reports a vacant storefront (owner-reported to the City).">
+          <input type="checkbox" checked={vacantOnly} onChange={(e) => setVacantOnly(e.target.checked)} style={{ accentColor: "#e0524d" }} />
+          🚪 vacant storefronts
+        </label>
         {busy && <span className="mono" style={{ fontSize: 11, color: C.gold }}>▸ loading…</span>}
         {!busy && count != null && <span className="mono" style={{ fontSize: 11, color: C.muted }}>{count} propert{count === 1 ? "y" : "ies"} on map</span>}
-        {err && <span style={{ fontSize: 11.5, color: C.red }}>{err}</span>}
       </div>
+      {(understood || err) && (
+        <div style={{ marginBottom: 8, fontSize: 11.5 }}>
+          {understood && <span className="mono" style={{ color: C.green }}>{understood}</span>}
+          {err && <span style={{ color: C.red, marginLeft: understood ? 10 : 0 }}>{err}</span>}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 14, alignItems: "stretch", flexWrap: "wrap" }}>
         <div ref={boxRef} style={{ flex: "1 1 520px", minHeight: 620, borderRadius: 12, border: `1px solid ${C.line}`, overflow: "hidden", zIndex: 0 }} />
         <div style={{ flex: "1 1 380px", maxWidth: 560, maxHeight: 620, overflowY: "auto", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: "4px 16px 16px" }}>
@@ -3513,13 +3589,23 @@ function MapView({ pw }) {
                 <div style={{ fontWeight: 700, color: C.ivory, fontSize: 14 }}>{sel.address}</div>
                 <button onClick={() => setSel(null)} className="mono" style={{ cursor: "pointer", border: "none", background: "transparent", color: C.muted, fontSize: 14 }}>✕</button>
               </div>
-              <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 6 }}>{sel.name || ""}{sel.borough ? ` · ${sel.borough}` : ""}</div>
+              <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 6 }}>
+                {sel.name || ""}{sel.borough ? ` · ${sel.borough}` : ""}
+                {sel.storefront_vacant && <span className="mono" style={{ marginLeft: 8, fontSize: 9.5, color: "#e0524d", border: "1px solid #e0524d", borderRadius: 4, padding: "1px 6px" }}>🚪 REPORTED VACANT{sel.vacancy_year ? ` ’${String(sel.vacancy_year).slice(2)}` : ""}</span>}
+              </div>
               <PropertyDetail r={sel} pw={pw} />
             </>
           ) : (
             <div style={{ color: C.muted, fontSize: 12.5, lineHeight: 1.7, padding: "18px 4px" }}>
-              <div style={{ color: C.ivory, fontWeight: 600, marginBottom: 8 }}>🗺 Click any building.</div>
-              Click a lot on the map (or search an address) and the full dossier opens here — owner of record, mailing address, last sale, violations & distress, deed history, foot traffic, street view, and the contact workflow. Set a pin radius to light up every {type.replace("_", " ")} property around a point; click pins to compare.
+              <div style={{ color: C.ivory, fontWeight: 600, marginBottom: 8 }}>🗺 Click any building — or tell the map what to find.</div>
+              Click a lot and its full dossier opens here — owner of record, mailing address, last sale, violations & distress, deed history, foot traffic, street view, and the contact workflow.
+              <div style={{ marginTop: 10, color: C.ivory, fontWeight: 600 }}>Or type a command:</div>
+              <div className="mono" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 2 }}>
+                “vacant storefronts within .25 mi of 103 Prince St”<br />
+                “office over 20,000 sf near 425 5th Ave”<br />
+                “multifamily within 3 blocks of 72 Greene St”
+              </div>
+              <div style={{ marginTop: 10 }}>Commands run straight against the public records — parsed word-for-word, no AI in the data path, so what you asked is exactly what gets pinned. 🚪 red pins = storefronts their owners reported VACANT to the City (LL157 registry).</div>
             </div>
           )}
         </div>

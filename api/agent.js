@@ -70,6 +70,7 @@ const TOOLS = [
         builtAfter: { type: "number", description: "Only buildings built on/after this year." },
         builtBefore: { type: "number", description: "Only buildings built on/before this year." },
         devOnly: { type: "boolean", description: "Only underbuilt development sites (meaningful unused air rights)." },
+        vacantOnly: { type: "boolean", description: "Only lots whose latest LL157 storefront-registry filing reports a VACANT storefront (NYC's owner-reported vacancy list). Combine with nearAddress + radiusMiles for 'vacant storefronts near X'. Results carry storefront_vacant + vacancy_year — cite the reporting year (owner-reported, not live ground truth)." },
         minBuildable: { type: "number", description: "Minimum unused buildable square footage (air rights)." },
       },
     },

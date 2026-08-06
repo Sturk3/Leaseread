@@ -95,6 +95,7 @@ function absenteeFlag(state, zip) {
 }
 
 const sodaQuote = (vals) => vals.map((v) => "'" + String(v).replace(/'/g, "''") + "'").join(", ");
+const STOREFRONT = process.env.STOREFRONT_DATASET || "92iy-9c3n"; // LL157 storefront registry — owner-reported vacancy by BBL
 // Escape user text for a SoQL upper(...) like '%...%' clause.
 const likeEsc = (s) => String(s).toUpperCase().replace(/'/g, "''");
 // Whole-street match: treats the input as a complete street token, so "9 STREET"
@@ -689,7 +690,7 @@ async function saveLeads(leads) {
 }
 
 export async function search(q) {
-  const { sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable } = q;
+  const { sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, vacantOnly } = q;
 
   const appToken = null; // NYC account/token disconnected — anonymous requests only
   const wanted = Array.isArray(sources) && sources.length ? sources : ["acris", "dob"];
@@ -766,6 +767,42 @@ export async function search(q) {
     if (devOnly) leads = leads.filter((l) => l.underbuilt || l.pinned);
     const minB = Number(minBuildable);
     if (Number.isFinite(minB) && minB > 0) leads = leads.filter((l) => (l.buildable_sqft || 0) >= minB || l.pinned);
+
+    // VACANT STOREFRONTS (LL157 registry): keep only lots whose LATEST storefront filing
+    // reports a vacant unit. Batched bbl-in join against the registry; owner-reported
+    // annual filings, so this is "reported vacant", not live ground truth — the lead
+    // carries the reporting year so the UI/agent can say so honestly.
+    if (vacantOnly && leads.length) {
+      const BORO_NUM = { manhattan: "1", bronx: "2", brooklyn: "3", queens: "4", "staten island": "5" };
+      const bblOf = (l) => {
+        const b = BORO_NUM[clean(l.borough).toLowerCase()];
+        if (!b || !l.block || !l.lot) return null;
+        return b + String(l.block).split(".")[0].padStart(5, "0") + String(l.lot).split(".")[0].padStart(4, "0");
+      };
+      const bbls = [...new Set(leads.map(bblOf).filter(Boolean))].slice(0, 400);
+      const vacantBy = new Map(); // bbl10 -> latest reporting year with a vacant filing
+      for (let i = 0; i < bbls.length; i += 100) {
+        const rows = await fetchSocrata(STOREFRONT, {
+          where: `bbl in (${sodaQuote(bbls.slice(i, i + 100))})`,
+          select: "bbl,reporting_year,vacant_on_12_31",
+          limit: 5000, appToken,
+        }).catch(() => []);
+        const latest = {};
+        for (const r of rows) {
+          const key = clean(r.bbl), yr = Number(r.reporting_year) || 0;
+          const vac = /^y/i.test(clean(r.vacant_on_12_31));
+          const cur = latest[key];
+          if (!cur || yr > cur.yr) latest[key] = { yr, vac };
+          else if (yr === cur.yr && vac) cur.vac = true;
+        }
+        for (const [k, v] of Object.entries(latest)) if (v.vac) vacantBy.set(k, v.yr);
+      }
+      leads = leads.filter((l) => {
+        const k = bblOf(l);
+        if (k && vacantBy.has(k)) { l.storefront_vacant = true; l.vacancy_year = vacantBy.get(k); return true; }
+        return !!l.pinned;
+      });
+    }
 
     // Portfolio: how many properties in this result set share the same owner.
     const ownerCount = {};

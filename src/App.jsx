@@ -3463,37 +3463,65 @@ function parseMapCommand(text) {
 // The exportable sourcing sheet for a map result set — every pinned property with its
 // FULL owner block (name, mailing, tenure, sale, signals), shaped for outreach and
 // skip-trace lists. This is the "make me a sheet from what's on the map" export.
-function mapSheetCSV(rows) {
-  // Merge in every CONTACT the app already owns, at $0: the imported PropertyShark
-  // researched contacts (persistent) and any skip-trace results already paid for this
-  // session (the _skipCache — cleared on refresh). No new paid lookups are triggered.
-  const contactsFor = (r) => {
-    const ps = psLookup({ name: r.name, address: r.address, contact_address: r.contact_address });
-    if (ps) return { who: ps.contact || "", phones: (ps.phones || []).map((p) => `${p.number}${p.type ? ` (${p.type}${p.dnc ? ", DNC" : ""})` : p.dnc ? " (DNC)" : ""}`), emails: ps.emails || [], src: "PropertyShark import" };
-    const sk = _skipCache.get(skipKey(r));
-    if (sk && sk.matched) {
-      const best = (sk.persons || []).find((p) => p.matchesOwner) || (sk.persons || [])[0] || null;
-      const phones = (best ? best.phones : sk.phones || []).map((p) => `${p.number}${p.type ? ` (${p.type}${p.dnc ? ", DNC" : ""})` : p.dnc ? " (DNC)" : ""}`);
-      return { who: best ? best.name : "", phones, emails: best ? best.emails : sk.emails || [], src: `skip trace (${sk.provider || ""})` };
-    }
-    return { who: "", phones: [], emails: [], src: "" };
-  };
-  rows = rows.map((r) => ({ ...r, _cx: contactsFor(r) }));
-  const cols = [
-    ["Address", (r) => r.address], ["Borough", (r) => r.borough],
-    ["Owner", (r) => r.name], ["Owner type", (r) => r.entity_type],
-    ["Mailing street", (r) => r.contact_address], ["Mailing city", (r) => r.city], ["Mailing state", (r) => r.state], ["Mailing zip", (r) => r.zip],
-    ["Contact person", (r) => r._cx.who], ["Phone 1", (r) => r._cx.phones[0]], ["Phone 2", (r) => r._cx.phones[1]], ["Phone 3", (r) => r._cx.phones[2]],
-    ["Email 1", (r) => r._cx.emails[0]], ["Email 2", (r) => r._cx.emails[1]], ["Contact source", (r) => r._cx.src],
-    ["Years owned", (r) => r.years_owned], ["Last sale date", (r) => r.last_sale_date], ["Last sale price", (r) => r.last_sale_price],
-    ["Absentee", (r) => r.absentee || ""], ["Tax lien", (r) => (r.tax_lien ? "YES" : "")],
-    ["Vacant storefront", (r) => (r.storefront_vacant ? `reported ${r.vacancy_year || ""}` : "")],
-    ["Retail SF", (r) => r.retail_sqft], ["Building SF", (r) => r.bldg_sqft], ["Unused buildable SF", (r) => r.buildable_sqft],
-    ["Owner portfolio (in results)", (r) => r.portfolio_count],
-    ["Block", (r) => r.block], ["Lot", (r) => r.lot], ["Lat", (r) => r.lat], ["Lon", (r) => r.lon],
-  ];
+// The sheet's columns, organized in print-dialog-style GROUPS the export popup can
+// toggle. Contacts merge in at $0 from the imported PropertyShark file + any skip
+// traces already cached this session — no new paid lookups fire on export.
+const SHEET_GROUPS = [
+  ["property", "Property (address · SF)"],
+  ["owner", "Owner"],
+  ["mailing", "Mailing address"],
+  ["contacts", "Contacts (phones & emails)"],
+  ["signals", "Signals & sale history"],
+  ["ids", "Block/Lot & coordinates"],
+];
+const SHEET_COLUMNS = [
+  { g: "property", h: "Address", get: (r) => r.address },
+  { g: "property", h: "Borough", get: (r) => r.borough },
+  { g: "property", h: "Retail SF", get: (r) => r.retail_sqft },
+  { g: "property", h: "Building SF", get: (r) => r.bldg_sqft },
+  { g: "owner", h: "Owner", get: (r) => r.name },
+  { g: "owner", h: "Owner type", get: (r) => r.entity_type },
+  { g: "mailing", h: "Mailing street", get: (r) => r.contact_address },
+  { g: "mailing", h: "Mailing city", get: (r) => r.city },
+  { g: "mailing", h: "Mailing state", get: (r) => r.state },
+  { g: "mailing", h: "Mailing zip", get: (r) => r.zip },
+  { g: "contacts", h: "Contact person", get: (r) => r._cx.who },
+  { g: "contacts", h: "Phone 1", get: (r) => r._cx.phones[0] },
+  { g: "contacts", h: "Phone 2", get: (r) => r._cx.phones[1] },
+  { g: "contacts", h: "Phone 3", get: (r) => r._cx.phones[2] },
+  { g: "contacts", h: "Email 1", get: (r) => r._cx.emails[0] },
+  { g: "contacts", h: "Email 2", get: (r) => r._cx.emails[1] },
+  { g: "contacts", h: "Contact source", get: (r) => r._cx.src },
+  { g: "signals", h: "Years owned", get: (r) => r.years_owned },
+  { g: "signals", h: "Last sale date", get: (r) => r.last_sale_date },
+  { g: "signals", h: "Last sale price", get: (r) => r.last_sale_price },
+  { g: "signals", h: "Absentee", get: (r) => r.absentee || "" },
+  { g: "signals", h: "Tax lien", get: (r) => (r.tax_lien ? "YES" : "") },
+  { g: "signals", h: "Vacant storefront", get: (r) => (r.storefront_vacant ? `reported ${r.vacancy_year || ""}` : "") },
+  { g: "signals", h: "Unused buildable SF", get: (r) => r.buildable_sqft },
+  { g: "signals", h: "Owner portfolio (in results)", get: (r) => r.portfolio_count },
+  { g: "ids", h: "Block", get: (r) => r.block },
+  { g: "ids", h: "Lot", get: (r) => r.lot },
+  { g: "ids", h: "Lat", get: (r) => r.lat },
+  { g: "ids", h: "Lon", get: (r) => r.lon },
+];
+function sheetContactsFor(r) {
+  const ps = psLookup({ name: r.name, address: r.address, contact_address: r.contact_address });
+  if (ps) return { who: ps.contact || "", phones: (ps.phones || []).map((p) => `${p.number}${p.type ? ` (${p.type}${p.dnc ? ", DNC" : ""})` : p.dnc ? " (DNC)" : ""}`), emails: ps.emails || [], src: "PropertyShark import" };
+  const sk = _skipCache.get(skipKey(r));
+  if (sk && sk.matched) {
+    const best = (sk.persons || []).find((p) => p.matchesOwner) || (sk.persons || [])[0] || null;
+    const phones = (best ? best.phones : sk.phones || []).map((p) => `${p.number}${p.type ? ` (${p.type}${p.dnc ? ", DNC" : ""})` : p.dnc ? " (DNC)" : ""}`);
+    return { who: best ? best.name : "", phones, emails: best ? best.emails : sk.emails || [], src: `skip trace (${sk.provider || ""})` };
+  }
+  return { who: "", phones: [], emails: [], src: "" };
+}
+function mapSheetCSV(rows, groups) {
+  const gs = groups && groups.size ? groups : new Set(SHEET_GROUPS.map(([k]) => k));
+  rows = rows.map((r) => ({ ...r, _cx: sheetContactsFor(r) }));
+  const cols = SHEET_COLUMNS.filter((c) => gs.has(c.g));
   const esc = (v) => { const s = String(v ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-  return [cols.map((c) => c[0]).join(","), ...rows.map((r) => cols.map((c) => esc(c[1](r))).join(","))].join("\n");
+  return [cols.map((c) => c.h).join(","), ...rows.map((r) => cols.map((c) => esc(c.get(r))).join(","))].join("\n");
 }
 
 // Pre-export picker: choose WHICH pinned properties make the sheet, optionally run a
@@ -3503,6 +3531,17 @@ function SheetExportModal({ rows, pw, onClose }) {
   const [sel, setSelSet] = useState(() => new Set(rows.map((_, i) => i)));
   const [status, setStatus] = useState({});
   const [tracing, setTracing] = useState(false);
+  // Column groups — print-dialog style, remembered between exports.
+  const [cols, setCols] = useState(() => {
+    try { const v = JSON.parse(localStorage.getItem("fr_sheet_cols_v1") || "null"); if (Array.isArray(v) && v.length) return new Set(v); } catch { /* fresh */ }
+    return new Set(SHEET_GROUPS.map(([k]) => k));
+  });
+  const toggleCol = (k) => setCols((s) => {
+    const n = new Set(s);
+    if (n.has(k)) n.delete(k); else n.add(k);
+    try { localStorage.setItem("fr_sheet_cols_v1", JSON.stringify([...n])); } catch { /* quota */ }
+    return n;
+  });
   const contactOf = (r) => {
     if (psLookup({ name: r.name, address: r.address, contact_address: r.contact_address })) return "PropertyShark ✓";
     const sk = _skipCache.get(skipKey(r));
@@ -3559,16 +3598,27 @@ function SheetExportModal({ rows, pw, onClose }) {
             </label>
           ))}
         </div>
+        <div style={{ marginTop: 12, padding: "10px 12px", border: `1px solid ${C.line}`, borderRadius: 10 }}>
+          <div className="mono" style={{ fontSize: 9.5, color: C.muted, letterSpacing: "0.14em", marginBottom: 7 }}>SHEET COLUMNS — tick what the file should include</div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {SHEET_GROUPS.map(([k, label]) => (
+              <label key={k} className="mono" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: cols.has(k) ? C.ivory : C.muted, cursor: "pointer" }}>
+                <input type="checkbox" checked={cols.has(k)} onChange={() => toggleCol(k)} style={{ accentColor: "#6a5cf6" }} />
+                {label}
+              </label>
+            ))}
+          </div>
+        </div>
         <div style={{ display: "flex", gap: 10, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={traceSelected} disabled={tracing || !traceTargets.length} className="mono lift"
             style={{ cursor: tracing || !traceTargets.length ? "default" : "pointer", fontSize: 11.5, padding: "9px 15px", borderRadius: 8, border: `1px solid ${C.gold}`, background: "transparent", color: C.gold, opacity: tracing || !traceTargets.length ? 0.5 : 1 }}>
             {tracing ? "▸ tracing…" : `🔎 TRACE CHECKED (${traceTargets.length} × ~$0.10)`}
           </button>
-          <button onClick={() => { if (selRows.length) downloadBlob(mapSheetCSV(selRows), `sourcing_sheet_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv"); }} disabled={!selRows.length} className="mono lift"
-            style={{ cursor: selRows.length ? "pointer" : "default", fontSize: 11.5, padding: "9px 15px", borderRadius: 8, border: `1px solid ${C.green}`, background: "transparent", color: C.green, opacity: selRows.length ? 1 : 0.5 }}>
-            ↓ EXPORT CSV ({selRows.length})
+          <button onClick={() => { if (selRows.length && cols.size) downloadBlob(mapSheetCSV(selRows, cols), `sourcing_sheet_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv"); }} disabled={!selRows.length || !cols.size} className="mono lift"
+            style={{ cursor: selRows.length && cols.size ? "pointer" : "default", fontSize: 11.5, padding: "9px 15px", borderRadius: 8, border: `1px solid ${C.green}`, background: "transparent", color: C.green, opacity: selRows.length && cols.size ? 1 : 0.5 }}>
+            ↓ EXPORT CSV ({selRows.length} rows · {SHEET_COLUMNS.filter((c) => cols.has(c.g)).length} cols)
           </button>
-          <span style={{ fontSize: 10.5, color: C.muted }}>Opens straight in Excel. Contacts come from PropertyShark imports + traces — owner + mailing are always included.</span>
+          <span style={{ fontSize: 10.5, color: C.muted }}>Opens straight in Excel. Contacts fill from PropertyShark imports + traces.</span>
         </div>
       </div>
     </div>

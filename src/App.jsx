@@ -1,4 +1,6 @@
 import React, { useState, useRef, useMemo, useEffect } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 // FRONTAGE — Retail Acquisitions Screener
 // Ingests a retail offering memorandum, extracts underwriting data, breaks out
@@ -330,7 +332,7 @@ export default function App() {
         </div>
         <nav className="rail-nav" style={{ padding: "28px 18px", display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
           <div className="rail-label" style={{ fontSize: 9, fontWeight: 500, letterSpacing: "2.4px", textTransform: "uppercase", color: "#555f76", padding: "4px 14px 12px" }}>Engines</div>
-          {[["agent", "Agent", "✦"], ["sourcing", "Sourcing", "◎"], ["corridors", "Corridors", "▚"], ["pipeline", "Pipeline", "★"], ["comps", "Comp Sheet", "≣"], ["skiptrace", "Skip Trace", "🔎"]].map(([v, lab, ic]) => (
+          {[["agent", "Agent", "✦"], ["map", "Map", "🗺"], ["sourcing", "Sourcing", "◎"], ["corridors", "Corridors", "▚"], ["pipeline", "Pipeline", "★"], ["comps", "Comp Sheet", "≣"], ["skiptrace", "Skip Trace", "🔎"]].map(([v, lab, ic]) => (
             <button key={v} onClick={() => setView(v)} className={view === v ? "rail-item active" : "rail-item"}>
               <span className="ic">{ic}</span> {lab}
             </button>
@@ -345,7 +347,7 @@ export default function App() {
       <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: C.ink }}>
         <header className="main-top" style={{ padding: "20px 40px", borderBottom: `1px solid ${C.line}`, display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap", background: C.panel }}>
           <h1 style={{ fontSize: 12, fontWeight: 600, letterSpacing: "2px", textTransform: "uppercase", color: C.ivory, margin: 0 }}>
-            {view === "agent" ? "Agent" : view === "sourcing" ? "Sourcing" : view === "corridors" ? "Corridors" : view === "pipeline" ? "Pipeline" : view === "comps" ? "Comp Sheet" : view === "screener" ? "Screener" : view === "skiptrace" ? "Skip Trace" : view === "nda" ? "NDA Review" : "Lease Radar"}
+            {view === "agent" ? "Agent" : view === "map" ? "Map" : view === "sourcing" ? "Sourcing" : view === "corridors" ? "Corridors" : view === "pipeline" ? "Pipeline" : view === "comps" ? "Comp Sheet" : view === "screener" ? "Screener" : view === "skiptrace" ? "Skip Trace" : view === "nda" ? "NDA Review" : "Lease Radar"}
           </h1>
           <p style={{ fontSize: 13, color: C.muted, fontWeight: 300, margin: 0, flex: "1 1 240px" }}>
             {view === "agent"
@@ -395,6 +397,7 @@ export default function App() {
         {view === "radar" && <LeaseRadar pw={pw} />}
 
         {view === "pipeline" && <Pipeline pw={pw} />}
+        {view === "map" && <MapView pw={pw} />}
         {view === "skiptrace" && <><PropertySharkImport pw={pw} /><ManualSkipTrace pw={pw} /></>}
 
         {view === "nda" && <NDAReview pw={pw} />}
@@ -3404,6 +3407,123 @@ function PropertySharkImport({ pw }) {
         </div>
       </div>
       {msg && <div style={{ fontSize: 11.5, color: msg.startsWith("⚠") ? "#e0a050" : C.green, marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
+
+// ── MAP VIEW — click a building, get the dossier ─────────────────────────────
+// The CoStar-style front door: a Leaflet map (OSM/CARTO tiles, free, no key) over
+// NYC. Click anywhere → the nearest lot's full dossier opens in the side panel
+// (reusing PropertyDetail — photo, owner, mailing, intel, history, contacts).
+// Search an address to fly there; set a radius to pin every PLUTO property around
+// the point (same /api/search engine the Sourcing tab uses). NYC-first (the only
+// market with parcel coords in every row); other markets keep the Sourcing tab.
+function MapView({ pw }) {
+  const boxRef = useRef(null);
+  const mapRef = useRef(null);
+  const layerRef = useRef(null);
+  const [loc, setLoc] = useState("");
+  const [radius, setRadius] = useState(0.1);
+  const [type, setType] = useState("retail");
+  const radiusRef = useRef(radius); radiusRef.current = radius;
+  const typeRef = useRef(type); typeRef.current = type;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [count, setCount] = useState(null);
+  const [sel, setSel] = useState(null);
+
+  const loadAt = async (lat, lon, opts = {}) => {
+    setBusy(true); setErr("");
+    try {
+      const d = await postJSON("/api/search", {
+        password: pw, market: "nyc", sources: ["pluto"],
+        assetType: typeRef.current, centerLat: lat, centerLon: lon,
+        radiusMiles: opts.single ? "" : (radiusRef.current || ""),
+        ...(opts.bbl ? { pickedBbl: opts.bbl } : {}),
+      });
+      if (d.error) { setErr(d.error); return; }
+      const leads = (d.leads || []).filter((r) => r.lat && r.lon);
+      setCount(leads.length);
+      const lg = layerRef.current;
+      if (lg) {
+        lg.clearLayers();
+        for (const r of leads) {
+          const pin = !!r.pinned;
+          const cm = L.circleMarker([r.lat, r.lon], {
+            radius: pin ? 9 : 6, weight: 2,
+            color: pin ? "#6a5cf6" : "#8b80f9",
+            fillColor: pin ? "#6a5cf6" : "#26224a", fillOpacity: 0.9,
+          });
+          cm.bindTooltip(`${r.address || "?"}${r.name ? ` — ${r.name}` : ""}`, { direction: "top" });
+          cm.on("click", () => setSel(r));
+          cm.addTo(lg);
+        }
+      }
+      // Single-building click → open its dossier immediately; radius → open the anchor.
+      const first = leads.find((r) => r.pinned) || leads[0];
+      if (first && (opts.single || !radiusRef.current)) setSel(first);
+      else if (opts.openFirst && first) setSel(first);
+    } catch (e) { setErr(e.message || "Lookup failed."); }
+    finally { setBusy(false); }
+  };
+  const loadAtRef = useRef(loadAt); loadAtRef.current = loadAt;
+
+  useEffect(() => {
+    if (mapRef.current || !boxRef.current) return;
+    const m = L.map(boxRef.current).setView([40.7243, -73.9987], 15); // SoHo prime
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+      attribution: '© OpenStreetMap · © CARTO', maxZoom: 19,
+    }).addTo(m);
+    layerRef.current = L.layerGroup().addTo(m);
+    m.on("click", (e) => loadAtRef.current(e.latlng.lat, e.latlng.lng, { single: true }));
+    mapRef.current = m;
+    return () => { m.remove(); mapRef.current = null; };
+  }, []);
+
+  const onPick = (p) => {
+    setLoc(p.label || "");
+    if (mapRef.current) mapRef.current.setView([p.lat, p.lon], radiusRef.current ? 16 : 18);
+    loadAt(p.lat, p.lon, { bbl: p.bbl, openFirst: true });
+  };
+
+  const selStyle = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, color: C.ivory, fontSize: 12, padding: "8px 10px" };
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <AddressAutocomplete value={loc} onChange={setLoc} onPick={onPick} placeholder="Search an address — or just click any building on the map…" style={{ ...selStyle, flex: "1 1 280px" }} marketHint="nyc" />
+        <select value={radius} onChange={(e) => setRadius(Number(e.target.value))} className="mono" style={selStyle}>
+          <option value={0}>pins: off · just what I click</option>
+          <option value={0.05}>pins within 0.05 mi</option>
+          <option value={0.1}>pins within 0.1 mi</option>
+          <option value={0.25}>pins within 0.25 mi</option>
+        </select>
+        <select value={type} onChange={(e) => setType(e.target.value)} className="mono" style={selStyle}>
+          {["retail", "any", "office", "multifamily", "mixed_use", "industrial", "hotel", "vacant"].map((t) => <option key={t} value={t}>{t.replace("_", " ")}</option>)}
+        </select>
+        {busy && <span className="mono" style={{ fontSize: 11, color: C.gold }}>▸ loading…</span>}
+        {!busy && count != null && <span className="mono" style={{ fontSize: 11, color: C.muted }}>{count} propert{count === 1 ? "y" : "ies"} on map</span>}
+        {err && <span style={{ fontSize: 11.5, color: C.red }}>{err}</span>}
+      </div>
+      <div style={{ display: "flex", gap: 14, alignItems: "stretch", flexWrap: "wrap" }}>
+        <div ref={boxRef} style={{ flex: "1 1 520px", minHeight: 620, borderRadius: 12, border: `1px solid ${C.line}`, overflow: "hidden", zIndex: 0 }} />
+        <div style={{ flex: "1 1 380px", maxWidth: 560, maxHeight: 620, overflowY: "auto", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: "4px 16px 16px" }}>
+          {sel ? (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0 2px" }}>
+                <div style={{ fontWeight: 700, color: C.ivory, fontSize: 14 }}>{sel.address}</div>
+                <button onClick={() => setSel(null)} className="mono" style={{ cursor: "pointer", border: "none", background: "transparent", color: C.muted, fontSize: 14 }}>✕</button>
+              </div>
+              <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 6 }}>{sel.name || ""}{sel.borough ? ` · ${sel.borough}` : ""}</div>
+              <PropertyDetail r={sel} pw={pw} />
+            </>
+          ) : (
+            <div style={{ color: C.muted, fontSize: 12.5, lineHeight: 1.7, padding: "18px 4px" }}>
+              <div style={{ color: C.ivory, fontWeight: 600, marginBottom: 8 }}>🗺 Click any building.</div>
+              Click a lot on the map (or search an address) and the full dossier opens here — owner of record, mailing address, last sale, violations & distress, deed history, foot traffic, street view, and the contact workflow. Set a pin radius to light up every {type.replace("_", " ")} property around a point; click pins to compare.
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

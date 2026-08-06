@@ -3419,11 +3419,22 @@ function PropertySharkImport({ pw }) {
 // that answer that); "X blocks" ≈ 0.05 mi per block.
 function parseMapCommand(text) {
   let t = String(text || "").trim();
-  const out = { vacantOnly: false, assetType: null, radius: null, minSqft: null, addressText: "" };
+  const out = { vacantOnly: false, assetType: null, radius: null, minSqft: null, minRetailSqft: null, addressText: "", absenteeOnly: false, taxLienOnly: false, devOnly: false, minYears: null, minUnits: null, builtBefore: null, builtAfter: null };
+  const strip = (mm) => { t = t.slice(0, mm.index) + " " + t.slice(mm.index + mm[0].length); };
   let m = t.match(/(?:within|in)\s+(?:a\s+)?(\d*\.?\d+)\s*(?:mi|mile|miles)\b/i);
-  if (m) { out.radius = Number(m[1]); t = t.slice(0, m.index) + " " + t.slice(m.index + m[0].length); }
-  else if ((m = t.match(/(?:within|in)\s+(\d+)\s*blocks?\b/i))) { out.radius = Math.min(0.5, Number(m[1]) * 0.05); t = t.slice(0, m.index) + " " + t.slice(m.index + m[0].length); }
-  if ((m = t.match(/(?:over|above|at\s*least|min(?:imum)?)\s*([\d,]+)\s*(?:sf|sq\.?\s*ft|square\s*feet)\b/i))) { out.minSqft = Number(m[1].replace(/,/g, "")); t = t.slice(0, m.index) + " " + t.slice(m.index + m[0].length); }
+  if (m) { out.radius = Number(m[1]); strip(m); }
+  else if ((m = t.match(/(?:within|in)\s+(\d+)\s*blocks?\b/i))) { out.radius = Math.min(0.5, Number(m[1]) * 0.05); strip(m); }
+  if ((m = t.match(/retail\s*(?:space)?\s*(?:over|above|at\s*least)\s*([\d,]+)\s*(?:sf|sq\.?\s*ft|square\s*feet)\b/i))) { out.minRetailSqft = Number(m[1].replace(/,/g, "")); out.assetType = "retail"; strip(m); }
+  if ((m = t.match(/(?:over|above|at\s*least|min(?:imum)?)\s*([\d,]+)\s*(?:sf|sq\.?\s*ft|square\s*feet)\b/i))) { out.minSqft = Number(m[1].replace(/,/g, "")); strip(m); }
+  // Owner-signal vocabulary — the sourcing filters, spoken.
+  if ((m = t.match(/absentee|out[\s-]*of[\s-]*(?:state|town|area)/i))) { out.absenteeOnly = true; t = t.replace(/(?:absentee|out[\s-]*of[\s-]*(?:state|town|area))(?:\s+owners?)?/gi, " "); }
+  if ((m = t.match(/(?:with\s+)?tax\s*liens?/i))) { out.taxLienOnly = true; strip(m); }
+  if ((m = t.match(/air\s*rights|underbuilt|development\s*(?:sites?|potential)/i))) { out.devOnly = true; t = t.replace(/(?:with\s+)?(?:unused\s+)?(?:air\s*rights|underbuilt|development\s*(?:sites?|potential))/gi, " "); }
+  if ((m = t.match(/(?:held|owned)\s*(?:for)?\s*(\d+)\s*\+?\s*(?:years|yrs)/i))) { out.minYears = Number(m[1]); strip(m); t = t.replace(/\bwho(?:'ve|\s+have)?\b/gi, " "); }
+  else if ((m = t.match(/long[\s-]*(?:held|hold|tenure)/i))) { out.minYears = 15; strip(m); }
+  if ((m = t.match(/(?:over|above|at\s*least|min(?:imum)?)\s*(\d+)\s*units\b/i))) { out.minUnits = Number(m[1]); strip(m); }
+  if ((m = t.match(/built\s*before\s*(\d{4})/i))) { out.builtBefore = Number(m[1]); strip(m); }
+  if ((m = t.match(/built\s*after\s*(\d{4})/i))) { out.builtAfter = Number(m[1]); strip(m); }
   if (/vacant\s*(?:store\s*fronts?|retail|stores?|shops?)/i.test(t)) {
     out.vacantOnly = true; out.assetType = "retail";
     t = t.replace(/vacant\s*(?:store\s*fronts?|retail|stores?|shops?)/gi, " ");
@@ -3484,10 +3495,19 @@ function MapView({ pw }) {
         radiusMiles: rad || "",
         ...(vac ? { vacantOnly: true } : {}),
         ...(o.minSqft ? { minSqft: o.minSqft } : {}),
+        ...(o.minRetailSqft ? { minRetailSqft: o.minRetailSqft } : {}),
+        ...(o.devOnly ? { devOnly: true } : {}),
+        ...(o.minUnits ? { minUnits: o.minUnits } : {}),
+        ...(o.builtBefore ? { builtBefore: o.builtBefore } : {}),
+        ...(o.builtAfter ? { builtAfter: o.builtAfter } : {}),
         ...(opts.bbl ? { pickedBbl: opts.bbl } : {}),
       });
       if (d.error) { setErr(d.error); return; }
-      const leads = (d.leads || []).filter((r) => r.lat && r.lon);
+      let leads = (d.leads || []).filter((r) => r.lat && r.lon);
+      // Spoken owner-signal filters — these fields ride on every lead already.
+      if (o.absenteeOnly) leads = leads.filter((r) => r.absentee || r.pinned);
+      if (o.taxLienOnly) leads = leads.filter((r) => r.tax_lien || r.pinned);
+      if (o.minYears) leads = leads.filter((r) => (Number(r.years_owned) || 0) >= o.minYears || r.pinned);
       setCount(leads.length);
       const lg = layerRef.current;
       if (lg) {
@@ -3529,9 +3549,15 @@ function MapView({ pw }) {
     const c = target || (mapRef.current ? { lat: mapRef.current.getCenter().lat, lon: mapRef.current.getCenter().lng, label: "the current map view" } : null);
     if (!c) return;
     const effRad = cmd.radius != null ? cmd.radius : radiusRef.current;
-    setUnderstood(`Understood: ${cmd.vacantOnly ? "vacant storefronts" : (cmd.assetType || typeRef.current).replace("_", " ")}${cmd.minSqft ? ` over ${cmd.minSqft.toLocaleString()} SF` : ""} · ${effRad ? `${effRad} mi around` : "at"} ${c.label}`);
+    const sig = [
+      cmd.vacantOnly && "vacant storefronts", cmd.absenteeOnly && "absentee owners", cmd.taxLienOnly && "tax liens",
+      cmd.devOnly && "air-rights/development", cmd.minYears && `held ${cmd.minYears}+ yrs`, cmd.minUnits && `${cmd.minUnits}+ units`,
+      cmd.minRetailSqft && `retail ≥ ${cmd.minRetailSqft.toLocaleString()} SF`, cmd.minSqft && `≥ ${cmd.minSqft.toLocaleString()} SF`,
+      cmd.builtBefore && `built before ${cmd.builtBefore}`, cmd.builtAfter && `built after ${cmd.builtAfter}`,
+    ].filter(Boolean);
+    setUnderstood(`Understood: ${(cmd.vacantOnly ? "retail" : (cmd.assetType || typeRef.current)).replace("_", " ")}${sig.length ? " · " + sig.join(" · ") : ""} · ${effRad ? `${effRad} mi around` : "at"} ${c.label}`);
     if (mapRef.current && target) mapRef.current.setView([c.lat, c.lon], effRad ? 16 : 18);
-    loadAt(c.lat, c.lon, { bbl: target && target.bbl, openFirst: !effRad, overrides: { assetType: cmd.assetType, radius: cmd.radius, vacantOnly: cmd.vacantOnly, minSqft: cmd.minSqft } });
+    loadAt(c.lat, c.lon, { bbl: target && target.bbl, openFirst: !effRad, overrides: cmd });
   };
 
   useEffect(() => {
@@ -3602,8 +3628,10 @@ function MapView({ pw }) {
               <div style={{ marginTop: 10, color: C.ivory, fontWeight: 600 }}>Or type a command:</div>
               <div className="mono" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 2 }}>
                 “vacant storefronts within .25 mi of 103 Prince St”<br />
+                “absentee retail owners held 15+ years near 120 5th Ave”<br />
                 “office over 20,000 sf near 425 5th Ave”<br />
-                “multifamily within 3 blocks of 72 Greene St”
+                “retail with tax liens within .1 mi of Spring & Broadway”<br />
+                “development sites with air rights within 2 blocks of 72 Greene St”
               </div>
               <div style={{ marginTop: 10 }}>Commands run straight against the public records — parsed word-for-word, no AI in the data path, so what you asked is exactly what gets pinned. 🚪 red pins = storefronts their owners reported VACANT to the City (LL157 registry).</div>
             </div>

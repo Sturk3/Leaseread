@@ -5900,7 +5900,7 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
         address: r.address, borough: r.borough,
       });
       if (d.noKey) { setSkip(d); setSkipState("nokey"); return; }
-      const result = { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched, tracedAddress: d.tracedAddress, entityLowConfidence: d.entityLowConfidence, ownerMatch: d.ownerMatch || null, weakMatch: d.weakMatch, ownerName: d.ownerName };
+      const result = { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched, tracedAddress: d.tracedAddress, entityLowConfidence: d.entityLowConfidence, ownerMatch: d.ownerMatch || null, weakMatch: d.weakMatch, ownerName: d.ownerName, poBox: d.poBox };
       _skipCache.set(skipKey(r), result);
       setSkip(result);
       if (result.matched) setSpend(bumpSkipSpend(d.cost));
@@ -6054,7 +6054,14 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
               </div>
             </>
           ) : (
-            <div style={{ fontSize: 12.5, color: C.muted }}>No match found (no charge).</div>
+            <div style={{ fontSize: 12.5, color: C.muted }}>
+              No match found (no charge).
+              {skip.business && (
+                <div style={{ fontSize: 11.5, color: C.amber, marginTop: 6, lineHeight: 1.55 }}>
+                  💡 <strong style={{ color: C.ivory }}>Why LLC traces come back empty:</strong> skip-trace databases index PEOPLE at addresses — an LLC's mailing is usually an office, registered agent, or PO box{skip.poBox ? " (this one IS a PO box)" : ""} where no principal "lives". The play: <strong style={{ color: C.ivory }}>unmask the human first</strong> (NYC: the HPD officers in the dossier's public records · CT/CA/TN/SC: the state registry lookup · anywhere: ✦ AI research), then use <strong style={{ color: C.ivory }}>"trace the person"</strong> below with their name — that's the trace that returns a real cell.
+                </div>
+              )}
+            </div>
           )}
           {skip.business && skip.matched && (
             <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6, lineHeight: 1.45 }}>

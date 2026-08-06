@@ -35,10 +35,12 @@ const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS) || 20000;
 // runs adaptive thinking. Kept for env compatibility; an explicit {type:"disabled"} would 400 at xhigh.
 const THINKING_ON = process.env.AGENT_THINKING !== "0";
 // Effort governs thinking depth + overall token spend. Deep Research runs xhigh (the recommended
-// setting for the hardest agentic work on Opus 5); routine Scout runs high (the model default —
-// the accuracy sweet spot) instead of the old cost-trimmed medium.
+// setting for the hardest agentic work on Opus 5). Routine Scout runs MEDIUM: on Opus 5 medium
+// performs at or above the old models' high settings while spending far fewer thinking tokens —
+// the documented cost-quality sweet spot — so a routine sweep doesn't cost a fortune. Coverage
+// (full rosters, step budget) is unaffected; raise AGENT_EFFORT=high if quality ever feels thin.
 const EFFORT_DEEP = process.env.AGENT_EFFORT_DEEP || "xhigh";
-const EFFORT_ROUTINE = process.env.AGENT_EFFORT || "high";
+const EFFORT_ROUTINE = process.env.AGENT_EFFORT || "medium";
 
 // Tool catalog. Each tool maps 1:1 to an existing FRONTAGE endpoint; the browser owns
 // the name->endpoint routing (see TOOL_ROUTES in src/App.jsx) and injects the password.

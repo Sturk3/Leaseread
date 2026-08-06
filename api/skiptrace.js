@@ -446,6 +446,12 @@ export default async function handler(req, res) {
       ownerMatch,
       weakMatch,
       ownerName,
+      // Why names often "don't come up" on an LLC trace: skip-trace databases index PEOPLE
+      // at addresses — an LLC's mailing is usually an office/agent/PO box where no principal
+      // "lives", so the trace returns staff/agents/nothing. Tell the caller the actual fix.
+      advice: business && !persons.some((p) => p.matchesOwner)
+        ? "LLC traces rarely surface the principal by address. Unmask the entity first — NYC: HPD registration officers (property intel); CT/CA/TN/SC: the state registry lookup; anywhere: AI research or PropertyShark — then trace the NAMED person at their own mailing address."
+        : undefined,
       matched: phones.length > 0 || emails.length > 0,
       // est. cost only when something matched (providers bill per hit)
       cost: phones.length || emails.length ? provider.estCost(business) : 0,

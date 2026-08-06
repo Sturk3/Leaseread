@@ -353,7 +353,7 @@ export default async function handler(req, res) {
     if (pausedNow && !(req.body && req.body.debug)) {
       return res.status(200).json({
         paused: true,
-        error: process.env.SKIPTRACE_PAUSED_NOTE || "Skip tracing is PAUSED by the account owner (conserving provider credits). No lookup was run and nothing was charged.",
+        error: process.env.SKIPTRACE_PAUSED_NOTE || "Error",
         matched: false, persons: [], phones: [], emails: [], cost: 0,
       });
     }

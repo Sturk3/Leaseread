@@ -831,7 +831,10 @@ async function postJSON(url, body) {
 // tool name -> how to run it. Each `body` returns the endpoint request body (the
 // password is injected by the caller). Field names mirror what each endpoint accepts.
 const TOOL_ROUTES = {
-  search_properties: { url: "/api/search", label: "Searching properties", body: (a) => ({ market: "nyc", sources: ["pluto"], assetType: a.assetType || "retail", borough: a.borough, nearAddress: a.nearAddress, radiusMiles: a.radiusMiles || 0, limit: 50, minSqft: a.minSqft, minRetailSqft: a.minRetailSqft, minUnits: a.minUnits, builtAfter: a.builtAfter, builtBefore: a.builtBefore, devOnly: a.devOnly, minBuildable: a.minBuildable }) },
+  // NOTE: this body builder is an allowlist — every field in the agent tool's schema MUST
+  // be forwarded here, or Scout passes a filter and the engine silently never sees it
+  // (the "band filter isn't binding" bug). Keep in sync with agent.js search_properties.
+  search_properties: { url: "/api/search", label: "Searching properties", body: (a) => ({ market: "nyc", sources: ["pluto"], assetType: a.assetType || "retail", borough: a.borough, nearAddress: a.nearAddress, radiusMiles: a.radiusMiles || 0, limit: 250, minSqft: a.minSqft, maxSqft: a.maxSqft, minOfficeSqft: a.minOfficeSqft, maxOfficeSqft: a.maxOfficeSqft, southOfStreet: a.southOfStreet, northOfStreet: a.northOfStreet, vacantOnly: a.vacantOnly, minRetailSqft: a.minRetailSqft, minUnits: a.minUnits, builtAfter: a.builtAfter, builtBefore: a.builtBefore, devOnly: a.devOnly, minBuildable: a.minBuildable }) },
   retail_availability: { url: "/api/availability", label: "Screening corridor availability", body: (a) => ({ corridor: a.corridor, list: a.list, limit: a.limit }) },
   property_intel: { url: "/api/intel", label: "Pulling public records", body: (a) => ({ borough: a.borough, block: a.block, lot: a.lot, name: a.name }) },
   transaction_history: { url: "/api/history", label: "Reading ACRIS history", body: (a) => ({ borough: a.borough, block: a.block, lot: a.lot }) },

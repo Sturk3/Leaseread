@@ -3647,60 +3647,39 @@ function MapView({ pw, config, onSourced, goSourcing }) {
   const selStyle = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, color: C.ivory, fontSize: 12, padding: "8px 10px" };
   return (
     <div style={{ marginTop: 10, display: "flex", flexDirection: "column", height: "calc(100vh - 170px)", minHeight: 600 }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
-        <AddressAutocomplete value={loc} onChange={setLoc} onPick={onPick} onEnter={runCommand} placeholder='Type a command — "vacant storefronts within .25 mi of 103 Prince St", "office near 425 5th Ave" — or an address, or just click the map…' style={{ ...selStyle, flex: "1 1 340px" }} marketHint="nyc" />
-        <button onClick={() => runCommand()} className="mono lift" style={{ cursor: "pointer", fontSize: 11.5, padding: "8px 16px", borderRadius: 8, border: `1px solid ${C.gold}`, background: C.goldSoft, color: C.gold }}>GO</button>
-        <select value={radius} onChange={(e) => setRadius(Number(e.target.value))} className="mono" style={selStyle}>
-          <option value={0}>pins: off · just what I click</option>
-          <option value={0.05}>pins within 0.05 mi</option>
-          <option value={0.1}>pins within 0.1 mi</option>
-          <option value={0.25}>pins within 0.25 mi</option>
-        </select>
-        <select value={type} onChange={(e) => setType(e.target.value)} className="mono" style={selStyle}>
-          {["retail", "any", "office", "multifamily", "mixed_use", "industrial", "hotel", "vacant"].map((t) => <option key={t} value={t}>{t.replace("_", " ")}</option>)}
-        </select>
-        <label className="mono" style={{ ...selStyle, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }} title="Only lots whose latest LL157 storefront-registry filing reports a vacant storefront (owner-reported to the City).">
-          <input type="checkbox" checked={vacantOnly} onChange={(e) => setVacantOnly(e.target.checked)} style={{ accentColor: "#e0524d" }} />
-          🚪 vacant storefronts
-        </label>
-        <button onClick={() => setScoutOpen((v) => !v)} className="mono lift" title="Open Scout — the AI researcher — in a drawer over the map. For questions the records can't answer alone: who's behind an LLC, portfolios, contacts, news."
-          style={{ cursor: "pointer", fontSize: 11.5, padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.gold}${scoutOpen ? "" : "55"}`, background: scoutOpen ? C.goldSoft : "transparent", color: C.gold }}>
-          ✦ SCOUT
-        </button>
-        {busy && <span className="mono" style={{ fontSize: 11, color: C.gold }}>▸ loading…</span>}
-        {!busy && count != null && <span className="mono" style={{ fontSize: 11, color: C.muted }}>{count} propert{count === 1 ? "y" : "ies"} on map</span>}
-        {rows.length > 0 && (
-          <button onClick={() => downloadBlob(mapSheetCSV(rows), `sourcing_sheet_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono lift"
-            title="Export everything currently pinned as a CSV sourcing sheet — address, owner, mailing address, tenure, last sale, and every signal — ready for outreach or a skip-trace list."
-            style={{ cursor: "pointer", fontSize: 11.5, padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.green}`, background: "transparent", color: C.green }}>
-            ↓ SHEET ({rows.length})
-          </button>
-        )}
-      </div>
-      {(understood || err) && (
-        <div style={{ marginBottom: 8, fontSize: 11.5 }}>
-          {understood && <span className="mono" style={{ color: C.green }}>{understood}</span>}
-          {err && <span style={{ color: C.red, marginLeft: understood ? 10 : 0 }}>{err}</span>}
-        </div>
-      )}
       <div style={{ position: "relative", flex: 1, minHeight: 500, borderRadius: 12, border: `1px solid ${C.line}`, overflow: "hidden" }}>
         <div ref={boxRef} style={{ position: "absolute", inset: 0, zIndex: 0 }} />
-        {scoutOpen && (
-          <div style={{ position: "absolute", left: 12, top: 12, bottom: 12, width: 520, maxWidth: "88%", zIndex: 1100, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 12, padding: "2px 16px 12px", overflowY: "auto", boxShadow: "0 14px 44px rgba(0,0,0,.5)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
-              <span className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.18em" }}>✦ SCOUT — RESEARCH & QUESTIONS</span>
-              <button onClick={() => setScoutOpen(false)} className="mono" style={{ cursor: "pointer", border: "none", background: "transparent", color: C.muted, fontSize: 15 }}>✕</button>
+        {/* Floating status over the map — Scout (right panel) is the only search input. */}
+        <div style={{ position: "absolute", left: 12, top: 12, zIndex: 1050, display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start", maxWidth: "52%" }}>
+          {busy && <span className="mono" style={{ fontSize: 11, color: C.gold, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>▸ working…</span>}
+          {understood && <span className="mono" style={{ fontSize: 11, color: C.green, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>{understood}</span>}
+          {err && <span style={{ fontSize: 11.5, color: C.red, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>{err}</span>}
+          <div style={{ display: "flex", gap: 6 }}>
+            {count != null && !busy && <span className="mono" style={{ fontSize: 11, color: C.muted, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>{count} propert{count === 1 ? "y" : "ies"} pinned</span>}
+            {rows.length > 0 && (
+              <button onClick={() => downloadBlob(mapSheetCSV(rows), `sourcing_sheet_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono lift"
+                title="Export everything pinned as a CSV sourcing sheet — owner, mailing address, tenure, last sale, and every signal."
+                style={{ cursor: "pointer", fontSize: 11, padding: "5px 12px", borderRadius: 7, border: `1px solid ${C.green}`, background: C.ink, color: C.green }}>
+                ↓ SHEET ({rows.length})
+              </button>
+            )}
+          </div>
+        </div>
+        <div style={{ position: "absolute", right: 12, top: 12, bottom: 12, width: 490, maxWidth: "60%", zIndex: 1050, overflowY: "auto", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: "4px 16px 16px", boxShadow: "0 14px 44px rgba(0,0,0,.45)" }}>
+          {/* SCOUT — the one and only search. Stays mounted (hidden) while a dossier is
+              open, so the conversation survives pin clicks. */}
+          <div style={{ display: sel ? "none" : "block" }}>
+            <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.18em", margin: "14px 0 0" }}>✦ SCOUT — SEARCH ANYTHING</div>
+            <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6, lineHeight: 1.6 }}>
+              Ask in plain English — “find all the vacant storefronts within .25 mi of 103 Prince St”, “absentee retail owners on Madison held 15+ years”, “who’s behind 92 Prince LLC and how do I reach them”. Results pin on the map; click a pin for its full dossier; ↓ SHEET exports everything with owner info. Or just click any building — that part needs no AI at all.
             </div>
             <AgentChat pw={pw} config={config} seed={scoutSeed} onSourced={onSourced} goSourcing={goSourcing} onMapRows={showScoutRows} />
           </div>
-        )}
-        {(sel || !scoutOpen) && (
-        <div style={{ position: "absolute", right: 12, top: 12, bottom: 12, width: 430, maxWidth: "88%", zIndex: 1050, overflowY: "auto", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: "4px 16px 16px", boxShadow: "0 14px 44px rgba(0,0,0,.45)" }}>
-          {sel ? (
+          {sel && (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0 2px" }}>
                 <div style={{ fontWeight: 700, color: C.ivory, fontSize: 14 }}>{sel.address}</div>
-                <button onClick={() => setSel(null)} className="mono" style={{ cursor: "pointer", border: "none", background: "transparent", color: C.muted, fontSize: 14 }}>✕</button>
+                <button onClick={() => setSel(null)} className="mono lift" style={{ cursor: "pointer", border: `1px solid ${C.gold}66`, background: "transparent", color: C.gold, fontSize: 10.5, borderRadius: 7, padding: "4px 10px" }}>← BACK TO SCOUT</button>
               </div>
               <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 6 }}>
                 {sel.name || ""}{sel.borough ? ` · ${sel.borough}` : ""}
@@ -3708,23 +3687,8 @@ function MapView({ pw, config, onSourced, goSourcing }) {
               </div>
               <PropertyDetail r={sel} pw={pw} />
             </>
-          ) : (
-            <div style={{ color: C.muted, fontSize: 12.5, lineHeight: 1.7, padding: "18px 4px" }}>
-              <div style={{ color: C.ivory, fontWeight: 600, marginBottom: 8 }}>🗺 Click any building — or tell the map what to find.</div>
-              Click a lot and its full dossier opens here — owner of record, mailing address, last sale, violations & distress, deed history, foot traffic, street view, and the contact workflow.
-              <div style={{ marginTop: 10, color: C.ivory, fontWeight: 600 }}>Or type a command:</div>
-              <div className="mono" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 2 }}>
-                “vacant storefronts within .25 mi of 103 Prince St”<br />
-                “absentee retail owners held 15+ years near 120 5th Ave”<br />
-                “office over 20,000 sf near 425 5th Ave”<br />
-                “retail with tax liens within .1 mi of Spring & Broadway”<br />
-                “development sites with air rights within 2 blocks of 72 Greene St”
-              </div>
-              <div style={{ marginTop: 10 }}>Commands run straight against the public records — parsed word-for-word, no AI in the data path, so what you asked is exactly what gets pinned. 🚪 red pins = storefronts their owners reported VACANT to the City (LL157 registry). For research questions ("who's behind this LLC?"), hit <span className="mono" style={{ color: C.gold }}>✦ SCOUT</span> in the toolbar.</div>
-            </div>
           )}
         </div>
-        )}
       </div>
     </div>
   );

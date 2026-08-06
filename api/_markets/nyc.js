@@ -362,8 +362,20 @@ async function fetchNearestPluto(lat, lon, appToken) {
   return best ? plutoAnchorFromRow(best) : null;
 }
 
-// PLUTO: find lots by asset type + street or radius, with the owner as the lead.
-async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, anchorOnly, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, limit, appToken }) {
+// Geocode a boundary street ("Canal St", "W 17th St") to a latitude for BAND queries.
+// Manhattan-biased; NYC GeoSearch returns a representative point on the street.
+async function geocodeStreetLat(text) {
+  try {
+    const r = await fetch(`https://geosearch.planninglabs.nyc/v2/search?text=${encodeURIComponent(String(text).trim() + ", Manhattan")}&size=1`);
+    if (!r.ok) return null;
+    const f = ((await r.json()).features || [])[0];
+    return f && f.geometry ? Number(f.geometry.coordinates[1]) : null;
+  } catch { return null; }
+}
+
+// PLUTO: find lots by asset type + street, radius, or a STREET BAND ("south of 17th,
+// north of Canal"), with the owner as the lead.
+async function sourcePluto({ borough, assetType, street, centerLat, centerLon, radiusMiles, anchorBbl, anchorOnly, minSqft, maxSqft, minOfficeSqft, maxOfficeSqft, southOfStreet, northOfStreet, minRetailSqft, minUnits, builtAfter, builtBefore, limit, appToken }) {
   // Single-property mode: an address was given with the radius "off" — return ONLY
   // that one lot (ignoring asset/zoning filters), nothing nearby.
   if (anchorOnly) {
@@ -380,10 +392,31 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
   if (prefixes) where.push("(" + prefixes.map((p) => `starts_with(bldgclass,'${p}')`).join(" OR ") + ")");
   if (street) where.push(streetClause("address", street));
   if (minSqft) where.push(`bldgarea>=${Number(minSqft)}`);
+  if (maxSqft) where.push(`(bldgarea<=${Number(maxSqft)} AND bldgarea>0)`);
+  // OFFICE-SPACE sizing uses PLUTO's officearea (the office SF on the lot), not total
+  // building SF — "30-80K sf of office" means office area, and the two differ a lot.
+  if (minOfficeSqft) where.push(`officearea>=${Number(minOfficeSqft)}`);
+  if (maxOfficeSqft) where.push(`(officearea<=${Number(maxOfficeSqft)} AND officearea>0)`);
   if (minRetailSqft) where.push(`retailarea>=${Number(minRetailSqft)}`);
   if (minUnits) where.push(`unitstotal>=${Number(minUnits)}`);
   if (builtAfter) where.push(`yearbuilt>=${Number(builtAfter)}`);
   if (builtBefore) where.push(`(yearbuilt<=${Number(builtBefore)} AND yearbuilt>0)`);
+
+  // STREET BAND ("south of 17th St, north of Canal St"): geocode each boundary to a
+  // latitude and take the horizontal slice between them. Defaults to Manhattan when no
+  // borough is given — the same latitudes also cross Brooklyn/Queens and would poison
+  // the band with the wrong borough's lots. ~Half-block cushion on each edge; note:
+  // crosstown streets aren't perfectly horizontal, so edges are approximate by ~a block.
+  let band = false;
+  if (southOfStreet || northOfStreet) {
+    const hi = southOfStreet ? await geocodeStreetLat(southOfStreet) : null; // north edge
+    const lo = northOfStreet ? await geocodeStreetLat(northOfStreet) : null; // south edge
+    if (hi != null || lo != null) {
+      band = true;
+      where.push(`latitude between ${lo != null ? lo - 0.0005 : 40.49} and ${hi != null ? hi + 0.0005 : 40.92}`);
+      if (!code) where.push(`borough='MN'`);
+    }
+  }
 
   const radius = radiusMiles ? Number(radiusMiles) : null;
   const hasCenter = centerLat != null && centerLon != null && radius;
@@ -396,12 +429,12 @@ async function sourcePluto({ borough, assetType, street, centerLat, centerLon, r
     where.push(`longitude between ${centerLon - dlon} and ${centerLon + dlon}`);
   }
 
-  // In radius mode pull the whole area (then trim to the exact circle below) so the
-  // result is every matching property, not an arbitrary capped slice.
-  const fetchLimit = hasCenter ? 5000 : limit;
+  // In radius/band mode pull the whole area (then trim below) so the result is every
+  // matching property, not an arbitrary capped slice. Bands rank biggest-first.
+  const fetchLimit = hasCenter || band ? 5000 : limit;
   const rows = await fetchSocrata(PLUTO, {
     where: where.join(" AND ") || undefined,
-    order: hasCenter ? undefined : "address",
+    order: hasCenter ? undefined : band ? "bldgarea DESC" : "address",
     limit: fetchLimit, appToken,
   });
 
@@ -690,7 +723,7 @@ async function saveLeads(leads) {
 }
 
 export async function search(q) {
-  const { sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, vacantOnly } = q;
+  const { sources, borough, docType, since, limit, save, assetType, street, nearAddress, radiusMiles, centerLat, centerLon, pickedBbl, minSqft, maxSqft, minOfficeSqft, maxOfficeSqft, southOfStreet, northOfStreet, minRetailSqft, minUnits, builtAfter, builtBefore, devOnly, minBuildable, vacantOnly } = q;
 
   const appToken = null; // NYC account/token disconnected — anonymous requests only
   const wanted = Array.isArray(sources) && sources.length ? sources : ["acris", "dob"];
@@ -720,7 +753,10 @@ export async function search(q) {
       centerLat: center ? center.lat : undefined, centerLon: center ? center.lon : undefined,
       radiusMiles: radiusNum || undefined, anchorOnly,
       anchorBbl: center && pickedBbl ? pickedBbl : undefined,
-      minSqft: minSqft || undefined, minRetailSqft: minRetailSqft || undefined, minUnits: minUnits || undefined,
+      minSqft: minSqft || undefined, maxSqft: maxSqft || undefined,
+      minOfficeSqft: minOfficeSqft || undefined, maxOfficeSqft: maxOfficeSqft || undefined,
+      southOfStreet: southOfStreet || undefined, northOfStreet: northOfStreet || undefined,
+      minRetailSqft: minRetailSqft || undefined, minUnits: minUnits || undefined,
       builtAfter: builtAfter || undefined, builtBefore: builtBefore || undefined,
       limit: lim, appToken,
     };
@@ -728,7 +764,7 @@ export async function search(q) {
     // A radius search is inherently about an area — only PLUTO has coordinates, so
     // ACRIS/DOB can't honor it. When a center is set, query PLUTO alone so the
     // result is just the properties in the circle (not the deed/filing feeds too).
-    const effectiveWanted = center ? ["pluto"] : wanted;
+    const effectiveWanted = center || southOfStreet || northOfStreet ? ["pluto"] : wanted;
 
     let deals = [];
     let contacts = [];

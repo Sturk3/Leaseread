@@ -63,9 +63,14 @@ const TOOLS = [
       properties: {
         nearAddress: { type: "string", description: "NYC street address to anchor on. Numbered streets like '9 STREET', avenues spelled '5 AVENUE'. Include the borough." },
         radiusMiles: { type: "number", description: "Search radius in miles around the address (e.g. 0.1, 0.25, 0.5). Omit or 0 = only the one property at that address." },
+        southOfStreet: { type: "string", description: "STREET-BAND search, north edge: results must be SOUTH of this street (e.g. 'W 17th St'). Use for 'between street A and street B' asks — NEVER fake a band with nearAddress+radius (a circle anchors the results in the wrong place). Combine with northOfStreet; defaults to Manhattan." },
+        northOfStreet: { type: "string", description: "STREET-BAND search, south edge: results must be NORTH of this street (e.g. 'Canal St')." },
         assetType: { type: "string", enum: ["any", "retail", "office", "multifamily", "mixed_use", "industrial", "hotel", "vacant", "one_two_family", "condo"], description: "Building type filter (PLUTO building class). Default 'retail' for trophy-retail sourcing." },
         minRetailSqft: { type: "number", description: "Minimum ground-floor retail square footage." },
         minSqft: { type: "number", description: "Minimum total building square footage." },
+        maxSqft: { type: "number", description: "Maximum total building square footage (for 'between X and Y sf' asks — never drop the upper bound)." },
+        minOfficeSqft: { type: "number", description: "Minimum OFFICE square footage (PLUTO officearea). Use for 'X sf of office space' — office area, not total building SF." },
+        maxOfficeSqft: { type: "number", description: "Maximum OFFICE square footage. Pair with minOfficeSqft for ranges like '30,000-80,000 sf of office'." },
         minUnits: { type: "number", description: "Minimum number of units." },
         builtAfter: { type: "number", description: "Only buildings built on/after this year." },
         builtBefore: { type: "number", description: "Only buildings built on/before this year." },
@@ -582,6 +587,7 @@ WHAT YOU DO
 
 AREA SWEEPS ARE THE PRODUCT (the #1 job — when the user names an AREA, coverage is sacred)
 - EXACTLY the area they said: honor the boundary, asset type, and filters as given. Never silently widen, narrow, or reinterpret — if you must assume something (radius, borough), state the assumption in one line up top.
+- GEOMETRY MATTERS: "between street A and street B" (NYC) is a BAND — use southOfStreet + northOfStreet, never an address+radius circle (a circle anchors the results in the wrong neighborhood). A size RANGE ("30,000–80,000 sf") needs BOTH bounds (min + max), and "sf of office space" means the OFFICE-area filters, not total building SF.
 - COMPLETE roster, not a sample: list EVERY property the search returned for that area in one table — address, owner of record, mailing address, years held, last sale (date + price), and every signal (absentee, tax lien, air rights, vacancy). State the TRUE total count; if the tool result was capped below the total, say so and point the user to the Sourcing tab's CSV for the full export. Never present a handful of picks as if that's all there is.
 - THEN enrich: after the full roster, work the best 5–10 targets deeper — property_intel + transaction_history (debt, recorded leases) on each, unmask their LLCs, and run the FINDING PHONE NUMBERS chain so the top targets come back with actual names and numbers, not just entities.
 - Deliver: (1) the assumption line if any, (2) the complete roster table with total count, (3) ranked top targets with the full workup — owner unmasked, contact path with numbers, history, motivation read — each with sources.

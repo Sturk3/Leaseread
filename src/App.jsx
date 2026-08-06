@@ -3251,11 +3251,53 @@ function psSave(store) { try { localStorage.setItem(PS_KEY, JSON.stringify(store
 // session and merged into the local cache (lookups stay synchronous); returns the server
 // response so the import panel can show shared/local status. Safe no-op when the shared
 // store isn't provisioned or the request fails — local contacts keep working.
+// ── Shared research memory ("the site learns") ───────────────────────────────
+// Every AI answer and paid trace pushes to the shared server store and pulls into
+// every browser — the team's research compounds instead of dying in one tab.
+// Safe no-op until the Upstash add-on is connected (everything stays local-only).
+let _kbPw = null, _kbHydrating = false, _kbSyncPromise = null;
+function kbEnsureSynced(pw) {
+  _kbPw = pw || _kbPw;
+  if (!_kbSyncPromise) {
+    _kbSyncPromise = (async () => {
+      try {
+        const d = await postJSON("/api/contacts", { password: _kbPw, action: "kb_get" });
+        if (!d || d.noStore) return;
+        // AI answers: newer-wins merge into the local per-property cache.
+        if (d.ai && typeof d.ai === "object") {
+          try {
+            const c = loadAiCache();
+            for (const [id, kinds] of Object.entries(d.ai)) {
+              c[id] = c[id] || {};
+              for (const [kind, e] of Object.entries(kinds || {})) {
+                if (e && (!c[id][kind] || (e.savedAt || 0) > (c[id][kind].savedAt || 0))) c[id][kind] = e;
+              }
+            }
+            localStorage.setItem(AI_CACHE_KEY, JSON.stringify(c));
+          } catch { /* quota */ }
+        }
+        // Paid traces: hydrate the local cache WITHOUT echoing back to the server.
+        if (Array.isArray(d.traces)) {
+          _kbHydrating = true;
+          for (const [k, v] of d.traces) if (k && v && !_skipCache.has(k)) _skipCache.set(k, v);
+          _kbHydrating = false;
+        }
+      } catch { _kbSyncPromise = null; /* retry at the next call site */ }
+    })();
+  }
+  return _kbSyncPromise;
+}
+function kbPush(body) {
+  if (!_kbPw || _kbHydrating) return;
+  postJSON("/api/contacts", { password: _kbPw, action: "kb_put", ...body }).catch(() => {});
+}
+
 let _psSyncPromise = null;
 function psEnsureSynced(pw) {
   if (!_psSyncPromise) {
     _psSyncPromise = (async () => {
       try {
+        kbEnsureSynced(pw); // pull the team's research memory alongside the contact file
         const d = await postJSON("/api/contacts", { password: pw, action: "get" });
         if (d && Array.isArray(d.rows) && d.rows.length) {
           const cur = psStore();
@@ -3883,8 +3925,9 @@ function MapView({ pw, config, onSourced, goSourcing }) {
     m.on("click", (e) => loadAtRef.current(e.latlng.lat, e.latlng.lng, { single: true }));
     mapRef.current = m;
     setTimeout(() => m.invalidateSize(), 60); // full-screen flex container settles after first paint
+    psEnsureSynced(pw); // pull the team's contact file + research memory on app open
     return () => { m.remove(); mapRef.current = null; };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onPick = (p) => {
     setLoc(p.label || "");
@@ -5911,6 +5954,7 @@ function saveAiAnswer(r, kind, text, mode) {
       for (const old of ids.slice(0, ids.length - AI_CACHE_MAX)) delete c[old];
     }
     localStorage.setItem(AI_CACHE_KEY, JSON.stringify(c));
+    kbPush({ ai: { id, kind, entry: c[id][kind] } }); // share with the team's research memory
   } catch { /* quota — drop silently */ }
 }
 function savedAgo(ts) {
@@ -6399,7 +6443,12 @@ const SKIP_STORE_KEY = "fr_skip_results_v1";
 const _skipCache = new Map((() => { try { const v = JSON.parse(localStorage.getItem(SKIP_STORE_KEY) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } })());
 {
   const _set = _skipCache.set.bind(_skipCache);
-  _skipCache.set = (k, v) => { const r = _set(k, v); try { localStorage.setItem(SKIP_STORE_KEY, JSON.stringify([..._skipCache.entries()].slice(-800))); } catch { /* quota */ } return r; };
+  _skipCache.set = (k, v) => {
+    const r = _set(k, v);
+    try { localStorage.setItem(SKIP_STORE_KEY, JSON.stringify([..._skipCache.entries()].slice(-800))); } catch { /* quota */ }
+    kbPush({ trace: [k, v] }); // share with the team's research memory (no-op while hydrating)
+    return r;
+  };
 }
 // Key by owner name; for nameless rows (web/address-only traces) fall back to the property address
 // so two different addresses don't collide on the same cache slot.

@@ -18,26 +18,30 @@
 const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 const KEY = "frontage:ps_contacts_v1";
+const KB_KEY = "frontage:kb_v1"; // shared research memory: AI answers + paid traces, team-wide
 const MAX_ROWS = 25000; // plenty of runway (500 PropertyShark exports/mo for years)
 
 const kvHeaders = { Authorization: `Bearer ${KV_TOKEN}` };
 
-async function kvGet() {
-  const r = await fetch(`${KV_URL}/get/${KEY}`, { headers: kvHeaders });
+async function kvGetK(key) {
+  const r = await fetch(`${KV_URL}/get/${key}`, { headers: kvHeaders });
   if (!r.ok) throw new Error(`KV get ${r.status}`);
   const j = await r.json();
   if (!j || j.result == null) return null;
   try { return JSON.parse(j.result); } catch { return null; }
 }
-async function kvSet(obj) {
+async function kvSetK(key, obj) {
   // Upstash REST: POST /set/<key> stores the raw request body as the value.
-  const r = await fetch(`${KV_URL}/set/${KEY}`, { method: "POST", headers: kvHeaders, body: JSON.stringify(obj) });
+  const r = await fetch(`${KV_URL}/set/${key}`, { method: "POST", headers: kvHeaders, body: JSON.stringify(obj) });
   if (!r.ok) throw new Error(`KV set ${r.status}`);
 }
-async function kvDel() {
-  const r = await fetch(`${KV_URL}/del/${KEY}`, { method: "POST", headers: kvHeaders });
+async function kvDelK(key) {
+  const r = await fetch(`${KV_URL}/del/${key}`, { method: "POST", headers: kvHeaders });
   if (!r.ok) throw new Error(`KV del ${r.status}`);
 }
+const kvGet = () => kvGetK(KEY);
+const kvSet = (obj) => kvSetK(KEY, obj);
+const kvDel = () => kvDelK(KEY);
 
 // Keep only the fields the app actually uses — imports can't smuggle junk in.
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
@@ -89,6 +93,48 @@ export default async function handler(req, res) {
     if (action === "clear") {
       await kvDel();
       return res.status(200).json({ shared: true, cleared: true });
+    }
+
+    // ── Shared research memory ("the site learns") ──────────────────────────
+    // Every AI answer (research brief / quick take / outreach) and every PAID
+    // skip-trace result is pushed here and pulled by every browser — the team's
+    // research compounds instead of living and dying in one person's tab.
+    if (action === "kb_get") {
+      const kb = (await kvGetK(KB_KEY)) || { ai: {}, traces: [] };
+      return res.status(200).json({ shared: true, ai: kb.ai || {}, traces: kb.traces || [] });
+    }
+
+    if (action === "kb_put") {
+      const kb = (await kvGetK(KB_KEY)) || { ai: {}, traces: [] };
+      const { ai, trace } = req.body || {};
+      if (ai && typeof ai.id === "string" && ai.id && typeof ai.kind === "string" && ai.entry && typeof ai.entry.text === "string") {
+        kb.ai[ai.id.slice(0, 200)] = kb.ai[ai.id.slice(0, 200)] || {};
+        const slot = kb.ai[ai.id.slice(0, 200)];
+        const cur = slot[ai.kind.slice(0, 30)];
+        if (!cur || (Number(ai.entry.savedAt) || 0) >= (cur.savedAt || 0)) {
+          slot[ai.kind.slice(0, 30)] = { text: String(ai.entry.text).slice(0, 20000), savedAt: Number(ai.entry.savedAt) || Date.now(), mode: String(ai.entry.mode || "").slice(0, 20) };
+        }
+      }
+      if (Array.isArray(trace) && trace.length === 2 && typeof trace[0] === "string" && trace[0] && trace[1] && typeof trace[1] === "object") {
+        kb.traces = (kb.traces || []).filter((t) => Array.isArray(t) && t[0] !== trace[0]);
+        kb.traces.push([trace[0].slice(0, 200), trace[1]]);
+        if (kb.traces.length > 500) kb.traces = kb.traces.slice(-500);
+      }
+      // Size guard: stay well under the KV value limit — drop oldest AI entries first.
+      let json = JSON.stringify(kb);
+      while (json.length > 700000) {
+        const ids = Object.keys(kb.ai);
+        if (ids.length) {
+          const newest = (e) => Math.max(0, ...Object.values(e).map((v) => v.savedAt || 0));
+          ids.sort((a, b) => newest(kb.ai[a]) - newest(kb.ai[b]));
+          delete kb.ai[ids[0]];
+        } else if (kb.traces.length) {
+          kb.traces = kb.traces.slice(-Math.floor(kb.traces.length / 2));
+        } else break;
+        json = JSON.stringify(kb);
+      }
+      await kvSetK(KB_KEY, kb);
+      return res.status(200).json({ shared: true, ok: true });
     }
 
     return res.status(400).json({ error: "Unknown action — use get | put | clear." });

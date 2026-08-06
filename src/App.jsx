@@ -3586,9 +3586,12 @@ function sheetContactsFor(r) {
   if (ps) return { who: ps.contact || "", phones: (ps.phones || []).map(fmt), emails: ps.emails || [], src: "PropertyShark import" };
   const sk = _skipCache.get(skipKey(r));
   if (sk && sk.matched) {
-    const best = (sk.persons || []).find((p) => p.matchesOwner) || (sk.persons || [])[0] || null;
-    const phones = (best ? best.phones : sk.phones || []).map(fmt);
-    return { who: best ? best.name : "", phones, emails: best ? best.emails : sk.emails || [], src: `skip trace (${sk.provider || ""})` };
+    // ONLY a name-matched person's numbers make the sheet. A trace that returned just
+    // unrelated occupants exports EMPTY contact columns with an honest note — a call
+    // sheet full of random tenants' cells is worse than a blank column.
+    const best = (sk.persons || []).find((p) => p.matchesOwner) || null;
+    if (best) return { who: best.name, phones: (best.phones || []).map(fmt), emails: best.emails || [], src: `skip trace (${sk.provider || ""})` };
+    return { who: "", phones: [], emails: [], src: "trace found only unrelated people at the address — unmask the principal and re-trace" };
   }
   return { who: "", phones: [], emails: [], src: "" };
 }
@@ -6703,6 +6706,7 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
   const [err, setErr] = useState("");
   const [spend, setSpend] = useState(readSkipSpend());
   const [altOpen, setAltOpen] = useState(false); // "trace a different person" (unmasked LLC principal)
+  const [showUnmatched, setShowUnmatched] = useState(false); // reveal the non-owner people a trace dragged in
   const looksCompany = r.entity_type === "company" || ENTITY_RE.test(r.name || "");
 
   const runSkip = async () => {
@@ -6845,13 +6849,20 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
                   </div>
                 );
               })()}
-              {skip.persons && skip.persons.length ? (
-                skip.persons.map((p, i) => (
-                  <div key={i} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: i < skip.persons.length - 1 ? `1px solid ${C.line}` : "none" }}>
+              {skip.persons && skip.persons.length ? (() => {
+                // THE "RANDOM PEOPLE" FIX: a trace returns everyone tied to an address —
+                // prior residents, tenants, staff. Show ONLY name-matched people by default;
+                // the unrelated ones collapse behind an explicit "probably not the owner"
+                // expander instead of masquerading as results. If NOBODY matches, show all
+                // (the weak-match warning banner above already frames them).
+                const matched = skip.persons.filter((p) => p.isEntity || (p.matchScore || 0) >= 55);
+                const unmatched = skip.persons.filter((p) => !p.isEntity && (p.matchScore || 0) < 55);
+                const shown = matched.length ? (showUnmatched ? skip.persons : matched) : skip.persons;
+                const renderPerson = (p, i, arr) => (
+                  <div key={p.name || i} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: i < arr.length - 1 ? `1px solid ${C.line}` : "none" }}>
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: p.isEntity ? C.muted : C.ivory, marginBottom: 3 }}>
                       {p.name || "Unnamed contact"}
                       {!p.isEntity && (() => {
-                        // Graded name-match badge, so a random occupant can't masquerade as the owner.
                         const lab = p.matchLabel, sc = p.matchScore;
                         const cfg = lab === "strong" ? [C.green, "✓ STRONG MATCH"] : lab === "likely" ? [C.green, "✓ LIKELY"] : lab === "weak" ? [C.amber, "~ WEAK MATCH"] : [C.muted, "✗ NOT MATCHED"];
                         const why = (p.matchReasons && p.matchReasons.length ? `Matched on ${p.matchReasons.join(" + ")}. ` : "No name overlap with the owner. ") + `Score ${sc}/100 vs the owner of record.`;
@@ -6862,8 +6873,18 @@ function ContactReveal({ r, pw, autoRun, noAlt }) {
                     <ContactList phones={p.phones} emails={p.emails} />
                     <RelativeList relatives={p.relatives} loc={{ city: r.city, state: r.state }} />
                   </div>
-                ))
-              ) : (
+                );
+                return (
+                  <>
+                    {shown.map(renderPerson)}
+                    {matched.length > 0 && unmatched.length > 0 && !showUnmatched && (
+                      <button onClick={() => setShowUnmatched(true)} className="mono" style={{ cursor: "pointer", fontSize: 10.5, border: `1px dashed ${C.line}`, background: "transparent", color: C.muted, borderRadius: 6, padding: "4px 10px", marginTop: 2 }}>
+                        ▸ {unmatched.length} other {unmatched.length === 1 ? "person" : "people"} found at this address — names don't match the owner (probably tenants/prior residents)
+                      </button>
+                    )}
+                  </>
+                );
+              })() : (
                 <ContactList phones={skip.phones} emails={skip.emails} />
               )}
               {skip.persons && skip.persons.length > 0 && skip.persons.every((p) => p.isEntity) && (

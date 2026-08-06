@@ -345,7 +345,12 @@ export default async function handler(req, res) {
     // server-side, so no browser can spend a credit regardless of what it clicks.
     // Debug probes still answer so the config stays inspectable. Unset (or set to
     // 0) + redeploy to resume. Optional SKIPTRACE_PAUSED_NOTE customizes the text.
-    if (String(process.env.SKIPTRACE_PAUSED || "") === "1" && !(req.body && req.body.debug)) {
+    // PAUSED IN CODE (2026-08-06, owner request — provider credits running low). This is
+    // the hard default: tracing stays off until this constant flips back to false (or
+    // SKIPTRACE_PAUSED=0 is set in env, the escape hatch that doesn't need a code change).
+    const PAUSED_BY_DEFAULT = true;
+    const pausedNow = String(process.env.SKIPTRACE_PAUSED || "") === "0" ? false : (PAUSED_BY_DEFAULT || String(process.env.SKIPTRACE_PAUSED || "") === "1");
+    if (pausedNow && !(req.body && req.body.debug)) {
       return res.status(200).json({
         paused: true,
         error: process.env.SKIPTRACE_PAUSED_NOTE || "Skip tracing is PAUSED by the account owner (conserving provider credits). No lookup was run and nothing was charged.",

@@ -3496,6 +3496,85 @@ function mapSheetCSV(rows) {
   return [cols.map((c) => c[0]).join(","), ...rows.map((r) => cols.map((c) => esc(c[1](r))).join(","))].join("\n");
 }
 
+// Pre-export picker: choose WHICH pinned properties make the sheet, optionally run a
+// paid skip trace on just the checked ones (cost confirm first, owner-deduped via the
+// session cache, misses free), then export the CSV of exactly what's checked.
+function SheetExportModal({ rows, pw, onClose }) {
+  const [sel, setSelSet] = useState(() => new Set(rows.map((_, i) => i)));
+  const [status, setStatus] = useState({});
+  const [tracing, setTracing] = useState(false);
+  const contactOf = (r) => {
+    if (psLookup({ name: r.name, address: r.address, contact_address: r.contact_address })) return "PropertyShark ✓";
+    const sk = _skipCache.get(skipKey(r));
+    if (sk) return sk.matched ? "traced ✓" : "traced · no match";
+    return "";
+  };
+  const toggle = (i) => setSelSet((s) => { const n = new Set(s); if (n.has(i)) n.delete(i); else n.add(i); return n; });
+  const selRows = rows.filter((_, i) => sel.has(i));
+  const traceTargets = rows.map((r, i) => [r, i]).filter(([r, i]) => sel.has(i) && !contactOf(r));
+  const traceSelected = async () => {
+    if (!traceTargets.length || tracing) return;
+    if (typeof window !== "undefined" && !window.confirm(`Run a PAID skip trace on ${traceTargets.length} checked owner${traceTargets.length === 1 ? "" : "s"} without a contact yet? ~$${(traceTargets.length * 0.1).toFixed(2)} max — misses are free, already-traced owners are never re-billed.`)) return;
+    setTracing(true);
+    for (const [r, i] of traceTargets) {
+      setStatus((s) => ({ ...s, [i]: "tracing…" }));
+      try {
+        const d = await postJSON("/api/skiptrace", { password: pw, name: r.name, entity_type: r.entity_type, contact_address: r.contact_address, city: r.city, state: r.state, zip: r.zip, address: r.address, borough: r.borough });
+        if (d.noKey) { setStatus((s) => ({ ...s, [i]: "trace not configured" })); continue; }
+        _skipCache.set(skipKey(r), { persons: d.persons || [], phones: d.phones || [], emails: d.emails || [], provider: d.provider, business: d.business, matched: d.matched, tracedAddress: d.tracedAddress, entityLowConfidence: d.entityLowConfidence, ownerMatch: d.ownerMatch || null, weakMatch: d.weakMatch, ownerName: d.ownerName });
+        if (d.matched) bumpSkipSpend(d.cost || 0);
+        setStatus((s) => ({ ...s, [i]: d.matched ? "✓ traced" : d.business ? "no match — LLC, unmask first" : "no match (free)" }));
+      } catch (e) { setStatus((s) => ({ ...s, [i]: "error" })); }
+    }
+    setTracing(false);
+  };
+  const chip = (txt, color) => <span className="mono" style={{ fontSize: 9, color, border: `1px solid ${color}`, borderRadius: 4, padding: "0 5px", marginLeft: 5 }}>{txt}</span>;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 4000, background: "rgba(10,9,20,.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 780, maxWidth: "96%", maxHeight: "84vh", display: "flex", flexDirection: "column", background: C.ink, border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 20px", boxShadow: "0 20px 60px rgba(0,0,0,.6)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div className="mono" style={{ fontSize: 11, color: C.gold, letterSpacing: "0.14em" }}>↓ EXPORT SHEET — PICK THE LIST</div>
+          <button onClick={onClose} className="mono" style={{ cursor: "pointer", border: "none", background: "transparent", color: C.muted, fontSize: 15 }}>✕</button>
+        </div>
+        <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10 }}>
+          Check the properties that should make the sheet. “Trace checked” runs the paid skip trace only on checked owners with no contact yet; results land in the export's phone/email columns.
+          <button onClick={() => setSelSet(new Set(rows.map((_, i) => i)))} className="mono" style={{ marginLeft: 10, cursor: "pointer", fontSize: 10, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory, borderRadius: 5, padding: "2px 8px" }}>all</button>
+          <button onClick={() => setSelSet(new Set())} className="mono" style={{ marginLeft: 5, cursor: "pointer", fontSize: 10, border: `1px solid ${C.line}`, background: "transparent", color: C.ivory, borderRadius: 5, padding: "2px 8px" }}>none</button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", border: `1px solid ${C.line}`, borderRadius: 10 }}>
+          {rows.map((r, i) => (
+            <label key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderBottom: `1px solid ${C.line}`, cursor: "pointer", background: sel.has(i) ? "transparent" : "#00000033", opacity: sel.has(i) ? 1 : 0.55 }}>
+              <input type="checkbox" checked={sel.has(i)} onChange={() => toggle(i)} style={{ accentColor: "#6a5cf6" }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, color: C.ivory, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {r.address}
+                  {r.storefront_vacant && chip("VACANT", "#e0524d")}
+                  {r.absentee && chip("ABSENTEE", "#e0a050")}
+                  {r.tax_lien && chip("LIEN", "#e0524d")}
+                  {Number(r.years_owned) >= 15 && chip(`${r.years_owned}Y`, "#7fd6a0")}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name || "—"}{r.contact_address ? ` · ${r.contact_address}` : ""}</div>
+              </div>
+              <span className="mono" style={{ fontSize: 10, color: (status[i] || contactOf(r)).startsWith("✓") || (status[i] || contactOf(r)).includes("✓") ? "#7fd6a0" : C.muted, whiteSpace: "nowrap" }}>{status[i] || contactOf(r)}</span>
+            </label>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 10, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={traceSelected} disabled={tracing || !traceTargets.length} className="mono lift"
+            style={{ cursor: tracing || !traceTargets.length ? "default" : "pointer", fontSize: 11.5, padding: "9px 15px", borderRadius: 8, border: `1px solid ${C.gold}`, background: "transparent", color: C.gold, opacity: tracing || !traceTargets.length ? 0.5 : 1 }}>
+            {tracing ? "▸ tracing…" : `🔎 TRACE CHECKED (${traceTargets.length} × ~$0.10)`}
+          </button>
+          <button onClick={() => { if (selRows.length) downloadBlob(mapSheetCSV(selRows), `sourcing_sheet_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv"); }} disabled={!selRows.length} className="mono lift"
+            style={{ cursor: selRows.length ? "pointer" : "default", fontSize: 11.5, padding: "9px 15px", borderRadius: 8, border: `1px solid ${C.green}`, background: "transparent", color: C.green, opacity: selRows.length ? 1 : 0.5 }}>
+            ↓ EXPORT CSV ({selRows.length})
+          </button>
+          <span style={{ fontSize: 10.5, color: C.muted }}>Opens straight in Excel. Contacts come from PropertyShark imports + traces — owner + mailing are always included.</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Top-hit NYC geocode for typed commands (the autocomplete path stays for plain addresses).
 async function geocodeNycTop(text) {
   try {
@@ -3533,6 +3612,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
   const [understood, setUnderstood] = useState("");
   const [sel, setSel] = useState(null);
   const [rows, setRows] = useState([]); // current result set — feeds the ↓ SHEET export
+  const [sheetOpen, setSheetOpen] = useState(false); // the pick-your-list export modal
   const rowsRef = useRef(rows); rowsRef.current = rows;
   const tempLayerRef = useRef(null); // highlight pin for look-what-I-clicked (never wipes results)
 
@@ -3695,8 +3775,8 @@ function MapView({ pw, config, onSourced, goSourcing }) {
           <div style={{ display: "flex", gap: 6 }}>
             {count != null && !busy && <span className="mono" style={{ fontSize: 11, color: C.muted, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>{count} propert{count === 1 ? "y" : "ies"} pinned</span>}
             {rows.length > 0 && (
-              <button onClick={() => downloadBlob(mapSheetCSV(rows), `sourcing_sheet_${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")} className="mono lift"
-                title="Export everything pinned as a CSV sourcing sheet — owner, mailing address, tenure, last sale, and every signal."
+              <button onClick={() => setSheetOpen(true)} className="mono lift"
+                title="Build the export: pick which pinned properties make the list, optionally skip-trace the checked ones, then download the CSV (owner + mailing + contacts)."
                 style={{ cursor: "pointer", fontSize: 11, padding: "5px 12px", borderRadius: 7, border: `1px solid ${C.green}`, background: C.ink, color: C.green }}>
                 ↓ SHEET ({rows.length})
               </button>
@@ -3727,6 +3807,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
             </>
           )}
         </div>
+        {sheetOpen && <SheetExportModal rows={rows} pw={pw} onClose={() => setSheetOpen(false)} />}
       </div>
     </div>
   );

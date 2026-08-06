@@ -6391,7 +6391,16 @@ function OutreachDraft({ r, score, pw }) {
 
 // Session cache so a given owner's contact is paid for at most once (owner-dedupe).
 // Key = owner name + mailing zip/state; survives re-opening rows for the session.
-const _skipCache = new Map();
+// PAID RESULTS ARE PERMANENT (2026-08-06): every trace you pay for now persists in this
+// browser (fr_skip_results_v1) and keeps feeding dossiers, Scout reveals, and sheet
+// exports forever. Previously this cache died on refresh — a repeat lookup could
+// silently re-bill an owner you'd already paid for.
+const SKIP_STORE_KEY = "fr_skip_results_v1";
+const _skipCache = new Map((() => { try { const v = JSON.parse(localStorage.getItem(SKIP_STORE_KEY) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } })());
+{
+  const _set = _skipCache.set.bind(_skipCache);
+  _skipCache.set = (k, v) => { const r = _set(k, v); try { localStorage.setItem(SKIP_STORE_KEY, JSON.stringify([..._skipCache.entries()].slice(-800))); } catch { /* quota */ } return r; };
+}
 // Key by owner name; for nameless rows (web/address-only traces) fall back to the property address
 // so two different addresses don't collide on the same cache slot.
 const skipKey = (r) => `${(r.name || r.address || "").toUpperCase().trim()}|${(r.zip || r.state || "").toString().trim()}`;

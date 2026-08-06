@@ -1168,6 +1168,11 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
   // invisibly after unmount. Checked between steps to stop the run (and the spend).
   const aliveRef = useRef(true);
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+  // ■ STOP — user-pressed kill switch. Checked at every loop boundary (before each agent
+  // turn and before each tool call), so pressing it halts the run within one step: no
+  // further agent turns, no further tool spend. The one request already in flight finishes
+  // server-side (bounded by the per-turn token cap) — everything after it is cancelled.
+  const stopRef = useRef(false);
   // Dedupe identical tool calls within a session: same tool + same args -> reuse the
   // shaped result instead of re-hitting the endpoint and burning an agent turn. Keyed by
   // name+args (web tools also key on mode, since deep vs quick yields a different answer).
@@ -1275,12 +1280,15 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
 
   // One request = run the agent loop to completion (or the safety step cap). Deep Research
   // mode lifts the step budget and tells the backend to plan → investigate → write a report.
+  const halted = (messages) => { setConvo([...messages]); setLog((l) => [...l, { kind: "error", text: "■ Stopped — no further AI calls or spend. Ask me to continue when ready." }]); };
   const runLoop = async (messages, deep = false) => {
     const maxSteps = deep ? DEEP_RESEARCH_STEPS : MAX_AGENT_STEPS;
     for (let turn = 0; turn < maxSteps; turn++) {
       if (!aliveRef.current) return; // tab switched away — stop the run instead of spending invisibly
+      if (stopRef.current) return halted(messages);
       const data = await postJSON("/api/agent", { password: pw, messages, deepResearch: deep });
       if (!aliveRef.current) return;
+      if (stopRef.current) return halted(messages);
       if (data && data.usage) setTokens(recordUsage(data.usage, data.model));
       const content = data.content || [];
       const toolUses = [];
@@ -1294,6 +1302,7 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
       const results = [];
       for (const tu of toolUses) {
         if (!aliveRef.current) return; // don't start more (possibly paid) tool calls after unmount
+        if (stopRef.current) return halted(messages);
         const id = pushTool(tu.name);
         try {
           const out = await runTool(tu.name, tu.input || {});
@@ -1338,6 +1347,7 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
     setConvo(messages);
     setLog((l) => [...l, { kind: "user", text: doc ? `${text}  📎 ${doc.name}` : text }]);
     setBusy(true);
+    stopRef.current = false; // fresh run — clear any prior stop
     try { await runLoop(messages, deepResearch); }
     catch (e) { setLog((l) => [...l, { kind: "error", text: e.message }]); }
     finally { setBusy(false); setAttachedDoc(null); }
@@ -1402,7 +1412,15 @@ function AgentChat({ pw, config, onSourced, goSourcing }) {
             <div key={i} style={{ margin: "10px 0", fontSize: 12.5, color: C.red, background: `${C.red}10`, border: `1px solid ${C.red}40`, borderRadius: 8, padding: "9px 12px" }}>{e.text}</div>
           );
         })}
-        {busy && <div className="mono" style={{ fontSize: 11, color: C.gold, marginTop: 10 }}>▸ {deepResearch ? "Scout is researching deeply — planning, investigating, compiling…" : "Scout is working…"}</div>}
+        {busy && (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10 }}>
+            <div className="mono" style={{ fontSize: 11, color: C.gold }}>▸ {deepResearch ? "Scout is researching deeply — planning, investigating, compiling…" : "Scout is working…"}</div>
+            <button onClick={() => { stopRef.current = true; }} className="mono lift" title="Halts the run at the next step — no further AI calls or spend."
+              style={{ cursor: "pointer", fontSize: 11, padding: "5px 14px", borderRadius: 7, border: `1px solid ${C.red}`, background: `${C.red}15`, color: C.red, letterSpacing: "0.08em" }}>
+              ■ STOP
+            </button>
+          </div>
+        )}
       </div>
 
       {attachedDoc && (

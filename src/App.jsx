@@ -377,11 +377,11 @@ export default function App() {
               ⚙ GRADING CRITERIA
             </button>
           )}
-          <button onClick={() => setShowKeys((s) => !s)} className="mono lift"
-            title="Bring your own API key — AI usage bills to YOUR account, stored only in this browser"
-            style={{ cursor: "pointer", fontSize: 11, padding: "7px 13px", borderRadius: 7, border: `1px solid ${showKeys ? C.gold : C.line}`, background: showKeys ? C.goldSoft : C.panel, color: showKeys ? C.gold : hasOwnKey ? "#7fd6a0" : C.ivory, letterSpacing: "0.5px" }}>
-            🔑 API KEY{hasOwnKey ? " ✓" : ""}
-          </button>
+          {/* 🔑 BYOK button DEACTIVATED (2026-08-06, user request) — the shared server key
+              covers everyone; the per-user key panel confused more than it helped. The
+              ApiKeysPanel component + userKeys() plumbing are intact: to restore, re-add
+              the button here (toggling setShowKeys). A user who saved a personal key
+              earlier still has it honored (userKeys() is still read by the callers). */}
         </header>
         <div className="main-scroll" style={{ flex: 1, overflowY: "auto", padding: view === "map" ? "0 18px 14px" : "0 40px 60px" }}>
           <div style={{ maxWidth: view === "map" ? "none" : 1040, margin: "0 auto" }}>

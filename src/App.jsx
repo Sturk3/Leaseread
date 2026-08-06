@@ -3854,13 +3854,32 @@ function SheetExportModal({ rows, pw, onClose, meta }) {
 // Markets whose engines return per-parcel coordinates, with the geographic box that
 // routes a map click to the right engine. CT/MA/Hamptons/SF stay list-only (their
 // public records carry no per-row coords) — clicks there get an honest message.
+// `byAddress: true` = the market's records carry no parcel coordinates, so a map click is
+// reverse-geocoded to a street address and that address is searched instead of a
+// point-in-polygon lookup (Greenwich/CT, the Hamptons, Massachusetts, San Francisco).
 const MAP_MARKETS = {
   nyc: { uni: "nyc", label: "NYC", bounds: [40.48, -74.28, 40.95, -73.65], center: [40.7243, -73.9987], zoom: 15, chip: "NYC" },
+  hamptons: { uni: "ny", label: "The Hamptons", bounds: [40.75, -72.75, 41.15, -71.85], center: [40.9634, -72.1848], zoom: 14, chip: "HAMP", byAddress: true, market: "hamptons" },
+  ct: { uni: "ct", label: "Greenwich / CT", bounds: [40.95, -73.75, 42.05, -71.75], center: [41.0262, -73.6282], zoom: 15, chip: "GRWCH", byAddress: true, market: "ct" },
+  ma: { uni: "ma", label: "Massachusetts", bounds: [41.2, -73.55, 42.92, -69.9], center: [42.3555, -71.0565], zoom: 14, chip: "MA", byAddress: true, market: "ma" },
   charleston: { uni: "sc", label: "Charleston, SC", bounds: [32.6, -80.3, 33.1, -79.7], center: [32.7876, -79.9403], zoom: 15, chip: "CHS" },
   nashville: { uni: "tn", label: "Nashville, TN", bounds: [35.95, -87.1, 36.35, -86.4], center: [36.1627, -86.7816], zoom: 14, chip: "BNA" },
   savannah: { uni: "savannah", label: "Savannah, GA", bounds: [31.9, -81.35, 32.2, -80.84], center: [32.0809, -81.0912], zoom: 15, chip: "SAV" },
   teton: { uni: "teton", label: "Jackson Hole, WY", bounds: [43.2, -111.2, 44.2, -110.1], center: [43.4799, -110.7624], zoom: 15, chip: "JXN" },
+  sf: { uni: "sf", label: "San Francisco", bounds: [37.7, -122.54, 37.84, -122.34], center: [37.7887, -122.4098], zoom: 15, chip: "SF", byAddress: true, market: "sf" },
 };
+// Click → street address, for the markets that can only be searched by address (free, no key).
+async function reverseGeocode(lat, lon) {
+  try {
+    const r = await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}&limit=1`);
+    if (!r.ok) return null;
+    const f = ((await r.json()).features || [])[0];
+    if (!f || !f.properties) return null;
+    const p = f.properties;
+    const street = [p.housenumber, p.street || p.name].filter(Boolean).join(" ").trim();
+    return street ? { street, town: p.city || p.district || p.county || "", state: p.state || "" } : null;
+  } catch { return null; }
+}
 // Draw-your-hunting-ground geometry: ray-cast point-in-polygon + haversine miles.
 function pointInPoly(pt, poly) { // pt = [lat, lon]; poly = [[lat, lon], ...]
   const x = pt[1], y = pt[0];
@@ -4044,8 +4063,29 @@ function MapView({ pw, config, onSourced, goSourcing }) {
     // Route the click to whichever MARKET the point falls in (NYC / Charleston /
     // Nashville / Savannah / Jackson Hole). Outside every coord-capable market → honest no.
     const mk = marketForPoint(lat, lon);
-    if (!mk) { setErr("Click-to-lookup covers NYC, Charleston, Nashville, Savannah & Jackson Hole. For other areas, ask Scout — its results still pin when the records have coordinates."); return; }
+    if (!mk) { setErr("That point is outside your configured markets (NYC · Hamptons · Greenwich/CT · Massachusetts · Charleston · Nashville · Savannah · Jackson Hole · San Francisco). Ask Scout for anywhere else."); return; }
     setBusy(true); setErr("");
+    // Address-only markets (CT / Hamptons / MA / SF): no parcel coordinates in the public
+    // records, so resolve the click to a street address and search that instead.
+    if (MAP_MARKETS[mk].byAddress) {
+      try {
+        const g = await reverseGeocode(lat, lon);
+        if (!g) { setErr(`Couldn't resolve that point to an address in ${MAP_MARKETS[mk].label}. Zoom in and click directly on a building, or ask Scout by address.`); return; }
+        setUnderstood(`Looking up ${g.street}${g.town ? `, ${g.town}` : ""} — ${MAP_MARKETS[mk].label}`);
+        const body = { password: pw, market: MAP_MARKETS[mk].market, address: g.street, ...(mk === "ct" || mk === "ma" || mk === "hamptons" ? { town: g.town || undefined } : {}) };
+        const d = await postJSON("/api/search", body);
+        if (d.error) { setErr(d.error); return; }
+        const found = (d.properties || d.leads || []).map((p) => normalizeMarketRow(p, mk));
+        if (!found.length) { setErr(`No parcel matched ${g.street}${g.town ? `, ${g.town}` : ""} in the ${MAP_MARKETS[mk].label} records.`); return; }
+        // Records have no coords — place the row at the clicked point so it pins + opens.
+        const withPt = found.map((p, i) => ({ ...p, lat: Number(p.lat) || lat, lon: Number(p.lon) || lon, pinned: i === 0 }));
+        setRows(withPt); setCount(withPt.length); renderPins(withPt);
+        setSel(withPt[0]);
+        setUnderstood(`${withPt[0].address || g.street} — ${MAP_MARKETS[mk].label} (located by address; pin is approximate).`);
+      } catch (e) { setErr(e.message || "Lookup failed."); }
+      finally { setBusy(false); }
+      return;
+    }
     const o = opts.overrides || {};
     const vac = o.vacantOnly != null ? o.vacantOnly : vacantRef.current;
     let rad = o.radius != null ? o.radius : (opts.single ? 0 : radiusRef.current);

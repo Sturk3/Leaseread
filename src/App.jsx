@@ -3796,18 +3796,18 @@ async function geocodeNycTop(text) {
 // A finished result set can be parked under a name and reopened instantly — no
 // re-running the engines, no re-spending on AI. Stored in localStorage with the rows
 // themselves, so a saved list keeps working offline of the query that made it.
-const SAVED_KEY = "fr_saved_searches_v1";
-const SAVED_MAX = 25;
-function loadSaved() { try { const v = JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } }
+const SRCH_KEY = "fr_saved_searches_v1";
+const SRCH_MAX = 25;
+function loadSavedSearches() { try { const v = JSON.parse(localStorage.getItem(SRCH_KEY) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } }
 function saveSearch(label, rows, meta) {
-  const list = loadSaved().filter((s) => s.label !== label);
+  const list = loadSavedSearches().filter((s) => s.label !== label);
   list.unshift({ label, savedAt: Date.now(), meta: meta || "", rows: (rows || []).slice(0, 400) });
-  try { localStorage.setItem(SAVED_KEY, JSON.stringify(list.slice(0, SAVED_MAX))); } catch { /* quota */ }
-  return list.slice(0, SAVED_MAX);
+  try { localStorage.setItem(SRCH_KEY, JSON.stringify(list.slice(0, SRCH_MAX))); } catch { /* quota */ }
+  return list.slice(0, SRCH_MAX);
 }
 function deleteSaved(label) {
-  const list = loadSaved().filter((s) => s.label !== label);
-  try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); } catch { /* quota */ }
+  const list = loadSavedSearches().filter((s) => s.label !== label);
+  try { localStorage.setItem(SRCH_KEY, JSON.stringify(list)); } catch { /* quota */ }
   return list;
 }
 
@@ -3838,7 +3838,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
   const [sel, setSel] = useState(null);
   const [rows, setRows] = useState([]); // current result set — feeds the ↓ SHEET export
   const [sheetOpen, setSheetOpen] = useState(false); // the pick-your-list export modal
-  const [saved, setSaved] = useState(() => loadSaved());
+  const [saved, setSaved] = useState(() => loadSavedSearches());
   const [savedOpen, setSavedOpen] = useState(false);
   const rowsRef = useRef(rows); rowsRef.current = rows;
   const tempLayerRef = useRef(null); // highlight pin for look-what-I-clicked (never wipes results)

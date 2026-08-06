@@ -3792,6 +3792,25 @@ async function geocodeNycTop(text) {
   } catch { return null; }
 }
 
+// ── Saved searches (this device) ─────────────────────────────────────────────
+// A finished result set can be parked under a name and reopened instantly — no
+// re-running the engines, no re-spending on AI. Stored in localStorage with the rows
+// themselves, so a saved list keeps working offline of the query that made it.
+const SAVED_KEY = "fr_saved_searches_v1";
+const SAVED_MAX = 25;
+function loadSaved() { try { const v = JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } }
+function saveSearch(label, rows, meta) {
+  const list = loadSaved().filter((s) => s.label !== label);
+  list.unshift({ label, savedAt: Date.now(), meta: meta || "", rows: (rows || []).slice(0, 400) });
+  try { localStorage.setItem(SAVED_KEY, JSON.stringify(list.slice(0, SAVED_MAX))); } catch { /* quota */ }
+  return list.slice(0, SAVED_MAX);
+}
+function deleteSaved(label) {
+  const list = loadSaved().filter((s) => s.label !== label);
+  try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); } catch { /* quota */ }
+  return list;
+}
+
 // ── MAP VIEW — click a building, get the dossier ─────────────────────────────
 // The CoStar-style front door: a Leaflet map (OSM/CARTO tiles, free, no key) over
 // NYC. Click anywhere → the nearest lot's full dossier opens in the side panel
@@ -3819,6 +3838,8 @@ function MapView({ pw, config, onSourced, goSourcing }) {
   const [sel, setSel] = useState(null);
   const [rows, setRows] = useState([]); // current result set — feeds the ↓ SHEET export
   const [sheetOpen, setSheetOpen] = useState(false); // the pick-your-list export modal
+  const [saved, setSaved] = useState(() => loadSaved());
+  const [savedOpen, setSavedOpen] = useState(false);
   const rowsRef = useRef(rows); rowsRef.current = rows;
   const tempLayerRef = useRef(null); // highlight pin for look-what-I-clicked (never wipes results)
   // ▧ DRAW AREA — Terrakotta-style hunting ground: click vertices, FINISH, everything
@@ -4018,6 +4039,30 @@ function MapView({ pw, config, onSourced, goSourcing }) {
     return () => { m.remove(); mapRef.current = null; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Wipe the map back to a clean slate (pins, dossier, drawn outline, status).
+  const clearAll = () => {
+    if (layerRef.current) layerRef.current.clearLayers();
+    if (tempLayerRef.current) tempLayerRef.current.clearLayers();
+    if (drawLayerRef.current) drawLayerRef.current.clearLayers();
+    setRows([]); setCount(null); setSel(null); setUnderstood(""); setErr("");
+    drawPtsRef.current = []; setDrawing(false); setDrawN(0);
+  };
+  const doSave = () => {
+    if (!rows.length) return;
+    const suggested = understood.replace(/^[✦▧]\s*/, "").slice(0, 60) || `${rows.length} properties`;
+    const label = typeof window !== "undefined" ? window.prompt("Name this search (saved on this device):", suggested) : null;
+    if (!label) return;
+    setSaved(saveSearch(label.trim(), rows, understood));
+    setUnderstood(`★ Saved "${label.trim()}" — reopen it any time from ★ SAVED.`);
+  };
+  const openSaved = (s) => {
+    const leads = (s.rows || []).filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)));
+    setRows(s.rows || []); setCount((s.rows || []).length); setSel(null); setErr("");
+    setUnderstood(`★ ${s.label} — saved ${savedAgo(s.savedAt)} · ${(s.rows || []).length} properties (no new lookups run).`);
+    renderPins(leads, { fit: true });
+    setSavedOpen(false);
+  };
+
   const startDraw = () => {
     drawPtsRef.current = [];
     if (drawLayerRef.current) drawLayerRef.current.clearLayers();
@@ -4082,6 +4127,20 @@ function MapView({ pw, config, onSourced, goSourcing }) {
           {busy && <span className="mono" style={{ fontSize: 11, color: C.gold, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>▸ working…</span>}
           {understood && <span className="mono" style={{ fontSize: 11, color: C.green, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>{understood}</span>}
           {err && <span style={{ fontSize: 11.5, color: C.red, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>{err}</span>}
+          {savedOpen && (
+            <div style={{ background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: "8px 10px", minWidth: 300, maxHeight: 260, overflowY: "auto", boxShadow: "0 10px 30px rgba(0,0,0,.5)" }}>
+              <div className="mono" style={{ fontSize: 9.5, color: C.gold, letterSpacing: "0.14em", marginBottom: 6 }}>★ SAVED SEARCHES — THIS DEVICE</div>
+              {saved.map((s) => (
+                <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderTop: `1px solid ${C.line}` }}>
+                  <button onClick={() => openSaved(s)} className="lift" style={{ flex: 1, textAlign: "left", cursor: "pointer", background: "transparent", border: "none", color: C.ivory, fontSize: 12 }}>
+                    {s.label}
+                    <span className="mono" style={{ color: C.muted, fontSize: 10, marginLeft: 6 }}>{(s.rows || []).length} · {savedAgo(s.savedAt)}</span>
+                  </button>
+                  <button onClick={() => setSaved(deleteSaved(s.label))} title="Delete this saved search" className="mono" style={{ cursor: "pointer", background: "transparent", border: "none", color: C.muted, fontSize: 12 }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 6 }}>
             {count != null && !busy && <span className="mono" style={{ fontSize: 11, color: C.muted, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 10px" }}>{count} propert{count === 1 ? "y" : "ies"} pinned</span>}
             {rows.length > 0 && (
@@ -4089,6 +4148,24 @@ function MapView({ pw, config, onSourced, goSourcing }) {
                 title="Build the export: pick which pinned properties make the list, optionally skip-trace the checked ones, then download the CSV (owner + mailing + contacts)."
                 style={{ cursor: "pointer", fontSize: 11, padding: "5px 12px", borderRadius: 7, border: `1px solid ${C.green}`, background: C.ink, color: C.green }}>
                 ↓ SHEET ({rows.length})
+              </button>
+            )}
+            {rows.length > 0 && (
+              <button onClick={doSave} className="mono lift" title="Save this result set on this device — reopen it later without re-running the search."
+                style={{ cursor: "pointer", fontSize: 11, padding: "5px 12px", borderRadius: 7, border: `1px solid ${C.gold}`, background: C.ink, color: C.gold }}>
+                ★ SAVE
+              </button>
+            )}
+            {saved.length > 0 && (
+              <button onClick={() => setSavedOpen((v) => !v)} className="mono lift" title="Your saved searches on this device"
+                style={{ cursor: "pointer", fontSize: 11, padding: "5px 12px", borderRadius: 7, border: `1px solid ${savedOpen ? C.gold : C.line}`, background: C.ink, color: savedOpen ? C.gold : C.muted }}>
+                ★ SAVED ({saved.length})
+              </button>
+            )}
+            {(rows.length > 0 || count != null) && (
+              <button onClick={clearAll} className="mono lift" title="Clear the map — pins, dossier, and any drawn area"
+                style={{ cursor: "pointer", fontSize: 11, padding: "5px 10px", borderRadius: 7, border: `1px solid ${C.line}`, background: C.ink, color: C.muted }}>
+                ✕ CLEAR
               </button>
             )}
           </div>

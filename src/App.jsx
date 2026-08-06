@@ -3648,17 +3648,20 @@ const TOOL_MARKET = {
   search_properties: "nyc", retail_availability: "nyc",
   search_charleston_properties: "charleston", search_nashville_properties: "nashville",
   search_savannah_properties: "savannah", search_teton_properties: "teton",
+  search_ct_properties: "ct", search_ma_properties: "ma", search_hamptons_properties: "hamptons",
 };
 // Normalize an assessor-market row to the shape the pins, dossier (AssessorMarketDetail),
 // skip trace, and sheet export all expect. NYC leads pass through untouched.
 function normalizeMarketRow(p, apiMarket) {
   if (!apiMarket || apiMarket === "nyc") return p;
   const m = MAP_MARKETS[apiMarket];
-  const label = apiMarket === "charleston" ? `${p.town || "Charleston"}, SC` : apiMarket === "savannah" ? `${p.city || "Savannah"}, GA` : apiMarket === "teton" ? `${p.city || "Jackson"}, WY` : m ? m.label : apiMarket;
+  const UNI_FALLBACK = { ct: "ct", ma: "ma", hamptons: "ny" };
+  const label = apiMarket === "charleston" ? `${p.town || "Charleston"}, SC` : apiMarket === "savannah" ? `${p.city || "Savannah"}, GA` : apiMarket === "teton" ? `${p.city || "Jackson"}, WY`
+    : apiMarket === "ct" ? `${p.town || "Greenwich"}, CT` : apiMarket === "ma" ? `${p.town || ""}, MA` : apiMarket === "hamptons" ? `${p.town || "East Hampton"}, NY` : m ? m.label : apiMarket;
   const saleYear = Number(p.sale_year) || (p.sale_date ? Number(String(p.sale_date).slice(0, 4)) : null);
   return {
     ...p,
-    market: m ? m.uni : apiMarket, marketLabel: label, borough: label,
+    market: m ? m.uni : ({ ct: "ct", ma: "ma", hamptons: "ny" }[apiMarket] || apiMarket), marketLabel: label, borough: label,
     name: p.owner || "", owner: p.owner || "",
     entity_type: ENTITY_RE.test(p.owner || "") ? "company" : "person",
     contact_address: mailingStreet(p.mailing || ""),
@@ -3738,19 +3741,33 @@ function MapView({ pw, config, onSourced, goSourcing }) {
   // Scout → map bridge: whenever the drawer's Scout runs a search, its result rows land
   // as pins on the map behind it (full rows, so pin clicks open real dossiers, and the
   // ↓ SHEET export covers them too).
-  const showScoutRows = (rawRows, toolName) => {
+  const showScoutRows = async (rawRows, toolName) => {
     const apiMarket = TOOL_MARKET[toolName] || "nyc";
-    const leads = (rawRows || [])
+    const norm = (rawRows || [])
       .map((r) => normalizeMarketRow(r, apiMarket))
-      .map((r) => ({ ...r, lat: Number(r.lat ?? r.latitude), lon: Number(r.lon ?? r.longitude), name: r.name || r.owner || r.ownership_entity || "" }))
-      .filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
-    if (!leads.length) {
-      if ((rawRows || []).length) setUnderstood(`✦ Scout found ${rawRows.length} result${rawRows.length === 1 ? "" : "s"}, but this market's records carry no coordinates — see the list in Scout's reply.`);
+      .map((r) => ({ ...r, lat: Number(r.lat ?? r.latitude), lon: Number(r.lon ?? r.longitude), name: r.name || r.owner || r.ownership_entity || "" }));
+    let located = norm.filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
+    const missing = norm.filter((r) => (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) && r.address);
+    // UNIFORM ACROSS MARKETS: records without coordinates (CT / MA / Hamptons rolls)
+    // get geocoded client-side (free, cached) so every market pins the same way.
+    if (missing.length && located.length < 3) {
+      setUnderstood(`✦ Locating ${Math.min(missing.length, 40)} of Scout's results on the map…`);
+      const hint = apiMarket === "ct" ? "CT" : apiMarket === "ma" ? "MA" : apiMarket === "hamptons" ? "NY" : "";
+      for (let i = 0; i < missing.length && i < 40; i += 4) {
+        const got = await Promise.all(missing.slice(i, i + 4).map(async (r) => {
+          const g = await geocodeAddress(`${r.address}, ${r.town || r.raw?.town || r.city || ""} ${hint}`.trim());
+          return g && Number.isFinite(g.lat) && Number.isFinite(g.lon) ? { ...r, lat: g.lat, lon: g.lon } : null;
+        }));
+        located = located.concat(got.filter(Boolean));
+      }
+    }
+    if (!located.length) {
+      if (norm.length) setUnderstood(`✦ Scout found ${norm.length} result${norm.length === 1 ? "" : "s"} but none could be placed on the map — see the list in Scout's reply.`);
       return;
     }
-    setRows(leads); setCount(leads.length); setErr("");
-    setUnderstood(`✦ Scout's results are pinned on the map — ${leads.length} propert${leads.length === 1 ? "y" : "ies"}${apiMarket !== "nyc" ? ` (${MAP_MARKETS[apiMarket]?.label || apiMarket})` : ""}. Click a pin for its dossier; ↓ SHEET exports them with owner info.`);
-    renderPins(leads, { fit: true });
+    setRows(located); setCount(located.length); setErr("");
+    setUnderstood(`✦ Scout's results are pinned — ${located.length}${norm.length > located.length ? ` of ${norm.length}` : ""} propert${located.length === 1 ? "y" : "ies"}${apiMarket !== "nyc" ? ` (${MAP_MARKETS[apiMarket]?.label || { ct: "Connecticut", ma: "Massachusetts", hamptons: "the Hamptons" }[apiMarket] || apiMarket})` : ""}. Click a pin for its dossier; ↓ SHEET exports them with owner info.`);
+    renderPins(located, { fit: true });
   };
 
   const loadAt = async (lat, lon, opts = {}) => {
@@ -3910,7 +3927,7 @@ function MapView({ pw, config, onSourced, goSourcing }) {
           <div style={{ display: sel ? "none" : "block" }}>
             <div className="mono" style={{ fontSize: 10.5, color: C.gold, letterSpacing: "0.18em", margin: "14px 0 0" }}>✦ SCOUT — SEARCH ANYTHING</div>
             <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6, lineHeight: 1.6 }}>
-              Ask in plain English, in ANY market — “find all the vacant storefronts within .25 mi of 103 Prince St”, “absentee owners on King Street Charleston held 15+ years”, “commercial parcels on Broadway in Nashville”, “who’s behind 92 Prince LLC”. Results pin on the map (fly between markets with the chips top-left); click a pin for its full dossier; ↓ SHEET exports everything with owner info. Or just click any building in NYC, Charleston, Nashville, Savannah, or Jackson Hole — that part needs no AI at all. (CT / MA / Hamptons records carry no coordinates, so those results stay in the chat list.)
+              Ask in plain English, in ANY market — “find all the vacant storefronts within .25 mi of 103 Prince St”, “absentee owners on King Street Charleston held 15+ years”, “commercial parcels on Broadway in Nashville”, “who’s behind 92 Prince LLC”. Results pin on the map (fly between markets with the chips top-left); click a pin for its full dossier; ↓ SHEET exports everything with owner info. Or just click any building in NYC, Charleston, Nashville, Savannah, or Jackson Hole — that part needs no AI at all. (CT / MA / Hamptons results are located by address geocoding, so their pins are close-but-approximate.)
             </div>
             <AgentChat pw={pw} config={config} seed={scoutSeed} onSourced={onSourced} goSourcing={goSourcing} onMapRows={showScoutRows} />
           </div>
